@@ -437,3 +437,33 @@ test('the gh messages exist in every locale and name no tool the operator never 
     }
   }
 });
+
+test('the gh probe counts a gh that does not RUN as absent, not as signed out', { skip: process.platform === 'win32' }, () => {
+  /* The incident: a Mac with no Homebrew showed "not authenticated — gh auth login", the
+     terminal answered "command not found: gh", and Re-check kept the same verdict. `command -v`
+     alone is not evidence that gh runs. Each case runs the real probe against a fake gh. */
+  const cp = require('child_process');
+  const run = (ghBody: string | null): string => {
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-ghprobe-bin-'));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-ghprobe-home-'));   // no .git-credentials
+    if (ghBody !== null) fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\n${ghBody}\n`, { mode: 0o755 });
+    return cp.execFileSync('/bin/sh', ['-c', aios.GH_PROBE_POSIX], {
+      encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home },
+    }).trim();
+  };
+  assert.equal(run(null), 'NOGH', 'no gh at all');
+  assert.equal(run('exit 127'), 'NOGH', 'found by command -v but does not run');
+  assert.equal(run('[ "$1" = --version ] && exit 0; exit 1'), 'NOAUTH', 'runs, signed out');
+  assert.equal(run('exit 0'), 'AUTHED', 'runs, signed in');
+});
+
+test('a signed-out gh still logs in THROUGH the ladder, on both platforms', () => {
+  /* The probe and the terminal are different shells. When they disagree about where gh is, a bare
+     `gh auth login` dies on "command not found"; the ladder resolves gh inside the terminal and
+     installs it first when it is not there. */
+  const code = fs.readFileSync('src/main/aios.ts', 'utf8');
+  const fn = code.slice(code.indexOf('function ghNoAuth('), code.indexOf('\n}', code.indexOf('function ghNoAuth(')));
+  assert.match(fn, /installToolCmd\('gh', loginCmd\) \|\| loginCmd/);
+  assert.equal((code.match(/includes\('NOAUTH'\)\) return ghNoAuth\(loginCmd\)/g) || []).length, 2, 'POSIX and Windows both route the signed-out case');
+  assert.doesNotMatch(code, /message: t\('setupCheck\.ghNoAuth'\), repairCmd: loginCmd/, 'no branch may hand out the bare login');
+});
