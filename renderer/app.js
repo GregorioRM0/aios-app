@@ -7272,6 +7272,11 @@ function openSetupTab() {
          and it counts itself. */
       'Set up my AI-OS from https://github.com/The-AIOS/aios — read its SETUP.md and follow the sequence in the "Reading this as Claude?" block. '
       + 'I reached you from the AIOS App, so the app is already my execution surface: do not send me to install an IDE or the Glass extension. '
+      /* GitHub is the App's LAST step now, after this session. Without this line SETUP.md's step 1
+         asks for `! gh auth login` up front, which puts back the very sign-in the reorder moved out
+         of the way. SETUP already has the local-only path for exactly this; the App's own GitHub
+         step is where the backup happens. */
+      + 'Do not ask me to sign in to GitHub: the app connects it as its own step after this one, so take the local-only path if GitHub is not connected yet. '
       /* No trailing instruction to run /aios:today. Front A moved the first ritual INSIDE the
          interview (its Step 10) and made it exclusive: nothing else may run it, because the
          interview closes on "Welcome to The AIOS" and anything firing after that goodbye is the

@@ -75,10 +75,21 @@ test('there are exactly four steps, in the order an operator can follow', () => 
      was the proof: the operator read it, clicked it, and still could not say what it did — and if
      the person who commissioned the feature cannot explain it at the moment of use, a newcomer
      cannot either. Four steps, each one thing, the last one a conversation. */
-  assert.deepEqual(ONBOARDING_STEPS.map((x) => x.id), ['prereqs', 'login', 'github', 'firstrun']);
+  assert.deepEqual(ONBOARDING_STEPS.map((x) => x.id), ['prereqs', 'login', 'firstrun', 'github']);
   for (const dead of ['vault', 'wiring', 'starter', 'identity']) {
     assert.ok(!ONBOARDING_STEPS.some((x) => x.id === dead), `${dead} is no longer a step`);
   }
+});
+
+test('GitHub never stands between the operator and the setup session', () => {
+  /* A Mac with no Homebrew stalled on the GitHub step for half an hour and never reached "Set up my
+     AIOS". Signed in to Claude, no gh at all: the conversation must be the live step, and GitHub
+     waits until the AIOS exists. */
+  const d = deriveOnboarding(battery(['git', 'claude', 'account'], ['gh', 'personalized']));
+  assert.equal(d.steps[d.current].id, 'firstrun', 'the setup session is the active step without GitHub');
+  assert.equal(d.steps.find((x) => x.id === 'github')!.state, 'locked', 'GitHub comes after it');
+  const after = deriveOnboarding(battery(['git', 'claude', 'account', 'personalized'], ['gh']));
+  assert.equal(after.steps[after.current].id, 'github', 'and is offered once the AIOS is set up');
 });
 
 test('deriveOnboarding: an earlier regression pulls the active step back (idempotent re-verify)', () => {
