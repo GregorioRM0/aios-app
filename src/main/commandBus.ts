@@ -5,7 +5,7 @@ import { execFileSync } from 'child_process';
 import * as path from 'path';
 import * as aios from './aios';
 import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, type BusRequest } from '../core/commandBus';
-import { latestAgentName, pickResume, type ResumeCandidate } from '../core/resumeTarget';
+import { ResumeIndex } from './resumeIndex';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
@@ -372,40 +372,19 @@ function writePayload(name: string, prompt: string): string {
  * name→session mapping, and `latestAgentName` takes the LAST record because a session can rename
  * itself (0.9.3) and answers to its newest name.
  *
- * BOUNDED ON PURPOSE. Transcripts are large and there can be hundreds; the bus must not stall
- * while a resume request reads a history. Newest-first, stop at the first match, and never look
- * at more than MAX_SCAN files — an operator resuming something they closed today is always well
- * inside that, and a name so old it falls outside is correctly reported as "nothing to resume"
- * rather than found slowly.
+ * NOT BOUNDED BY AGE ANY MORE. This read only the 60 newest transcripts, which on a busy fleet is
+ * about a day and a half: five resumes of workers idle since the day before dead-lettered in one
+ * morning with their transcripts on disk. The lookup now goes through a persisted, incremental
+ * index of every transcript (main/resumeIndex), built once in the background at bus start and
+ * refreshed before each lookup by reading only the files that changed. It is async, so the bus
+ * never waits on a history read.
  */
-const MAX_RESUME_SCAN = 60;
-function resumeIdFor(name: string, excludeSessionId?: string): string | undefined {
-  const base = path.join(os.homedir(), '.claude', 'projects');
-  let files: { f: string; mtimeMs: number }[] = [];
-  try {
-    for (const d of fs.readdirSync(base)) {
-      let entries: string[] = [];
-      try { entries = fs.readdirSync(path.join(base, d)); } catch { continue; }
-      for (const e of entries) {
-        if (!e.endsWith('.jsonl')) continue;
-        const full = path.join(base, d, e);
-        try { files.push({ f: full, mtimeMs: fs.statSync(full).mtimeMs }); } catch { /* vanished */ }
-      }
-    }
-  } catch { return undefined; }
-  files = files.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, MAX_RESUME_SCAN);
-  for (const { f, mtimeMs } of files) {
-    let text = '';
-    try { text = fs.readFileSync(f, 'utf8'); } catch { continue; }
-    const cand: ResumeCandidate = {
-      sessionId: path.basename(f, '.jsonl'),
-      mtimeMs,
-      latestName: latestAgentName(text),
-    };
-    const hit = pickResume(name, [cand], excludeSessionId);
-    if (hit) return hit;
-  }
-  return undefined;
+const resumeIndex = new ResumeIndex(
+  path.join(os.homedir(), '.claude', 'projects'),
+  path.join(os.homedir(), '.aios', 'resume-index.json'),
+);
+function resumeIdFor(name: string, excludeSessionId?: string): Promise<string | undefined> {
+  return resumeIndex.lookup(name, excludeSessionId).catch(() => undefined);
 }
 
 /** Read the target's transcript; the counting RULE is pure and lives in core/sendQueue. */
@@ -732,6 +711,49 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
     log(`spawn '${req.name}'${req.task ? ' with task' : ''}${req.tier && !req.model ? ` [tier ${req.tier} → ${model ?? 'default'}]` : model ? ` [model ${model}]` : ''}${taskFile ? ' (task via file)' : ''}`);
 }
 
+/**
+ * The closed-session half of `resume`, async because the name lookup reads transcripts: the bus
+ * hands it off and keeps claiming other requests. The request file stays held until this lands,
+ * exactly as a deferred `send` does, so nothing is lost if the lookup takes a while on a cold index.
+ */
+async function runResume(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): Promise<void> {
+  try {
+    const sid = await resumeIdFor(req.name, process.env.CLAUDE_CODE_SESSION_ID);
+    if (!sid) {
+      /* NO TRANSCRIPT. Falling back to a spawn unasked would hand back a fresh something when
+         the caller asked for the same someone — so the default is to refuse and SAY the name
+         that could not be found, which is what makes the dead letter actionable. */
+      if (req.fallback !== 'spawn') {
+        markUndelivered(heldPath, req,
+          `resume '${req.name}': no transcript found for that name — nothing to resume `
+          + `(it may never have run under that name, or it was renamed since). `
+          + `Pass "fallback":"spawn" to start a fresh one instead.`);
+        return;
+      }
+      log(`resume '${req.name}' — no transcript; falling back to spawn as asked`);
+    } else {
+      let taskFile: string | undefined;
+      /* Same Windows quoting rule as spawn: PowerShell mangles POSIX-quoted apostrophes, so
+         every prompt goes through a file there. */
+      if (needsTaskFile(req.prompt) || (process.platform === 'win32' && req.prompt)) {
+        taskFile = path.join(os.tmpdir(), `aios-resume-task-${req.name}.md`);
+        try { fs.writeFileSync(taskFile, req.prompt as string); } catch { taskFile = undefined; }
+      }
+      const cmd = buildResumeCmd(aios.shellSettings().claudeCmd, sid, { prompt: req.prompt, taskFile });
+      // background: the new session opens as a tab with an activity mark; the operator's
+      // current tab and keyboard focus stay where they are (setting `busFocus`).
+      emit(win(), 'terminal', { name: req.name, cmd, background: true });
+      log(`resume '${req.name}' → session ${sid.slice(0, 8)}${req.prompt ? ' with prompt' : ''}${taskFile ? ' (via file)' : ''}`);
+      try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+      return;
+    }
+    runSpawn(win, heldPath, req);
+    try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+  } catch (e) {
+    markUndelivered(heldPath, req, `resume '${req.name}' failed: ${String((e as Error)?.message ?? e)}`);
+  }
+}
+
 /** spawn / kill act immediately once claimed — nothing about the target can refuse them. */
 function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
   try {
@@ -763,36 +785,8 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
         else try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         return;
       }
-      const sid = resumeIdFor(req.name, process.env.CLAUDE_CODE_SESSION_ID);
-      if (!sid) {
-        /* NO TRANSCRIPT. Falling back to a spawn unasked would hand back a fresh something when
-           the caller asked for the same someone — so the default is to refuse and SAY the name
-           that could not be found, which is what makes the dead letter actionable. */
-        if (req.fallback !== 'spawn') {
-          markUndelivered(heldPath, req,
-            `resume '${req.name}': no transcript found for that name — nothing to resume `
-            + `(it may never have run, or its history is older than the ${MAX_RESUME_SCAN} most `
-            + `recent sessions). Pass "fallback":"spawn" to start a fresh one instead.`);
-          return;
-        }
-        log(`resume '${req.name}' — no transcript; falling back to spawn as asked`);
-      } else {
-        let taskFile: string | undefined;
-        /* Same Windows quoting rule as spawn: PowerShell mangles POSIX-quoted apostrophes, so
-           every prompt goes through a file there. */
-        if (needsTaskFile(req.prompt) || (process.platform === 'win32' && req.prompt)) {
-          taskFile = path.join(os.tmpdir(), `aios-resume-task-${req.name}.md`);
-          try { fs.writeFileSync(taskFile, req.prompt as string); } catch { taskFile = undefined; }
-        }
-        const cmd = buildResumeCmd(aios.shellSettings().claudeCmd, sid, { prompt: req.prompt, taskFile });
-        // background: the new session opens as a tab with an activity mark; the operator's
-        // current tab and keyboard focus stay where they are (setting `busFocus`).
-        emit(win(), 'terminal', { name: req.name, cmd, background: true });
-        log(`resume '${req.name}' → session ${sid.slice(0, 8)}${req.prompt ? ' with prompt' : ''}${taskFile ? ' (via file)' : ''}`);
-        try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
-        return;
-      }
-      runSpawn(win, heldPath, req);
+      void runResume(win, heldPath, req);
+      return;              // runResume owns the held file from here
     } else if (targetByName(req.name)) {
       /* Never duplicate — but never steal the screen either. An agent's request is not the operator
          asking to look somewhere: the pane is marked, and the operator chooses when to switch. */
@@ -801,8 +795,8 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
     } else {
       runSpawn(win, heldPath, req);
     }
-    /* One cleanup for every branch that did NOT already return — kill, spawn, and resume's
-       opt-in fallback. The branches that return have unlinked their own held file first. */
+    /* One cleanup for every branch that did NOT already return — kill and spawn. The branches
+       that return (resume included, which hands its held file to runResume) clean up their own. */
     try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
   } catch (e) {
     markUndelivered(heldPath, req, `${req.action} failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -965,7 +959,13 @@ export function initCommandBus(getWin: () => BrowserWindow | undefined, appVersi
      agent asks "is a surface alive?" and is told no while this App is running. A stat and a
      small parse; it writes only when the record already names nobody alive. */
   setInterval(() => healPresence(appVersion), 20 * 1000);
-  recheck = (p: string) => { if (fs.existsSync(p)) consume(getWin, p); };
+  /* Warm the resume index now, in the background, so the first `resume` after launch is a
+     refresh of what changed rather than the one-time read of the whole history. */
+  const t0 = Date.now();
+  void resumeIndex.refresh()
+    .then(() => log(`resume index ready: ${resumeIndex.size()} transcripts in ${Date.now() - t0} ms`))
+    .catch((e) => log(`resume index build failed (${e instanceof Error ? e.message : String(e)})`));
+  recheck =(p: string) => { if (fs.existsSync(p)) consume(getWin, p); };
   try {
     // Only `*.json` is a request — `.holding` and `.undelivered` sit deliberately OUTSIDE
     // the glob, so a claimed or abandoned request can never be re-picked-up as a new one.
