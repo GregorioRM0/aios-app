@@ -5573,6 +5573,10 @@ function paintCaffeine(st) {
      the place to teach D-Bus. Capped in src/test/caffeinate.test.ts, in every locale. */
   let why = '';
   if (st && st.unsupported) why = t('caffeinate.unsupported');
+  /* Lid-closed hold (macOS). Named only while it is ACTUALLY holding — that is the one moment the
+     operator needs to know closing the lid is safe, and no pixel on the cup says it. It shares
+     the `why` slot with `unsupported` because the two cannot co-occur (refusal is Linux-only). */
+  else if (st && st.lid && st.lid.holding) why = t('caffeinate.lidHolding');
   /* THE WORD NAMES WHAT IS IN FORCE, not the setting that is configured — operator-raised:
      "the coffee tooltip needs a 'Keep awake: override' status dont you think? for when the little
      dot comes?" Yes, and it fixes a small lie: with an override active the tooltip read
@@ -6768,6 +6772,40 @@ function openSettingsTab() {
     caffMark.className = 'tlabicon';
     caffMark.innerHTML = icon('coffee', 13);
     caffRow.querySelector('.tlabel')?.prepend(caffMark);
+
+    /* Keep awake WITH THE LID CLOSED (macOS only). The blocker above stops idle sleep and nothing
+       else: closing a MacBook's lid on battery sleeps it regardless. This row extends the same
+       rule — whatever keeps the cup on — to the lid. Turning it on the first time runs a one-time
+       administrator install (macOS asks for the password, not us); everything decides in main. */
+    if (window.glassShell.platform === 'darwin') {
+      const lidSel = document.createElement('select');
+      lidSel.className = 'tinput';
+      for (const [l, v] of [[t('caffeinate.lidOff'), 'off'], [t('caffeinate.lidOn'), 'on']]) { const o = document.createElement('option'); o.textContent = l; o.value = v; lidSel.appendChild(o); }
+      lidSel.value = cfg.lidAwake === true ? 'on' : 'off';
+      row(wrap, t('settings.lidAwake'), lidSel, t('settings.lidAwakeHint'));
+      /* Remove undoes the install entirely (all three files) — offered whenever anything is
+         installed, so trying the feature never leaves something behind the operator cannot see. */
+      const lidRemove = el('button', 'vbtn', t('caffeinate.lidRemove'));
+      const paintLid = (st) => {
+        const l = st && st.lid;
+        lidSel.value = l && l.enabled && l.installed ? 'on' : 'off';
+        lidRemove.hidden = !(l && l.installed);
+      };
+      lidSel.addEventListener('change', async () => {
+        const st = await window.glassShell.caffeinateLid(lidSel.value === 'on', t('caffeinate.lidPrompt'));
+        paintLid(st); paintCaffeine(st);
+        /* Cancelled at the password prompt, or the install failed: the select snaps back to off
+           and the reason is said, rather than showing "on" over a hold that cannot happen. */
+        if (lidSel.value === 'on') toast(t('settings.saved'));
+        else if (st && st.lid && st.lid.error && st.lid.error !== 'cancelled') toast(t('caffeinate.lidFailed') + ' ' + st.lid.error);
+      });
+      lidRemove.addEventListener('click', async () => {
+        const st = await window.glassShell.caffeinateLidRemove(t('caffeinate.lidPromptRemove'));
+        paintLid(st); paintCaffeine(st);
+      });
+      lidSel.after(lidRemove);
+      void window.glassShell.caffeinateState().then(paintLid);
+    }
 
     // terminalMode (#6): where actions run — ask (pick among live sessions) or auto (primary/new)
     const modeSel = document.createElement('select');

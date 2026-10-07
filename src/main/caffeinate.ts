@@ -22,6 +22,8 @@ import {
   type CaffeinateMode, type CaffeinateOverride,
 } from '../core/caffeinate';
 import * as aios from './aios';
+import * as lid from './lidAwake';
+import { desiredLidHold } from '../core/lidAwake';
 
 export interface CaffeinateState {
   /** Is the blocker held RIGHT NOW — as Electron reports it, not as we intended. */
@@ -33,6 +35,8 @@ export interface CaffeinateState {
   reason: 'override-on' | 'override-off' | 'auto-busy' | 'auto-idle' | 'manual-off';
   /** True when we asked for a blocker and the platform did not give us one. See `honest()`. */
   unsupported: boolean;
+  /** The lid-closed extension (macOS): setting, install state, and whether it is holding now. */
+  lid: lid.LidState & { enabled: boolean };
 }
 
 /* Session-scoped by design: an override says "not the usual rule, right now". Persisting it would
@@ -41,6 +45,8 @@ export interface CaffeinateState {
 let override: CaffeinateOverride = null;
 let id: number | null = null;
 let notify: ((s: CaffeinateState) => void) | null = null;
+/* When the blocker was last WANTED — the lid hold lingers a grace period past it (core explains why). */
+let lastWantedAt = 0;
 
 const log = (m: string): void => console.log('[caffeinate]', m);
 
@@ -76,6 +82,7 @@ function snapshot(): CaffeinateState {
     /* We wanted it and Electron says we do not have it. On Linux without a session bus this is
        the normal state, and the button must not pretend otherwise. */
     unsupported: want && !held(),
+    lid: { ...lid.state(), enabled: aios.shellSettings().lidAwake },
   };
 }
 
@@ -98,6 +105,14 @@ function apply(): CaffeinateState {
     id = null;
     log('released');
   }
+  /* The lid hold rides on the same decision, plus a grace. Fire-and-forget: it spawns or signals a
+     helper, and the next tick (2s) re-reads its state — a tick must never wait on a subprocess. */
+  const now = Date.now();
+  if (want) lastWantedAt = now;
+  void lid.sync(desiredLidHold({
+    platform: process.platform, enabled: aios.shellSettings().lidAwake, installed: lid.installed(),
+    blockerWanted: want, lastWantedAt, now,
+  }));
   const s = snapshot();
   notify?.(s);
   return s;
@@ -150,6 +165,26 @@ export function init(onState: (s: CaffeinateState) => void, tickMs: number): () 
        true, and nothing may come to depend on it. It exists so a quit that lingers does not hold
        the machine awake while it does. */
     if (id !== null) { powerSaveBlocker.stop(id); id = null; }
+    /* The guard would release on its own once our pid dies; asking now just makes a normal quit
+       put sleep back immediately instead of within the guard's 5s poll. */
+    void lid.sync(false);
     notify = null;
   };
+}
+
+/** Settings toggled the lid extension: install on first enable, then re-apply at once. */
+export async function lidEnable(on: boolean, prompt: string): Promise<CaffeinateState> {
+  if (on && !lid.installed()) {
+    await lid.install(prompt);
+    if (!lid.installed()) return snapshot();   // cancelled or failed — the setting stays off
+  }
+  aios.setShellSetting('lidAwake', on);
+  return apply();
+}
+
+/** Settings → Remove: turn the extension off and delete everything the install put on disk. */
+export async function lidRemove(prompt: string): Promise<CaffeinateState> {
+  aios.setShellSetting('lidAwake', false);
+  await lid.uninstall(prompt);
+  return apply();
 }
