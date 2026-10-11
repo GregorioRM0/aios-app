@@ -936,6 +936,8 @@ ipcMain.handle('tab:menu', async (e, items: { label: string; value: string }[]) 
 ipcMain.handle('shell:appVersion', () => app.getVersion());
 ipcMain.handle('caffeinate:state', () => caffeine.state());
 ipcMain.handle('caffeinate:toggle', () => caffeine.toggle());
+ipcMain.handle('caffeinate:lid', (_e, on: unknown, prompt: unknown) => caffeine.lidEnable(on === true, String(prompt ?? '')));
+ipcMain.handle('caffeinate:lidRemove', (_e, prompt: unknown) => caffeine.lidRemove(String(prompt ?? '')));
 ipcMain.handle('claude:config', () => aios.claudeConfig());
 ipcMain.handle('claude:outputStyles', () => aios.outputStyleOptions());
 ipcMain.handle('claude:modelOptions', () => aios.modelOptions());

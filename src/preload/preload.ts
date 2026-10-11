@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld('glassShell', {
   tabMenu: (items: { label: string; value: string }[]): Promise<string | null> => ipcRenderer.invoke('tab:menu', items),
   caffeinateState: (): Promise<unknown> => ipcRenderer.invoke('caffeinate:state'),
   caffeinateToggle: (): Promise<unknown> => ipcRenderer.invoke('caffeinate:toggle'),
+  caffeinateLid: (on: boolean, prompt: string): Promise<unknown> => ipcRenderer.invoke('caffeinate:lid', on, prompt),
+  caffeinateLidRemove: (prompt: string): Promise<unknown> => ipcRenderer.invoke('caffeinate:lidRemove', prompt),
   onCaffeinate: (cb: (s: unknown) => void) => ipcRenderer.on('shell:caffeinate', (_e, s) => cb(s)),
   menuShortcuts: (): Promise<Array<{ group: string; label: string; accel: string }>> => ipcRenderer.invoke('menu:shortcuts'),
   locateSessions: (ids: string[]): Promise<Record<string, { exists: boolean; live: boolean }>> => ipcRenderer.invoke('sessions:locate', ids),
