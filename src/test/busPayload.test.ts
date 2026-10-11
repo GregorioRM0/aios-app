@@ -152,9 +152,9 @@ test('INVARIANT: the verification baseline is captured ONCE, not per attempt', (
      because the failure is invisible in any single-attempt test. */
   const bus = fs.readFileSync('src/main/commandBus.ts', 'utf8');
   assert.match(bus, /let baseline: number \| undefined;/, 'the baseline must be declared OUTSIDE the delivery loop');
-  assert.match(bus, /if \(baseline === undefined\) baseline = countUserTurnsContaining\(/,
+  assert.match(bus, /if \(baseline === undefined\) baseline = countDeliveries\(/,
     'it must be captured only on the first pass');
-  assert.doesNotMatch(bus, /const before = countUserTurnsContaining\(/,
+  assert.doesNotMatch(bus, /const before = countDeliveries\(/,
     're-reading the baseline per attempt is the bug — derive `before` from the captured baseline');
 });
 

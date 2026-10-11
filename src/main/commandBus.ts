@@ -10,7 +10,7 @@ import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
-  shouldReleaseForSibling, countUserTurnsContaining, verifyVerdict, isDeliverable, maxAttemptsFor,
+  shouldReleaseForSibling, countDeliveries, verifyVerdict, isDeliverable, maxAttemptsFor,
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
 } from '../core/sendQueue';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
@@ -579,7 +579,7 @@ async function runSend(
     }
     // idle → deliver, then prove it in the target's own transcript
     const sessionId = target ? target.sessionId : '';
-    if (baseline === undefined) baseline = countUserTurnsContaining(readTranscript(sessionId), needle, claimedAt);
+    if (baseline === undefined) baseline = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
     const before = baseline;
     /* THE CAP HAS TO SIT HERE, before the send — not only in the after-a-miss decision.
        A 'wait' verdict does `continue`, which re-enters this branch, so a cap enforced only
@@ -587,7 +587,7 @@ async function runSend(
        every cycle for the full hold. Caught by tracing the control flow rather than trusting
        the counter, which is the same lesson as everything else in this ticket. */
     if (attempts >= maxAttemptsFor(deliverText)) {
-      const late = countUserTurnsContaining(readTranscript(sessionId), needle, claimedAt);
+      const late = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
       if (verifyVerdict(before, late) !== 'pending') {
         try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         log(`delivered → '${req.name}' (verified late)`);
@@ -622,7 +622,7 @@ async function runSend(
     const until = Date.now() + VERIFY_WINDOW_MS;
     while (Date.now() < until) {
       await new Promise((r) => setTimeout(r, VERIFY_TICK_MS));
-      const now = countUserTurnsContaining(readTranscript(sessionId), needle, claimedAt);
+      const now = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
       const verdict = verifyVerdict(before, now);
       if (verdict === 'pending') continue;
       try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
@@ -657,7 +657,7 @@ async function runSend(
     if (miss.do === 'wait') {
       /* Out of sends, not out of hope: watch for a late arrival and never type again. A turn
          that lands after the window closed must not be sent twice. */
-      const late = countUserTurnsContaining(readTranscript(sessionId), needle, claimedAt);
+      const late = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
       if (verifyVerdict(before, late) !== 'pending') {
         try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         log(`delivered → '${req.name}' (verified late)`);
