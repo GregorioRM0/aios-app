@@ -241,6 +241,27 @@ OS_DARK.addEventListener('change', () => {
   applyTheme(THEME);
   paintThemeBtn();
 });
+/* AI-196 — the Program Status Protocol (OSC 7501), measured on Claude Code 2.1.296: the session
+   sends `OSC 7501 ; ?` and reports working / blocked (waiting on you) / done only if the terminal
+   answers with an OSC 7501 starting `?`. We answer, then hand each status to main, keyed by the
+   session's id, where it is merged with the registry for the badge, banners and agents pane.
+   A status that arrives before the pane knows its session id waits for the next pulse. */
+function programStatusOsc(paneId, data) {
+  const s = String(data);
+  if (paneId === null) return true;
+  if (s.startsWith('?')) { window.glassShell.ptyWrite(paneId, '\x1b]7501;?\x1b\\'); return true; }
+  const p = panes.get(paneId);
+  if (!p) return true;
+  p.programStatus = { data: s, at: Date.now(), sent: false };
+  flushProgramStatus(p);
+  return true;
+}
+function flushProgramStatus(p) {
+  const ps = p && p.programStatus;
+  if (!ps || ps.sent || !p.sessionId) return;
+  ps.sent = true;
+  window.glassShell.programStatus(p.sessionId, ps.data, ps.at);
+}
 function applyTheme(mode) {
   document.body.classList.toggle('light', mode === 'light');
   const t = termTheme(mode);
@@ -736,7 +757,7 @@ function fmtAgo(ts) {
 
 function renderPulse(msg) {
   if (msg.type === 'state') renderPulseState(msg);
-  else if (msg.type === 'running') { renderPulseRunning(msg); paintTabStates(msg); }   // #24.2b tab state, on the same 2s pulse
+  else if (msg.type === 'running') { renderPulseRunning(msg); paintTabStates(msg); for (const [, p] of panes) flushProgramStatus(p); }   // #24.2b tab state, on the same 2s pulse
   else if (msg.type === 'month') renderPulseMonth(msg.data);
   else if (msg.type === 'updateStatus') renderPulseUpdate(msg);
   else if (msg.type === 'workspacePruned') toast(t('explorer.pruned', { paths: (msg.folders || []).join(', ') }));
@@ -3345,7 +3366,12 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
   // cwd powers "open terminal here"; main validates it against the allowed roots and
   // falls back to the framework root. It was accepted there and silently dropped here.
   // `name` travels as data, not smuggled inside the command string — see termEnv().
+  /* AI-196 — Claude Code's own status (OSC 7501). Registered BEFORE the pty exists so no early
+     escape can reach the parser unhandled; the pane id is filled in once the spawn returns. */
+  let oscPane = null;
+  term.parser.registerOscHandler(7501, (data) => programStatusOsc(oscPane, data));
   const id = await window.glassShell.ptySpawn({ cols: 80, rows: 24, cmd, cwd, name, noProfile });
+  oscPane = id;
   const tab = makeTab(id, name, 'term');
   const p = { kind: 'term', name, el, tab, term, fit, exited: false, cmd, cwd: cwd || '', isSession: paneIsClaude(cmd) };
   panes.set(id, p);

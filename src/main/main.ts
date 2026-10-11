@@ -702,6 +702,10 @@ ipcMain.handle('shell:zoom', (_e, factor: number) => {
   if (w && !w.isDestroyed()) w.webContents.setZoomFactor(f);
   return f;
 });
+/* AI-196 — a session's own OSC 7501 status, relayed by the renderer, merged in panelHost. */
+ipcMain.on('pty:programStatus', (_e, m: { sessionId?: string; data?: string; at?: number }) => {
+  host?.setProgramStatus(String(m?.sessionId ?? ''), String(m?.data ?? ''), Number(m?.at) || Date.now());
+});
 ipcMain.handle('shell:copyText', (_e, t: string) => { clipboard.writeText(String(t)); return true; });
 /* AI-192 — ⇧⌘C / right-click "Copy as plain text": the selection without Claude's TUI scaffolding
    (bullets, quote bars, indents, the footer) and with terminal wraps rejoined into paragraphs. */

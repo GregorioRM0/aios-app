@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('glassShell', {
   updaterCheck: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
   updaterInstall: (): Promise<unknown> => ipcRenderer.invoke('updater:quitAndInstall'),
   ptyWrite: (id: number, data: string) => ipcRenderer.send('pty:write', { id, data }),
+  programStatus: (sessionId: string, data: string, at: number) => ipcRenderer.send('pty:programStatus', { sessionId, data, at }),
   ptyResize: (id: number, cols: number, rows: number) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   ptyKill: (id: number) => ipcRenderer.send('pty:kill', { id }),
   onPtyData: (cb: (m: { id: number; data: string }) => void) => ipcRenderer.on('pty:data', (_e, m) => cb(m)),

@@ -1,3 +1,4 @@
+import { parseProgramStatus, overlayProgramStatus, type ProgramStatus } from '../core/programStatus';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BrowserWindow, WebContents, nativeImage } from 'electron';
@@ -279,8 +280,22 @@ export class PanelHost {
     ]).catch(() => null);
   }
 
+  /** AI-196 — the latest OSC 7501 status per session id, as reported by the renderer. */
+  private readonly programStatus = new Map<string, ProgramStatus>();
+
+  setProgramStatus(sessionId: string, data: string, at: number): void {
+    const id = String(sessionId || '').trim();
+    if (!id) return;
+    const s = parseProgramStatus(data, Number(at) || Date.now());
+    if (s === null || s === 'query') return;
+    if (s === 'clear') this.programStatus.delete(id); else this.programStatus.set(id, s);
+    this.postRunning();   // the point of the signal is that it is immediate — don't wait for the 2s poll
+  }
+
   postRunning(): void {
-    const running = aios.listOperatorSessions();   // AI-165: never a daemon spare
+    const registry = aios.listOperatorSessions();   // AI-165: never a daemon spare
+    for (const id of this.programStatus.keys()) if (!registry.some((a) => a.sessionId === id)) this.programStatus.delete(id);
+    const running = overlayProgramStatus(registry, this.programStatus);
     this.attention.tick(running, aios.shellSettings().attention);
     const rl = aios.rateLimit();
     const fwReal = aios.frameworkRoot() ?? '';
