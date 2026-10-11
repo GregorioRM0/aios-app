@@ -194,9 +194,9 @@ test('AI-172: what the App records is what canonical provenance.py recognises â€
 
 test('AI-172: every bus delivery records the exact text the session receives, before it is typed', () => {
   const bus = fs.readFileSync(path.join(ROOT, 'src', 'main', 'commandBus.ts'), 'utf8');
-  assert.match(bus, /recordTyped\(deliverText, req\.name, 'send'\);[^\n]*\n\s*emit\(win\(\), 'sendByName'/);
+  assert.match(bus, /recordTyped\(deliverText, req\.name, 'send', req\.from\);[^\n]*\n\s*emit\(win\(\), 'sendByName'/);
   assert.match(bus, /recordTyped\(taskFile \? taskFileInstruction\(taskFile\) : \(req\.task \|\| 'Start session'\), req\.name, 'spawn'\);/);
-  assert.match(bus, /if \(req\.prompt\) recordTyped\(taskFile \? taskFileInstruction\(taskFile\) : req\.prompt, req\.name, 'resume'\);/);
+  assert.match(bus, /if \(req\.prompt\) recordTyped\(taskFile \? taskFileInstruction\(taskFile\) : req\.prompt, req\.name, 'resume', req\.from\);/);
 });
 
 test('#24 contrast: every text token clears 4.5:1 on every surface, in both themes â€” read from theme.css', () => {
@@ -222,4 +222,31 @@ test('#24 contrast: every text token clears 4.5:1 on every surface, in both them
   }
   assert.doesNotMatch(css, /color: var\(--subtle\);[^}]*opacity: \.[0-6]\d?;/, 'no text dimmed below its token by opacity (that is how 2.4:1 happened)');
   assert.doesNotMatch(css, /(?<![-\w])color: var\(--(accent|st-(ok|busy|input|warn|error))\)/, 'text uses the -ink variants; the bright hues stay for fills');
+});
+
+test('AI-198: contract-4 launch args go before the prompt, quoted; a bad field is dead-lettered by name', async () => {
+  const { buildSpawnCmd, buildResumeCmd, parseRequest } = await import('../core/commandBus');
+  const spawn = buildSpawnCmd('claude', 'worker', { task: 'sweep the notes', extraArgs: ['--effort', 'low', '--settings', '{"advisorModel":"claude-opus-5-5"}'] });
+  assert.equal(spawn, `claude --name worker '--effort' 'low' '--settings' '{"advisorModel":"claude-opus-5-5"}' 'sweep the notes'`);
+  const resume = buildResumeCmd('claude', 'abc-123', { prompt: 'go on', extraArgs: ['--effort', 'high'] });
+  assert.equal(resume, `claude --resume 'abc-123' '--effort' 'high' 'go on'`);
+  assert.equal(buildSpawnCmd('claude', 'w', { task: 'x' }), `claude --name w 'x'`, 'a contract-3 request builds exactly as before');
+  const bad = parseRequest(JSON.stringify({ name: 'w', task: 'x', effort: 'ultra' }))!;
+  assert.deepEqual([bad.fieldError?.field, bad.fieldError?.value], ['effort', 'ultra']);
+  const ok = parseRequest(JSON.stringify({ action: 'send', name: 'w', prompt: 'p', from: 'coordinator' }))!;
+  assert.equal(ok.from, 'coordinator');
+  assert.equal(parseRequest(JSON.stringify({ action: 'send', name: 'w', prompt: 'p', from: '$(x) y' }))!.from, undefined, 'an unusable from is dropped, the send proceeds');
+  const bus = fs.readFileSync(path.join(ROOT, 'src', 'main', 'commandBus.ts'), 'utf8');
+  assert.match(bus, /if \(req\.fieldError\) \{[\s\S]{0,300}markUndelivered\(heldPath, req, req\.fieldError\.reason\);/);
+});
+
+test('AI-198: the provenance record carries via "surface" and the sender', async () => {
+  const { recordTyped } = await import('../main/busSent');
+  const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aios-c4-')), 'bus-sent.jsonl');
+  const saved = process.env.AIOS_BUS_LOG; process.env.AIOS_BUS_LOG = log;
+  try {
+    recordTyped('the review came back', 'worker', 'resume', 'coordinator');
+    const e = JSON.parse(fs.readFileSync(log, 'utf8').trim());
+    assert.deepEqual([e.to, e.action, e.via, e.from], ['worker', 'resume', 'surface', 'coordinator']);
+  } finally { if (saved === undefined) delete process.env.AIOS_BUS_LOG; else process.env.AIOS_BUS_LOG = saved; }
 });

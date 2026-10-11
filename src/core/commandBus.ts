@@ -19,6 +19,7 @@
  * session lives IN the app grid, never a detached window, and no shell-wrapper
  * marker is involved.
  */
+import { contract4Fields } from './contract4';
 import { normalizeVerb, type BusVerbResult } from './busVerbs';
 
 import { isSurface, type Surface } from './sendQueue';
@@ -49,6 +50,13 @@ export interface BusRequest {
      which is the honest default — silently spawning would hand back a fresh SOMETHING when the
      caller asked for the same SOMEONE, and that substitution is the whole point of the verb. */
   fallback?: 'spawn';
+  /* Contract 4 (AI-198) — optional, decided by core/contract4 (shared with Glass). */
+  from?: string;                // send/resume: the writer's registry name — a claim, not an identity
+  effort?: string;              // spawn/resume: low · medium · high · xhigh · max
+  advisor?: string;             // spawn/resume: a rung (resolved via resolve-tier) or a model id
+  advisorRung?: boolean;
+  /* A contract-4 field that must be dead-lettered, naming the field and the value as written. */
+  fieldError?: { field: string; value: string; reason: string };
 }
 
 /** kebab-case handle — matches app.js:2568 + Glass's sanitizer exactly. */
@@ -113,7 +121,14 @@ export function parseRequest(raw: string): BusRequest | null {
        to, so a future second fallback does not need a second field — and an unrecognised value
        means no fallback rather than a guessed one. */
     fallback: j.fallback === 'spawn' ? 'spawn' : undefined,
+    ...contract4Of(j, action),
   };
+}
+
+function contract4Of(j: Record<string, unknown>, action: BusAction): Partial<BusRequest> {
+  const c = contract4Fields(j, action);
+  if (!c.accept) return { fieldError: { field: c.field, value: c.value, reason: `${c.field} '${c.value}' is not valid — ${c.field === 'effort' ? 'use one of low, medium, high, xhigh, max' : 'use a rung or a model id'}` } };
+  return { from: c.from, effort: c.effort, advisor: c.advisor, advisorRung: c.advisorRung };
 }
 
 /**
@@ -166,12 +181,13 @@ export function taskFileInstruction(file: string): string {
 export function buildResumeCmd(
   claudeCmd: string,
   sessionId: string,
-  opts: { prompt?: string; taskFile?: string } = {},
+  opts: { prompt?: string; taskFile?: string; extraArgs?: string[] } = {},
 ): string {
   /* QUOTED, even though resumeTarget already refuses an unsafe id. The id is a FILENAME read
      off disk, and this string is typed into a live shell — one guard is a policy, two is a
      boundary. Quoting also keeps the command correct if the id format ever widens. */
   const parts = [claudeCmd || 'claude', '--resume', shq(sessionId)];
+  for (const a of opts.extraArgs ?? []) parts.push(shq(a));   // contract 4: --effort / --settings
   const prompt = opts.taskFile ? taskFileInstruction(opts.taskFile) : opts.prompt;
   if (prompt && prompt.trim()) parts.push(shq(prompt));
   return parts.join(' ');
@@ -180,12 +196,13 @@ export function buildResumeCmd(
 export function buildSpawnCmd(
   claudeCmd: string,
   name: string,
-  opts: { task?: string; model?: string; taskFile?: string } = {},
+  opts: { task?: string; model?: string; taskFile?: string; extraArgs?: string[] } = {},
 ): string {
   const model = opts.model && opts.model.trim() ? opts.model.trim() : undefined;
   const parts = [claudeCmd || 'claude'];
   if (model) parts.push('--model', model);
   parts.push('--name', name);
+  for (const a of opts.extraArgs ?? []) parts.push(shq(a));   // contract 4: --effort / --settings
   const prompt = opts.taskFile ? taskFileInstruction(opts.taskFile) : opts.task;
   if (prompt && prompt.trim()) parts.push(shq(prompt));
   return parts.join(' ');

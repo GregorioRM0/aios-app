@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as aios from './aios';
 import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, type BusRequest } from '../core/commandBus';
 import { recordTyped } from './busSent';
+import { contract4LaunchArgs } from '../core/contract4';
 import { ResumeIndex } from './resumeIndex';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
 import {
@@ -604,7 +605,7 @@ async function runSend(
     }
     attempts++;
     const emittedAt = Date.now();
-    recordTyped(deliverText, req.name, 'send');   // AI-172: before typing, so the label can never lose the race
+    recordTyped(deliverText, req.name, 'send', req.from);   // AI-172: before typing, so the label can never lose the race
     emit(win(), 'sendByName', { name: req.name, text: deliverText });
     /* If the surface says it could not deliver, stop here. Waiting out the verification window
        on a message that was never typed is how one request consumed its entire sibling-release
@@ -704,8 +705,10 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
       if ('error' in r) { markUndelivered(heldPath, req, r.error); return; }
       model = r.model;                    // may be undefined — that is `judgment`
     }
+    const c4 = contract4Args(req);
+    if ('error' in c4) { markUndelivered(heldPath, req, c4.error); return; }
     const cmd = buildSpawnCmd(aios.shellSettings().claudeCmd, req.name, {
-      task: req.task || 'Start session', model, taskFile,
+      task: req.task || 'Start session', model, taskFile, extraArgs: c4.args,
     });
     // AI-172: the first prompt the worker receives is bus-typed too — record exactly that text.
     recordTyped(taskFile ? taskFileInstruction(taskFile) : (req.task || 'Start session'), req.name, 'spawn');
@@ -743,8 +746,10 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
         taskFile = path.join(os.tmpdir(), `aios-resume-task-${req.name}.md`);
         try { fs.writeFileSync(taskFile, req.prompt as string); } catch { taskFile = undefined; }
       }
-      const cmd = buildResumeCmd(aios.shellSettings().claudeCmd, sid, { prompt: req.prompt, taskFile });
-      if (req.prompt) recordTyped(taskFile ? taskFileInstruction(taskFile) : req.prompt, req.name, 'resume');   // AI-172
+      const c4 = contract4Args(req);
+      if ('error' in c4) { markUndelivered(heldPath, req, c4.error); return; }
+      const cmd = buildResumeCmd(aios.shellSettings().claudeCmd, sid, { prompt: req.prompt, taskFile, extraArgs: c4.args });
+      if (req.prompt) recordTyped(taskFile ? taskFileInstruction(taskFile) : req.prompt, req.name, 'resume', req.from);   // AI-172
       // background: the new session opens as a tab with an activity mark; the operator's
       // current tab and keyboard focus stay where they are (setting `busFocus`).
       emit(win(), 'terminal', { name: req.name, cmd, background: true });
@@ -760,8 +765,32 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
 }
 
 /** spawn / kill act immediately once claimed — nothing about the target can refuse them. */
+/**
+ * AI-198 — the arguments contract 4 adds to a launch: `--effort` and the advisor (as
+ * `--settings {"advisorModel":…}`). A rung is resolved through hooks/resolve-tier like `tier`;
+ * one that resolves to the session default names no model, so it is refused, never guessed.
+ */
+function contract4Args(req: BusRequest): { args: string[] } | { error: string } {
+  let advisorModel: string | undefined;
+  if (req.advisor) {
+    if (req.advisorRung) {
+      const r = resolveTier(req.advisor);
+      if ('error' in r) return { error: r.error };
+      if (!r.model) return { error: `advisor rung '${req.advisor}' resolves to the session default and names no model — pass a model id` };
+      advisorModel = r.model;
+    } else advisorModel = req.advisor;
+  }
+  return { args: contract4LaunchArgs({ effort: req.effort, advisorModel }) };
+}
+
 function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
   try {
+    if (req.fieldError) {
+      /* Contract 4: a field we cannot honour is dead-lettered NAMING it, never silently dropped —
+         a worker launched without the effort it was asked for is the quiet failure. */
+      markUndelivered(heldPath, req, req.fieldError.reason);
+      return;
+    }
     if (req.action === 'unknown') {
       /* Refuse a verb we do not implement rather than defaulting it to spawn — see BusAction. */
       markUndelivered(heldPath, req,
@@ -785,7 +814,7 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
       const live = targetByName(req.name);
       if (live) {
         emit(win(), 'focusByName', { name: req.name });
-        log(`resume '${req.name}' — already running, revealing and delivering`);
+        log(`resume '${req.name}' — already running, revealing and delivering${req.effort || req.advisor ? ' (effort/advisor NOT applied: a running session cannot change them)' : ''}`);
         if (req.prompt) void runSend(win, heldPath, { ...req, action: 'send' }, Date.now());
         else try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         return;
