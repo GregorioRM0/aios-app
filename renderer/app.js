@@ -115,6 +115,7 @@ const ICONS = {
   file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
   moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/>',
+  speaker: '<path d="M11 5 6 9H2v6h4l5 4V5Z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a10 10 0 0 1 0 14"/>',   /* AI-169 read aloud */
   /* QUICK is a lightning bolt, not a rocket: the rocket is the DESIGNER's rail glyph (#34), so
      wearing it here made the card and its spawn row read as "designer". Worse, at 13-16px the
      rocket and the `design` pencil are the same shape — a diagonal stroke with a tail at the
@@ -254,7 +255,50 @@ function programStatusOsc(paneId, data) {
   if (!p) return true;
   p.programStatus = { data: s, at: Date.now(), sent: false };
   flushProgramStatus(p);
+  if (p.readAloud && /^state=done\b/.test(s)) void speakAnswer(p, paneId);   // AI-169: the session says it is done
   return true;
+}
+
+/* AI-169 step 1 — read aloud. A per-session switch (the tab's right-click menu). When that session
+   tells the terminal it is DONE (OSC 7501), main returns its final answer reduced to what is worth
+   hearing — prose, first paragraph, no code, tables or paths (core/speakable) — and the system
+   voice reads it, on this machine, in the App's language. Any key in that pane stops it at once,
+   which includes the space bar /voice uses, so it never talks over the operator. */
+let speaking = null;   // { paneId, text }
+function setReadAloud(id, on) {
+  const p = panes.get(id);
+  if (!p) return;
+  p.readAloud = !!on;
+  const nm = p.tab && p.tab.querySelector('.tname');
+  let mark = p.tab && p.tab.querySelector('.treads');
+  if (on && p.tab && !mark) { mark = document.createElement('span'); mark.className = 'treads'; mark.innerHTML = icon('speaker', 11); mark.title = t('tab.readAloudOn'); nm && nm.after(mark); }
+  if (!on && mark) mark.remove();
+  if (!on) stopSpeaking(id);
+  toast(t(on ? 'readAloud.on' : 'readAloud.off'));
+}
+async function speakAnswer(p, paneId) {
+  if (!p.sessionId || !window.speechSynthesis) return;
+  const res = await window.glassShell.speakable(p.sessionId).catch(() => ({ text: '', lang: '' }));
+  const text = res && res.text;
+  if (!text || !p.readAloud) return;
+  if (speaking && speaking.paneId === paneId && speaking.text === text) return;   // done fires twice (with and without a summary)
+  window.speechSynthesis.cancel();
+  /* The ANSWER's language picks the voice (a Spanish answer in an English voice is noise); the
+     App's language only when the guess is unsure. */
+  const loc = (res.lang === 'pt' ? 'pt-br' : res.lang) || (window.i18n && window.i18n.getLocale()) || 'en';
+  const lang = loc === 'es' ? 'es-MX' : loc === 'pt-br' ? 'pt-BR' : 'en-US';
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang;
+  const voice = window.speechSynthesis.getVoices().find((v) => v.lang === lang) || window.speechSynthesis.getVoices().find((v) => v.lang.startsWith(lang.slice(0, 2)));
+  if (voice) u.voice = voice;
+  speaking = { paneId, text };
+  u.onend = () => { if (speaking && speaking.text === text) speaking = null; };
+  window.speechSynthesis.speak(u);
+}
+function stopSpeaking(paneId) {
+  if (!speaking || (paneId !== undefined && speaking.paneId !== paneId)) return;
+  window.speechSynthesis.cancel();
+  speaking = null;
 }
 function flushProgramStatus(p) {
   const ps = p && p.programStatus;
@@ -3200,6 +3244,7 @@ function makeTab(id, name, iconName) {
     if (partner !== null) items.push({ label: t('split.openRight'), value: 'right' });
     if (zoneSplit(z)) items.push({ label: t('split.unsplit'), value: 'unsplit' });
     if (pane.kind === 'term') items.push({ label: t('tab.report'), value: 'report' });   // AI-200
+    if (pane.kind === 'term' && (pane.isSession || pane.sessionId)) items.push({ label: t(pane.readAloud ? 'tab.readAloudOff' : 'tab.readAloudOn'), value: 'readAloud' });   // AI-169
     items.push({ label: '-', value: '-' }, { label: t('tab.close'), value: 'close' });
     /* A NATIVE menu, not the app's listModal. That picker carries a filter box because it was
        built for long searchable lists (sessions, skills, commands), and on four rows the operator
@@ -3211,6 +3256,7 @@ function makeTab(id, name, iconName) {
       else if (pick === 'unsplit') unsplitZone(z);
       else if (pick === 'close') void requestClosePane(id);
       else if (pick === 'report') void reportThis(id);
+      else if (pick === 'readAloud') setReadAloud(id, !pane.readAloud);
       else if (pick === 'rename') {
         const next = (await inputModal(t('tab.rename'), pane.name || t('pulse.terminal'), []) || '').trim();
         if (!next || next === pane.name) return;
@@ -3587,6 +3633,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
       }
       return false;
     }
+    if (e.type === 'keydown' && speaking && speaking.paneId === id) stopSpeaking(id);   // AI-169: any key stops the voice
     if (e.type === 'keydown' && handleChord(e)) return false; // ⌘⌥G chords win everywhere
     if ((e.metaKey || e.ctrlKey) && ['k', 'p', 'j'].includes(e.key.toLowerCase())) return false; // app shortcuts win
     /* AI-77 — Option types the character your keyboard makes, when it makes a plain one. */

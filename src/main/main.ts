@@ -4,6 +4,8 @@ import { installWebPermissionPolicy } from './webPermissions';
 import { withDefaultLocale } from './termLocale';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
 import { plainText } from '../core/plainText';
+import { speakable, lastAnswer, guessLang } from '../core/speakable';
+import { t } from '../i18n';
 import { shellArgs } from './shellArgs';
 import * as path from 'path';
 import * as os from 'os';
@@ -703,6 +705,29 @@ ipcMain.handle('shell:zoom', (_e, factor: number) => {
   return f;
 });
 /* AI-196 — a session's own OSC 7501 status, relayed by the renderer, merged in panelHost. */
+/* AI-169 — a session's final answer, reduced to what is worth hearing (core/speakable). */
+ipcMain.handle('session:speakable', (_e, sessionId: string) => {
+  const sid = String(sessionId || '');
+  if (!/^[A-Za-z0-9-]{8,}$/.test(sid)) return { text: '', lang: '' };
+  try {
+    const base = path.join(os.homedir(), '.claude', 'projects');
+    for (const d of fs.readdirSync(base)) {
+      const f = path.join(base, d, `${sid}.jsonl`);
+      if (!fs.existsSync(f)) continue;
+      const size = fs.statSync(f).size;
+      const len = Math.min(size, 512 * 1024);
+      const fd = fs.openSync(f, 'r');
+      const buf = Buffer.alloc(len);
+      try { fs.readSync(fd, buf, 0, len, size - len); } finally { fs.closeSync(fd); }
+      const answer = lastAnswer(buf.toString('utf8'));
+      const lang = guessLang(answer);
+      /* "The rest is on screen" in the ANSWER's language, so one voice says the whole thing. */
+      const rest = lang === 'es' ? 'El resto está en pantalla.' : lang === 'pt' ? 'O resto está na tela.' : lang === 'en' ? 'The rest is on screen.' : t('readAloud.rest');
+      return { text: speakable(answer, rest), lang: lang ?? '' };
+    }
+  } catch { /* unreadable — say nothing */ }
+  return { text: '', lang: '' };
+});
 ipcMain.on('panes:sessions', (_e, ids: unknown) => aios.setPaneSessionIds(ids));   // AI-203
 ipcMain.on('pty:programStatus', (_e, m: { sessionId?: string; data?: string; at?: number }) => {
   host?.setProgramStatus(String(m?.sessionId ?? ''), String(m?.data ?? ''), Number(m?.at) || Date.now());

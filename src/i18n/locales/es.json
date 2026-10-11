@@ -1118,5 +1118,10 @@
   "update.explain": "¿Qué trae?",
   "update.explainTip": "Un agente explica qué cambió en {version}, en una sola página, antes de que instales.",
   "running.used": "· usó: {what}",
-  "running.usedTip": "Esta sesión usó: {names}. Las habilidades y los agentes se cargan solos cuando tu pedido encaja; también puedes pedir uno por su nombre."
+  "running.usedTip": "Esta sesión usó: {names}. Las habilidades y los agentes se cargan solos cuando tu pedido encaja; también puedes pedir uno por su nombre.",
+  "tab.readAloudOn": "Leer respuestas en voz alta",
+  "tab.readAloudOff": "Dejar de leer respuestas en voz alta",
+  "readAloud.on": "Las respuestas de esta sesión se leerán en voz alta. Presiona cualquier tecla en ella para detenerlo.",
+  "readAloud.off": "La lectura en voz alta está apagada para esta sesión.",
+  "readAloud.rest": "El resto está en pantalla."
 }

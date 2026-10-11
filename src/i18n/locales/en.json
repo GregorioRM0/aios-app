@@ -1118,5 +1118,10 @@
   "update.explain": "What's in it?",
   "update.explainTip": "An agent explains what changed in {version}, as one page — before you install.",
   "running.used": "· used: {what}",
-  "running.usedTip": "This session used: {names}. Skills and agents load on their own when your request fits; you can also ask for one by name."
+  "running.usedTip": "This session used: {names}. Skills and agents load on their own when your request fits; you can also ask for one by name.",
+  "tab.readAloudOn": "Read answers aloud",
+  "tab.readAloudOff": "Stop reading answers aloud",
+  "readAloud.on": "This session's answers will be read aloud. Press any key in it to stop.",
+  "readAloud.off": "Read aloud is off for this session.",
+  "readAloud.rest": "The rest is on screen."
 }

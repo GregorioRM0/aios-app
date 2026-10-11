@@ -36,6 +36,7 @@ contextBridge.exposeInMainWorld('glassShell', {
   ptyWrite: (id: number, data: string) => ipcRenderer.send('pty:write', { id, data }),
   programStatus: (sessionId: string, data: string, at: number) => ipcRenderer.send('pty:programStatus', { sessionId, data, at }),
   paneSessions: (ids: string[]) => ipcRenderer.send('panes:sessions', ids),
+  speakable: (sessionId: string): Promise<{ text: string; lang: string }> => ipcRenderer.invoke('session:speakable', sessionId),
   ptyResize: (id: number, cols: number, rows: number) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   ptyKill: (id: number) => ipcRenderer.send('pty:kill', { id }),
   onPtyData: (cb: (m: { id: number; data: string }) => void) => ipcRenderer.on('pty:data', (_e, m) => cb(m)),

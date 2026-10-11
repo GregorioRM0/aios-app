@@ -401,3 +401,16 @@ test('AI-171 step 1: a session row says which skills and agents it used, from it
     assert.match(d['running.used'], /\{what\}/); assert.match(d['running.usedTip'], /\{names\}/);
   }
 });
+
+test('AI-169 step 1: read aloud — per session, on the session\'s own "done", any key stops it', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.ts'), 'utf8');
+  assert.match(app, /if \(p\.readAloud && \/\^state=done\\b\/\.test\(s\)\) void speakAnswer\(p, paneId\);/, 'triggered by OSC 7501 done');
+  assert.match(app, /if \(e\.type === 'keydown' && speaking && speaking\.paneId === id\) stopSpeaking\(id\);/, 'barge-in: any key in that pane');
+  assert.match(main, /return \{ text: speakable\(answer, rest\), lang: lang \?\? '' \};/, 'main reduces the answer to what is worth hearing, in its own language');
+  assert.match(main, /if \(!\/\^\[A-Za-z0-9-\]\{8,\}\$\/\.test\(sid\)\) return \{ text: '', lang: '' \};/, 'the session id is validated before it touches a path');
+  for (const loc of ['en', 'es', 'pt-br']) {
+    const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'));
+    for (const k of ['tab.readAloudOn', 'tab.readAloudOff', 'readAloud.on', 'readAloud.rest']) assert.ok(d[k], `${loc}: ${k}`);
+  }
+});
