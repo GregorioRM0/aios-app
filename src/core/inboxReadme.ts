@@ -119,8 +119,9 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
   kind this verb is for. A session that renamed itself resolves by its **latest** name.
 - **Already running?** It is revealed and your \`prompt\` is delivered into it, exactly as
   \`send\` would. Resuming a live session would give one identity two processes.
-- **Nothing to resume?** A dead letter naming the session — never a silent spawn. Only the newest
-  sessions are scanned, so a very old name reports the miss rather than being found slowly.
+- **Any age.** A name is found however old its session is: an index of every transcript, not a
+  count of the newest ones. If a session was renamed, its latest name is the one that counts.
+- **Nothing to resume?** A dead letter naming the session — never a silent spawn.
   Add \`"fallback": "spawn"\` to opt into starting a fresh one instead:
 
       { "action": "resume", "name": "designer", "prompt": "…", "fallback": "spawn" }
