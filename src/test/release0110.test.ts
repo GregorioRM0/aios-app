@@ -312,3 +312,20 @@ test('AI-197: the latest model switch of THIS run shows on the session row, in a
   const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
   assert.match(app, /if \(a\.modelSwitch\) \{ const ms = el\('span', 'pswitch'/);
 });
+
+test('AI-201: the demo builds a whole synthetic home — no real vault, registry, account or inbox can reach the screen', () => {
+  const cp = require('child_process') as typeof import('child_process');
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-demo-test-'));
+  cp.execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'demo.mjs'), '--build-only', '--out', out], { encoding: 'utf8' });
+  const files: string[] = [];
+  const walk = (d: string) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else files.push(p); } };
+  walk(out);
+  const all = files.map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+  assert.match(all, /My name is Ana Ruiz/);
+  assert.ok(fs.existsSync(path.join(out, '.claude.json')) && fs.existsSync(path.join(out, '.claude', 'settings.json')), 'Claude\'s own stores are synthetic too');
+  assert.doesNotMatch(all, /chuy|sovra|buddai/i, 'nothing from a real operator');
+  const src = fs.readFileSync(path.join(ROOT, 'scripts', 'demo.mjs'), 'utf8');
+  assert.match(src, /env: \{ \.\.\.process\.env, HOME, USERPROFILE: HOME, AIOS_BUS_DISABLED: '1', GLASS_FRAMEWORK_PATH: path\.join\(HOME, 'aios'\) \}/, 'HOME (both spellings), bus off, framework inside the fake home');
+  assert.match(src, /'--use-mock-keychain'/, 'a fake HOME without a mock keychain pops "Keychain Not Found" on the presenter\'s screen');
+  fs.rmSync(out, { recursive: true, force: true });
+});
