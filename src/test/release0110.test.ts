@@ -198,3 +198,28 @@ test('AI-172: every bus delivery records the exact text the session receives, be
   assert.match(bus, /recordTyped\(taskFile \? taskFileInstruction\(taskFile\) : \(req\.task \|\| 'Start session'\), req\.name, 'spawn'\);/);
   assert.match(bus, /if \(req\.prompt\) recordTyped\(taskFile \? taskFileInstruction\(taskFile\) : req\.prompt, req\.name, 'resume'\);/);
 });
+
+test('#24 contrast: every text token clears 4.5:1 on every surface, in both themes — read from theme.css', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'renderer', 'theme.css'), 'utf8');
+  const block = (sel: RegExp) => sel.exec(css)![0];
+  const tok = (src: string, name: string) => new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, 'i').exec(src)?.[1];
+  const lum = (h: string) => { const v = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+  const ratio = (a: string, b: string) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  const dark = block(/:root\s*\{[\s\S]*?\n\}/), light = block(/body\.light\s*\{[\s\S]*?\n\}/);
+  const surfaces = ['bg', 'zone-edit', 'zone-term', 'surface', 'surface-2'];
+  const text = ['ink', 'subtle', 'faint', 'accent-ink', 'st-ok-ink', 'st-busy-ink', 'st-input-ink', 'st-warn-ink', 'st-error-ink'];
+  for (const [theme, src] of [['dark', dark], ['light', light]] as const) {
+    for (const t of text) {
+      // an alias (var(--x)) resolves to the dark base value
+      const fg = tok(src, t) ?? tok(dark, t) ?? tok(dark, t.replace(/-ink$/, '').replace(/^accent$/, 'accent'));
+      const base = fg ?? tok(dark, t.replace(/-ink$/, ''));
+      assert.ok(base, `${theme}: --${t} resolves to a colour`);
+      for (const s of surfaces) {
+        const bg = tok(src, s) ?? tok(dark, s)!;
+        assert.ok(ratio(base!, bg) >= 4.5, `${theme}: --${t} ${base} on --${s} ${bg} is ${ratio(base!, bg).toFixed(2)}:1`);
+      }
+    }
+  }
+  assert.doesNotMatch(css, /color: var\(--subtle\);[^}]*opacity: \.[0-6]\d?;/, 'no text dimmed below its token by opacity (that is how 2.4:1 happened)');
+  assert.doesNotMatch(css, /(?<![-\w])color: var\(--(accent|st-(ok|busy|input|warn|error))\)/, 'text uses the -ink variants; the bright hues stay for fills');
+});

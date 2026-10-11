@@ -61,7 +61,7 @@ test('a cleared scope removes its badge instead of showing a stale count', () =>
 });
 
 test('the badge reuses the dirty-folder gold, and keeps the sort control rightmost', () => {
-  assert.match(css, /\.xsectgit \{[^}]*color: var\(--st-warn\)/);
+  assert.match(css, /\.xsectgit \{[^}]*color: var\(--st-warn-ink\)/);
   assert.match(css, /\.xsectgit \{[^}]*tabular-nums/, 'digits must not jitter as the count grows');
   assert.match(app, /if \(sort\) head\.insertBefore\(badge, sort\); else head\.appendChild\(badge\);/);
 });

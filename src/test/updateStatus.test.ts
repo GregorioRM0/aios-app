@@ -57,10 +57,10 @@ test('window focus re-checks — the App has no view-visibility event to lean on
 });
 
 test('update-available is coral on both dot and word, and survives :hover', () => {
-  assert.match(css, /\.pstatus\.updavail \{ color: var\(--accent\); \}/, 'word takes the accent, not a warning gold');
+  assert.match(css, /\.pstatus\.updavail \{ color: var\(--accent-ink\); \}/, 'word takes the accent, not a warning gold');
   assert.match(css, /\.pstatus\.updavail \.pdot \{ background: var\(--accent\); \}/, 'dot too — Glass .status.upd .dot');
   // .pstatus:hover sets color:var(--ink); without this the accent washes out on hover
-  assert.match(css, /\.pstatus\.updavail:hover \{ color: var\(--accent\); \}/);
+  assert.match(css, /\.pstatus\.updavail:hover \{ color: var\(--accent-ink\); \}/);
   assert.match(css, /\.pstatus\.updavail:hover \.pupdtext \{ text-decoration: underline; \}/);
 });
 
