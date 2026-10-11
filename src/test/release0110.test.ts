@@ -374,3 +374,19 @@ test('Chuy\'s decisions: coral BUTTONS pass AA under white (fill darkened, hover
   const { MIN_TERM_COLS } = await import('../core/split');
   assert.equal(MIN_TERM_COLS, 60);
 });
+
+test('release gate: a draft is published only when all three platform feeds are attached', async () => {
+  const { gateDecision, REQUIRED_MANIFESTS } = await import('../core/releaseGate');
+  assert.deepEqual([...REQUIRED_MANIFESTS], ['latest-mac.yml', 'latest.yml', 'latest-linux.yml']);
+  assert.deepEqual(gateDecision({ isDraft: true, assets: ['AIOS-arm64.dmg', 'latest-mac.yml', 'latest.yml'] }), { do: 'wait', missing: ['latest-linux.yml'] },
+    'Mac and Windows attached, Linux failed → it stays a draft nobody\'s updater sees');
+  assert.deepEqual(gateDecision({ isDraft: true, assets: ['latest-mac.yml', 'latest.yml', 'latest-linux.yml', 'x.dmg'] }), { do: 'publish' });
+  assert.deepEqual(gateDecision({ isDraft: false, assets: [] }), { do: 'already-public' }, 'a late lane on a published release changes nothing');
+  for (const f of ['release.yml', 'release-linux.yml', 'release-windows.yml']) {
+    const wf = fs.readFileSync(path.join(ROOT, '.github', 'workflows', f), 'utf8');
+    assert.match(wf, /node scripts\/release-gate\.mjs --tag "\$RELEASE_TAG"/, `${f} ends at the gate`);
+  }
+  const mac = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.match(mac, /gh release create "\$TAG" \\\s*--draft/, 'mac creates the release as a DRAFT');
+  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'release-linux.yml'), 'utf8'), /^\s*gh release create/m, 'only mac creates it (a comment may mention the command)');
+});

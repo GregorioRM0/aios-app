@@ -149,16 +149,17 @@ jobs:
           ls -la dist/*.yml dist/*.dmg dist/*.zip
           node scripts/assert-release-assets.mjs --tag "$RELEASE_TAG" --platform darwin --local
 
-      # Publish only after verify + manifest assertion. One versioned Release
-      # carries the .dmg(s) + blockmaps + latest-mac.yml; electron-updater polls
-      # the newest Release. No update server.
-      - name: Publish to GitHub Releases
+      # Create the Release as a DRAFT after verify + manifest assertion (the gate at the end of each
+      # lane publishes it once every platform is attached). One versioned Release carries the
+      # .dmg(s) + blockmaps + latest-mac.yml; electron-updater polls the newest PUBLISHED Release.
+      - name: Attach to the draft Release (created here if absent)
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           TAG="$RELEASE_TAG"
           gh release create "$TAG" \
+            --draft \
             --title "AIOS $TAG" \
             --generate-notes \
             dist/*.dmg dist/*.dmg.blockmap dist/*.zip dist/latest-mac.yml \
@@ -183,3 +184,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: node scripts/assert-release-assets.mjs --tag "$RELEASE_TAG" --platform darwin
+
+      # ALL OR NOTHING (operator's decision, 0.11.0). The Release is a DRAFT until every platform's
+      # feed is attached; this lane publishes it only if it completes the set. A missing feed just
+      # leaves the draft a draft — electron-updater ignores drafts, so nobody sees half a release.
+      - name: Publish only when all three platforms are attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: node scripts/release-gate.mjs --tag "$RELEASE_TAG"
