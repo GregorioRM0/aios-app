@@ -2030,6 +2030,14 @@ function sessionRow(a) {
     }
   }
   /* AI-197 — a model switch this session did not choose (canonical's model-switch log). */
+  /* AI-171 step 1 — the skills and agents this session used, shown quietly: the cheapest way to
+     learn they exist is to see them working on your own request. Hover names them all. */
+  if (a.used && a.used.chip) {
+    const u = el('span', 'pused', t('running.used', { what: a.used.chip }));
+    const names = [...(a.used.skills || []), ...(a.used.agents || [])].join(', ');
+    u.title = t('running.usedTip', { names });
+    r.appendChild(u);
+  }
   if (a.modelSwitch) { const ms = el('span', 'pswitch', '· ' + a.modelSwitch); ms.title = t('running.modelSwitched', { what: a.modelSwitch }); r.appendChild(ms); }
   const mem = fmtMem(a.mem);
   if (mem) r.appendChild(el('span', 'rmem', mem));

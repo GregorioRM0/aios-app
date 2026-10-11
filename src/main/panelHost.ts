@@ -1,3 +1,4 @@
+import { usageIn, usageChip, type ToolUsage } from '../core/toolUse';
 import { latestSwitches, switchLine, type ModelSwitch } from '../core/modelSwitch';
 import { parseProgramStatus, overlayProgramStatus, type ProgramStatus } from '../core/programStatus';
 import * as fs from 'fs';
@@ -307,6 +308,39 @@ export class PanelHost {
     return this.switchCache.map;
   }
 
+  /** AI-171 — what each session used, read incrementally: only bytes appended since last tick. */
+  private usageCache = new Map<string, { file: string; offset: number; carry: string; usage: ToolUsage }>();
+  private usageFor(sessionId: string): ToolUsage | undefined {
+    if (!sessionId) return undefined;
+    let c = this.usageCache.get(sessionId);
+    if (!c) {
+      const base = path.join(os.homedir(), '.claude', 'projects');
+      let file = '';
+      try { for (const d of fs.readdirSync(base)) { const f = path.join(base, d, `${sessionId}.jsonl`); if (fs.existsSync(f)) { file = f; break; } } } catch { /* none */ }
+      if (!file) return undefined;
+      c = { file, offset: 0, carry: '', usage: { skills: [], agents: [] } };
+      this.usageCache.set(sessionId, c);
+    }
+    try {
+      const size = fs.statSync(c.file).size;
+      if (size < c.offset) { c.offset = 0; c.carry = ''; c.usage = { skills: [], agents: [] }; }   // rewritten
+      if (size > c.offset) {
+        const fd = fs.openSync(c.file, 'r');
+        try {
+          const len = Math.min(size - c.offset, 8 * 1024 * 1024);
+          const buf = Buffer.alloc(len);
+          fs.readSync(fd, buf, 0, len, c.offset);
+          c.offset += len;
+          const text = c.carry + buf.toString('utf8');
+          const cut = text.lastIndexOf('\n');
+          usageIn(cut === -1 ? '' : text.slice(0, cut), c.usage);
+          c.carry = cut === -1 ? text : text.slice(cut + 1);
+        } finally { fs.closeSync(fd); }
+      }
+    } catch { /* transcript momentarily unreadable */ }
+    return c.usage;
+  }
+
   postRunning(): void {
     const registry = aios.listOperatorSessions();   // AI-165: never a daemon spare
     for (const id of this.programStatus.keys()) if (!registry.some((a) => a.sessionId === id)) this.programStatus.delete(id);
@@ -324,7 +358,7 @@ export class PanelHost {
     const switches = this.modelSwitches();
     this.post({
       type: 'running',
-      running: running.map((a) => ({ name: a.name, pid: a.pid, id: a.sessionId, key: sessionKey(a), status: a.status, proj: projOf(a.cwd), startedAt: a.startedAt, updatedAt: a.updatedAt, mem: mem[a.pid], waitingFor: a.waitingFor, statusUpdatedAt: a.statusUpdatedAt, modelSwitch: switchLine(switches.get(a.sessionId), a.startedAt) })),
+      running: running.map((a) => ({ name: a.name, pid: a.pid, id: a.sessionId, key: sessionKey(a), status: a.status, proj: projOf(a.cwd), startedAt: a.startedAt, updatedAt: a.updatedAt, mem: mem[a.pid], waitingFor: a.waitingFor, statusUpdatedAt: a.statusUpdatedAt, modelSwitch: switchLine(switches.get(a.sessionId), a.startedAt), used: (() => { const u = this.usageFor(a.sessionId); return u ? { chip: usageChip(u), skills: u.skills, agents: u.agents } : undefined; })() })),
       quota: rl
         ? { has: true, fiveHour: rl.fiveHourPct, sevenDay: rl.sevenDayPct, fr: rl.fiveHourResetsAt, sr: rl.sevenDayResetsAt, showSwap: false, to: '' }
         : { has: false, fiveHour: 0, sevenDay: 0, showSwap: false, to: '' },

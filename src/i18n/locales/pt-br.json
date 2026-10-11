@@ -1116,5 +1116,7 @@
   "running.modelSwitched": "O modelo desta sessão mudou enquanto rodava: {what}. Ninguém o escolheu, então revise o trabalho dela.",
   "tab.report": "Reportar isto…",
   "update.explain": "O que tem?",
-  "update.explainTip": "Um agente explica o que mudou na {version}, em uma página, antes de você instalar."
+  "update.explainTip": "Um agente explica o que mudou na {version}, em uma página, antes de você instalar.",
+  "running.used": "· usou: {what}",
+  "running.usedTip": "Esta sessão usou: {names}. Habilidades e agentes carregam sozinhos quando o seu pedido combina; você também pode pedir um pelo nome."
 }

@@ -729,6 +729,7 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
 .prow2:hover { background: var(--surface-2); }
 .prow2 .rname { flex: 0 1 auto; min-width: 4.5em; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
 .prow2 .pst { flex: 1; min-width: 0; color: var(--subtle); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prow2 .pused { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 10.5px; margin-left: 6px; }   /* AI-171 */
 .prow2 .pswitch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--st-warn-ink); font-size: 10.5px; margin-left: 6px; }   /* AI-197 */
 .prow2 .rmem { flex: 0 0 auto; color: var(--faint); font-family: var(--mono); font-size: 9.5px; margin-left: 6px; }
 .prow2 .runacts { flex: 0 0 auto; display: inline-flex; gap: 1px; opacity: 0; transition: opacity .12s; margin-left: 4px; }

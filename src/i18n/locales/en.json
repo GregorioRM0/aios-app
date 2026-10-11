@@ -1116,5 +1116,7 @@
   "running.modelSwitched": "This session's model changed while it ran: {what}. Nobody picked it, so check its work.",
   "tab.report": "Report this…",
   "update.explain": "What's in it?",
-  "update.explainTip": "An agent explains what changed in {version}, as one page — before you install."
+  "update.explainTip": "An agent explains what changed in {version}, as one page — before you install.",
+  "running.used": "· used: {what}",
+  "running.usedTip": "This session used: {names}. Skills and agents load on their own when your request fits; you can also ask for one by name."
 }
