@@ -7121,11 +7121,32 @@ function openSettingsTab() {
       });
       return sel;
     };
-    row(wrap, t('settings.model'), mkSelect(MODELS, cc.model, 'model'), t('settings.modelHint'));
+    const modelSel = mkSelect(MODELS, cc.model, 'model');
+    row(wrap, t('settings.model'), modelSel, t('settings.modelHint'));
     /* AI-194 — effort, Claude's second knob (`effortLevel`). "Default" deletes the key, so the
        session keeps Claude's own default for whichever model it runs. */
     const EFFORTS = [[t('settings.effortDefault'), ''], [t('effort.low'), 'low'], [t('effort.medium'), 'medium'], [t('effort.high'), 'high'], [t('effort.xhigh'), 'xhigh']];
     row(wrap, t('settings.effort'), mkSelect(EFFORTS, cc.effort || '', 'effort'), t('settings.effortHint'));
+    /* AI-195 — the advisor. Measured: an advisor less capable than the main model is SILENTLY not
+       used (only Claude's debug log says so), so the row says it the moment the pair is chosen.
+       Same rule as core/advisor (family rank fable > opus > sonnet > haiku); unknown = no claim. */
+    const ADVISORS = [[t('settings.advisorOff'), ''], ['Fable', 'fable'], ['Opus', 'opus'], ['Sonnet', 'sonnet']];
+    if (cc.advisor && !ADVISORS.some((a) => a[1] === cc.advisor)) ADVISORS.push([cc.advisor, cc.advisor]);
+    const advSel = mkSelect(ADVISORS, cc.advisor || '', 'advisor');
+    const advWarn = el('div', 'step-note warn', '');
+    const RANKS = [[/fable/i, 4], [/opus/i, 3], [/sonnet/i, 2], [/haiku/i, 1]];
+    const rankOf = (m) => { for (const [re, n] of RANKS) if (re.test(String(m || ''))) return n; return undefined; };
+    const paintAdv = () => {
+      const a = rankOf(advSel.value), m = rankOf(modelSel.value);
+      const bad = advSel.value && a !== undefined && m !== undefined && a < m;
+      advWarn.textContent = bad ? t('settings.advisorCannot', { advisor: advSel.options[advSel.selectedIndex].textContent }) : '';
+      advWarn.style.display = bad ? '' : 'none';
+    };
+    advSel.addEventListener('change', paintAdv);
+    modelSel.addEventListener('change', paintAdv);
+    const advBox = el('div', '', ''); advBox.appendChild(advSel); advBox.appendChild(advWarn);
+    row(wrap, t('settings.advisor'), advBox, t('settings.advisorHint'));
+    paintAdv();
     row(wrap, t('settings.permissionMode'), mkSelect(MODES, cc.mode, 'mode'), t('settings.permissionModeHint'));
     /* Claude's own output styles — built-ins plus anything under ~/.claude/output-styles/.
        Selecting the default DELETES the key rather than writing the string "default", so

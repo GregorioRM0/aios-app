@@ -271,3 +271,26 @@ test('AI-194: the picker carries the current generation, ordered by the ladder; 
     for (const k of ['settings.effort', 'settings.effortHint', 'settings.effortDefault', 'effort.low', 'effort.xhigh']) assert.ok(d[k], `${loc}: ${k}`);
   }
 });
+
+test('AI-195: an advisor weaker than the main model is flagged — the rule Claude applies silently', async () => {
+  const { canAdvise, familyRank, ADVISOR_OPTIONS } = await import('../core/advisor');
+  const { CLAUDE_KEYS, coerce } = await import('../core/claudeConfig');
+  assert.deepEqual([...ADVISOR_OPTIONS], ['fable', 'opus', 'sonnet'], 'the aliases Claude 2.1.296 offers');
+  assert.equal(canAdvise('sonnet', 'claude-opus-5-5'), false, 'measured: Opus + sonnet advisor = silently unused');
+  assert.equal(canAdvise('opus', 'claude-opus-5-5[1m]'), true, 'equal capability advises');
+  assert.equal(canAdvise('fable', 'claude-sonnet-5-5'), true);
+  assert.equal(canAdvise('opus', ''), undefined, 'an unset main model is Claude\'s default — no claim either way');
+  assert.equal(canAdvise('', 'claude-opus-5-5'), undefined, 'no advisor, nothing to say');
+  assert.equal(CLAUDE_KEYS.advisor.path, 'advisorModel');
+  assert.equal(coerce('advisor', ''), undefined, 'Off deletes the key');
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  /* The renderer cannot import core, so its copy of the rule is asserted to match. */
+  assert.match(app, /const RANKS = \[\[\/fable\/i, 4\], \[\/opus\/i, 3\], \[\/sonnet\/i, 2\], \[\/haiku\/i, 1\]\];/);
+  for (const m of ['fable', 'opus', 'sonnet', 'haiku']) assert.ok(familyRank(m));
+  assert.match(app, /const bad = advSel\.value && a !== undefined && m !== undefined && a < m;/);
+  for (const loc of ['en', 'es', 'pt-br']) {
+    const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'));
+    for (const k of ['settings.advisor', 'settings.advisorHint', 'settings.advisorOff', 'settings.advisorCannot']) assert.ok(d[k], `${loc}: ${k}`);
+    assert.match(d['settings.advisorCannot'], /\{advisor\}/);
+  }
+});

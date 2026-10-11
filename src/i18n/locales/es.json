@@ -1108,5 +1108,9 @@
   "effort.low": "Bajo",
   "effort.medium": "Medio",
   "effort.high": "Alto",
-  "effort.xhigh": "Muy alto"
+  "effort.xhigh": "Muy alto",
+  "settings.advisor": "Asesor",
+  "settings.advisorHint": "Un segundo modelo, más capaz, que Claude puede consultar en pasos difíciles. Apagado por defecto; cuesta más cuando se usa.",
+  "settings.advisorOff": "Apagado",
+  "settings.advisorCannot": "{advisor} no puede asesorar al modelo de arriba: un asesor debe ser al menos tan capaz como el modelo principal, así que Claude no lo usaría, sin avisarte."
 }

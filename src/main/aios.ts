@@ -2523,6 +2523,7 @@ export function outputStyleOptions(): string[] {
 export interface ClaudeConfig {
   account: string; model: string; mode: string; remoteControl: boolean; autoUpdates: boolean;
   effort: string;            // AI-194: effortLevel ('' = Claude's default for the model)
+  advisor: string;           // AI-195: advisorModel ('' = no advisor)
   // Claude-owned toggles surfaced in Settings (see src/core/claudeConfig.ts for the stores)
   outputStyle: string; reduceMotion: boolean; switchModelsOnFlag: boolean;
   claudeInChrome: boolean; copyOnSelect: boolean;
@@ -2557,6 +2558,7 @@ export function claudeConfig(): ClaudeConfig {
     // every one of these reads through the registry, so the row and the file agree
     model: str('model'),
     effort: str('effort'),
+    advisor: str('advisor'),
     mode: str('mode'),
     remoteControl: bool('remoteControl'),
     outputStyle: str('outputStyle'),

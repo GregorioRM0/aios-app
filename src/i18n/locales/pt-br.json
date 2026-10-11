@@ -1108,5 +1108,9 @@
   "effort.low": "Baixo",
   "effort.medium": "Médio",
   "effort.high": "Alto",
-  "effort.xhigh": "Muito alto"
+  "effort.xhigh": "Muito alto",
+  "settings.advisor": "Assessor",
+  "settings.advisorHint": "Um segundo modelo, mais capaz, que o Claude pode consultar em etapas difíceis. Desligado por padrão; custa mais quando usado.",
+  "settings.advisorOff": "Desligado",
+  "settings.advisorCannot": "{advisor} não pode assessorar o modelo acima: um assessor precisa ser pelo menos tão capaz quanto o modelo principal, então o Claude não o usaria, sem avisar."
 }

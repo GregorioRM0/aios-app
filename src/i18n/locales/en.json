@@ -1108,5 +1108,9 @@
   "effort.low": "Low",
   "effort.medium": "Medium",
   "effort.high": "High",
-  "effort.xhigh": "Extra high"
+  "effort.xhigh": "Extra high",
+  "settings.advisor": "Advisor",
+  "settings.advisorHint": "A second, stronger model Claude can consult on hard steps. Off by default; it adds cost when used.",
+  "settings.advisorOff": "Off",
+  "settings.advisorCannot": "{advisor} can't advise the model above: an advisor must be at least as capable as the main model, so Claude would silently not use it."
 }
