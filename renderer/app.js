@@ -2206,6 +2206,17 @@ const SPLIT_GAP_PX = 10;      // must equal core's SPLIT_GAP — guarded in spli
 const MAX_VISIBLE_PANES = 3;  // must equal core's MAX_VISIBLE — guarded there too
 const MIN_PANE_PX = 320;      // must equal core's MIN_PANE_PX — ~30 columns MEASURED; guarded there too
 const PANE_EDGE_PX = 10;      // must equal `.pane`'s own horizontal inset — guarded there too
+const MIN_TERM_COLS = 30;     // must equal core's MIN_TERM_COLS — the terminal floor in COLUMNS (#24)
+const PANE_CHROME_PX = 45;    // must equal core's PANE_CHROME_PX — measured padding + border of a pane
+/* #24: in the terminal zone the floor follows the font — 30 columns at the live cell width, never
+   below MIN_PANE_PX. Mirrors core's minTermPanePx(); split.test.ts asserts the two agree. */
+function minPaneFor(z) {
+  if (z !== 'term') return MIN_PANE_PX;
+  let cell;
+  for (const [, p] of panes) { const c = p.kind === 'term' && p.term && p.term._core?._renderService?.dimensions?.css?.cell?.width; if (c) { cell = c; break; } }
+  if (!cell || !Number.isFinite(cell) || cell <= 0) return MIN_PANE_PX;
+  return Math.max(MIN_PANE_PX, Math.ceil(MIN_TERM_COLS * cell + PANE_CHROME_PX));
+}
 const zones = { main: { visible: [], frac: [] }, term: { visible: [], frac: [] } };
 const zoneSplit = (z) => zones[z].visible.length > 1;
 const active = { main: null, term: null };
@@ -2292,7 +2303,7 @@ function homePane(id, p, { fresh = false } = {}) {
     const zoneW = zEl ? zEl.getBoundingClientRect().width : 0;
     const nextCount = zones[z].visible.length + 1;
     const room = nextCount <= MAX_VISIBLE_PANES
-      && (zoneW - SPLIT_GAP_PX * (nextCount - 1)) / nextCount >= MIN_PANE_PX;
+      && (zoneW - SPLIT_GAP_PX * (nextCount - 1)) / nextCount >= minPaneFor(z);
     if (room) {
       const at = zones[z].visible.indexOf(active[z]);
       zones[z].visible = at < 0
@@ -2820,7 +2831,7 @@ function splitWithPane(z, next) {
   const zoneW = zoneEl ? zoneEl.getBoundingClientRect().width : 0;
   const nextCount = vis.length + 1;
   const room = nextCount <= MAX_VISIBLE_PANES
-    && (zoneW - SPLIT_GAP_PX * (nextCount - 1)) / nextCount >= MIN_PANE_PX;
+    && (zoneW - SPLIT_GAP_PX * (nextCount - 1)) / nextCount >= minPaneFor(z);
   if (room) {
     const at = vis.indexOf(beside);
     zones[z].visible = at < 0 ? [...vis, next] : [...vis.slice(0, at + 1), next, ...vis.slice(at + 1)];
