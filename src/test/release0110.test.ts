@@ -142,3 +142,30 @@ test('AI-192: ⇧⌘C and the terminal right-click menu copy as plain text, thro
     for (const k of ['term.copy', 'term.copyPlain', 'term.copiedPlain']) assert.ok(d[k], `${loc}: ${k}`);
   }
 });
+
+test('AI-199: an unnamed session\'s topic labels its tab — never over a manual name, never from a shell title', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  const src = /function claudeTopicLabel\(id, title\) \{[\s\S]*?\n\}\nfunction paintTabLabel\(p\) \{[\s\S]*?\n\}/.exec(app)![0];
+  type P = { name: string; manualName?: boolean; claudeTitled?: boolean; topic?: string; tab: { title: string; querySelector: () => { textContent: string } } };
+  const mk = (name: string, manual = false): P => {
+    const label = { textContent: name };
+    return { name, manualName: manual, tab: { title: '', querySelector: () => label } };
+  };
+  const run = new Function('panes', 'sessionNameFromTitle', `${src}; return claudeTopicLabel;`);
+  const slug = (t: string) => (/^[a-z0-9][a-z0-9-]{1,40}$/i.test(t.replace(/^[^\w~/]+/, '').trim()) ? t : null);
+  const label = (p: P) => p.tab.querySelector().textContent;
+
+  const term = mk('terminal'); const panes = new Map([[1, term]]);
+  const f = run(panes, slug) as (id: number, t: string) => void;
+  f(1, 'Qué es un respaldo');
+  assert.equal(label(term), 'terminal', 'no Claude announcement yet → a free-text title is not trusted');
+  for (const t of ['✳ Claude Code', '◐ Claude Code', 'Claude Code', 'Qué es un respaldo']) f(1, t);   // the measured sequence
+  assert.equal(label(term), 'Qué es un respaldo');
+  assert.equal(term.name, 'terminal', 'the identity the bus correlates on is untouched');
+  f(1, 'chuy@mac: ~/code');
+  assert.equal(label(term), 'terminal', 'back to a shell → back to its own name');
+
+  const manual = mk('build', true); const f2 = run(new Map([[1, manual]]), slug) as (id: number, t: string) => void;
+  for (const t of ['✳ Claude Code', 'Qué es un respaldo']) f2(1, t);
+  assert.equal(label(manual), 'build', 'a name the operator set wins');
+});

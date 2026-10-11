@@ -3052,6 +3052,37 @@ function sessionNameFromTitle(title) {
   return cleaned;
 }
 
+/* AI-199 — an UNNAMED Claude session titles itself with its topic. Measured on 2.1.296: a
+   session started with `--name x` titles "✳ x" → "x" (already handled by sessionNameFromTitle);
+   one started as a bare `claude` in a terminal tab titles "✳ Claude Code" → "Claude Code" →
+   "Qué es un respaldo". That tab used to keep saying "terminal". Now it shows the topic, with
+   three limits: a name the operator set always wins; the topic is only a LABEL (p.name, which
+   the bus and the Running list correlate on, never changes); and it is only taken after the pane
+   has announced Claude, so a shell's own title (a path, user@host) can never become a label —
+   and such a title puts the pane's own name back. */
+function claudeTopicLabel(id, title) {
+  const p = panes.get(id);
+  if (!p) return;
+  const raw = String(title || '').trim();
+  const bare = raw.replace(/^[^\p{L}\p{N}]+/u, '').trim();
+  if (/^claude code$/i.test(bare)) { p.claudeTitled = true; return; }
+  const looksShell = /[\/~@]/.test(raw) || !bare;
+  if (looksShell) {
+    if (p.claudeTitled) { p.claudeTitled = false; p.topic = ''; paintTabLabel(p); }
+    return;
+  }
+  if (!p.claudeTitled || p.manualName || sessionNameFromTitle(raw)) return;
+  p.topic = bare.slice(0, 60);
+  paintTabLabel(p);
+}
+function paintTabLabel(p) {
+  const nm = p.tab && p.tab.querySelector('.tname');
+  if (!nm) return;
+  const label = !p.manualName && p.topic ? p.topic : p.name;
+  nm.textContent = label;
+  p.tab.title = label === p.name ? p.name : `${p.name} — ${label}`;
+}
+
 /* TEMPORARY (AI-64 investigation): log every title a pty emits so the real format can be
    read off a live session instead of guessed. Remove before shipping. */
 const TITLE_DEBUG = false;  // flip on to log the tty titles panes actually emit
@@ -3543,6 +3574,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
      decided elsewhere, from the registry itself, where the fact actually lives. */
   term.onTitleChange((title) => {
     if (TITLE_DEBUG) console.log('[title]', id, JSON.stringify(String(title).slice(0, 120)));
+    claudeTopicLabel(id, title);
     const nm = sessionNameFromTitle(title);
     if (!nm) return;
     /* TWO QUESTIONS, and conflating them was the bug. Measured titles: "✳ keen-otter",
