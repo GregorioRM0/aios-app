@@ -26,6 +26,12 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
      .5-.65, which measured 2.4-3.3:1. This value clears 4.5:1 on every dark surface (worst:
      --surface-2 at 4.74) and still sits well below --subtle (5.7-6.6). */
   --faint: #85858e;
+  /* Chuy's decision (0.11.0): the coral BUTTON fill is darkened until white text passes AA —
+     #ff5d4d under white was 3.03:1; this is 4.67:1, and hover goes darker (5.32:1), never
+     lighter. The bright --accent stays for the logo and accents. Same in both themes: the coral
+     does not flip, and neither does the white text on it. */
+  --accent-fill: #d63a2a;
+  --accent-fill-hover: #c8331f;
   /* INK variants: the same hues where they are used as TEXT. Dark theme is the reference and
      needs nothing (coral 6.5:1, the status colours higher), so here they are aliases. */
   --accent-ink: var(--accent);
@@ -147,7 +153,7 @@ button.tpick:hover { border-color: var(--accent); }
 .dzkind { flex: 1; background: var(--surface-2); border: 1px solid var(--line); color: var(--subtle);
           border-radius: 9px; padding: 9px 12px; font-size: 12.5px; font-weight: 600; font-family: var(--font); cursor: pointer; }
 .dzkind:hover { color: var(--ink); border-color: var(--accent); }
-.dzkind.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dzkind.on { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
 .dzabout { font-size: 12px; color: var(--subtle); line-height: 1.55; }
 .dzhome { font-size: 11px; color: var(--subtle); font-family: var(--mono); opacity: .8; margin-top: 6px; }
 /* stacked fields — label + hint above a full-width control (a form you type prose into) */
@@ -323,8 +329,8 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 /* An icon inside a text button sat on the text BASELINE, so it looked dropped (operator, 2026-09-29,
    on the new Reveal in Finder button; the PNG button had the same offset). Centre it on the text. */
 .vbtn svg { vertical-align: -2px; margin-right: 1px; }
-.vbtn.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; padding: 9px 18px; font-size: 13px; }
-.vbtn.primary:hover { background: var(--accent-soft); color: #fff; }
+.vbtn.primary { background: var(--accent-fill); color: #fff; border-color: var(--accent-fill); font-weight: 600; padding: 9px 18px; font-size: 13px; }
+.vbtn.primary:hover { background: var(--accent-fill-hover); border-color: var(--accent-fill-hover); color: #fff; }
 .vbody { flex: 1; overflow-y: auto; min-height: 0; user-select: text; }
 .vbody.fill { overflow: hidden; display: flex; }
 .vbody.fill .htmlview { flex: 1; height: auto; }
@@ -937,8 +943,8 @@ body.no-hints .xsectsub { display: none; }
 .pblabel { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .pbkey { color: var(--subtle); font-size: 10px; font-family: var(--mono); opacity: .72; white-space: nowrap; }
 .pbval { color: var(--accent-ink); font-family: var(--mono); font-size: 11px; min-width: 14px; text-align: right; flex: 0 0 auto; }
-.pbtn.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 650; justify-content: center; }
-.pbtn.primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
+.pbtn.primary { background: var(--accent-fill); color: #fff; border-color: var(--accent-fill); font-weight: 650; justify-content: center; }
+.pbtn.primary:hover { background: var(--accent-fill-hover); border-color: var(--accent-fill-hover); }
 .pbtn.primary .pblabel { font-weight: 650; }
 .pbtn.accent { border-color: rgba(255,93,77,.4); background: color-mix(in srgb, var(--accent) 7%, var(--surface-2)); }
 .pbtn.accent:hover { background: color-mix(in srgb, var(--accent) 13%, var(--surface-2)); }
@@ -1268,7 +1274,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
   flex: 0 0 auto;
   border: 0;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: #fff;                 /* white in BOTH themes — the coral does not flip, so neither does this */
   font-size: 11px;
   font-weight: 700;
@@ -1280,7 +1286,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
   -webkit-app-region: no-drag;
   transition: filter .18s ease, transform .18s ease;
 }
-#dragacts .updpill:hover { filter: brightness(1.06); transform: translateY(-1px); background: var(--accent); color: #fff; }
+#dragacts .updpill:hover { transform: translateY(-1px); background: var(--accent-fill-hover); color: #fff; }   /* darker, never brighter: brightness() dropped white below AA */
 #dragacts .updpill[hidden] { display: none; }
 /* AI-83 — the DOWNLOADING state. Same pill, visibly not-yet-actionable: muted rather than
    coral, and no hover lift, because a control that looks pressable while it is not is worse

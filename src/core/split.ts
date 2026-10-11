@@ -76,11 +76,11 @@ export function fitsAnother(count: number, zoneWidth: number, minPanePx: number 
  * A fixed 320px meant ~30 columns at the default font and ~21 at ⌘+ 18px: making the text bigger
  * silently made a split unreadable. So for the terminal zone the floor is computed from the live
  * cell width. Measured 2026-10-11 (font 16px): a cell is 9.6px and a pane spends ~45px on its
- * padding and border, so 30 columns ≈ 333px — today's floor, kept. The issue asked for 80; at that
- * font a two-pane split would need a ~1,640px terminal zone, i.e. no terminal split on a laptop,
- * so the number is the operator's decision and lives here as one constant.
+ * padding and border. The issue asked for 80 — at that font a two-pane split needs a ~1,640px
+ * terminal zone, i.e. none on a laptop — so it went to the operator, who chose **60 columns**
+ * (0.11.0): ~621px per pane at 16px, so two panes need a ~1,250px terminal zone.
  */
-export const MIN_TERM_COLS = 30;
+export const MIN_TERM_COLS = 60;
 export const PANE_CHROME_PX = 45;
 export function minTermPanePx(cellWidth: number | undefined): number {
   if (!cellWidth || !Number.isFinite(cellWidth) || cellWidth <= 0) return MIN_PANE_PX;

@@ -358,3 +358,19 @@ test('AI-205: the App waits for the next idle, in order, superseding, aged — a
   const readme = fs.readFileSync(path.join(ROOT, 'src', 'core', 'inboxReadme.ts'), 'utf8');
   assert.match(readme, /\*\*In order, latest wins\.\*\*/);
 });
+
+test('Chuy\'s decisions: coral BUTTONS pass AA under white (fill darkened, hover darker); split floor is 60 columns', async () => {
+  const css = fs.readFileSync(path.join(ROOT, 'renderer', 'theme.css'), 'utf8');
+  const tok = (n: string) => new RegExp(`--${n}:\\s*(#[0-9a-f]{6})`, 'i').exec(css)![1];
+  const lum = (h: string) => { const v = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };
+  const onWhite = (h: string) => 1.05 / (lum(h) + 0.05);
+  assert.ok(onWhite(tok('accent-fill')) >= 4.5 && onWhite(tok('accent-fill-hover')) >= 4.5, 'white on the fill and on its hover');
+  assert.equal(tok('accent'), '#ff5d4d', 'the bright coral stays for the logo and accents');
+  for (const sel of ['.vbtn.primary {', '.pbtn.primary {', '.dzkind.on {']) {
+    const i = css.indexOf('\n' + sel) + 1; assert.ok(i > 0, sel);
+    assert.match(css.slice(i, css.indexOf('}', i)), /background: var\(--accent-fill\)/, `${sel} uses the darkened fill`);
+  }
+  assert.doesNotMatch(css, /\.updpill:hover \{[^}]*brightness/, 'the pill never brightens on hover');
+  const { MIN_TERM_COLS } = await import('../core/split');
+  assert.equal(MIN_TERM_COLS, 60);
+});

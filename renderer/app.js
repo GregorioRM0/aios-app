@@ -2212,7 +2212,7 @@ const SPLIT_GAP_PX = 10;      // must equal core's SPLIT_GAP — guarded in spli
 const MAX_VISIBLE_PANES = 3;  // must equal core's MAX_VISIBLE — guarded there too
 const MIN_PANE_PX = 320;      // must equal core's MIN_PANE_PX — ~30 columns MEASURED; guarded there too
 const PANE_EDGE_PX = 10;      // must equal `.pane`'s own horizontal inset — guarded there too
-const MIN_TERM_COLS = 30;     // must equal core's MIN_TERM_COLS — the terminal floor in COLUMNS (#24)
+const MIN_TERM_COLS = 60;     // must equal core's MIN_TERM_COLS — the terminal floor in COLUMNS (#24)
 const PANE_CHROME_PX = 45;    // must equal core's PANE_CHROME_PX — measured padding + border of a pane
 /* #24: in the terminal zone the floor follows the font — 30 columns at the live cell width, never
    below MIN_PANE_PX. Mirrors core's minTermPanePx(); split.test.ts asserts the two agree. */
