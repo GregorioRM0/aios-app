@@ -3,6 +3,7 @@ import { markQuitting, isQuitting, closeShouldHide } from './quitState';
 import { installWebPermissionPolicy } from './webPermissions';
 import { withDefaultLocale } from './termLocale';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
+import { plainText } from '../core/plainText';
 import { shellArgs } from './shellArgs';
 import * as path from 'path';
 import * as os from 'os';
@@ -702,6 +703,9 @@ ipcMain.handle('shell:zoom', (_e, factor: number) => {
   return f;
 });
 ipcMain.handle('shell:copyText', (_e, t: string) => { clipboard.writeText(String(t)); return true; });
+/* AI-192 — ⇧⌘C / right-click "Copy as plain text": the selection without Claude's TUI scaffolding
+   (bullets, quote bars, indents, the footer) and with terminal wraps rejoined into paragraphs. */
+ipcMain.handle('shell:copyPlainText', (_e, t: string, cols: number) => { clipboard.writeText(plainText(String(t), Number(cols) || 80)); return true; });
 ipcMain.handle('fs:read', (_e, relOrAbs: string) => {
   const abs = resolveIn(relOrAbs);
   if (!abs) return null;

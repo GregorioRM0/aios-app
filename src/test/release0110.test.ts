@@ -129,3 +129,16 @@ test('AI-190: the renderer stamps the light class from the URL before anything p
     assert.doesNotMatch(d['settings.themeHint'], /stay dark|oscuras|escuros/i, `${loc}: the hint no longer claims terminals stay dark`);
   }
 });
+
+test('AI-192: ⇧⌘C and the terminal right-click menu copy as plain text, through the tested core', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.ts'), 'utf8');
+  assert.match(main, /ipcMain\.handle\('shell:copyPlainText', \(_e, t: string, cols: number\) => \{ clipboard\.writeText\(plainText\(String\(t\), Number\(cols\) \|\| 80\)\)/);
+  assert.match(app, /if \(k === 'C' \|\| \(k === 'c' && e\.shiftKey\)\) \{ const sel = term\.getSelection\(\); if \(sel\) \{ void window\.glassShell\.copyPlainText\(sel, term\.cols\)/);
+  assert.ok(app.indexOf("k === 'C' ||") < app.indexOf("if (k === 'c') { const sel"), '⇧⌘C is checked before plain ⌘C');
+  assert.match(app, /el\.addEventListener\('mousedown', \(ev\) => \{ if \(ev\.button === 2\) ctxSel = term\.getSelection\(\); \}, true\);/, 'the selection is kept before right-click selects a word');
+  for (const loc of ['en', 'es', 'pt-br']) {
+    const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'));
+    for (const k of ['term.copy', 'term.copyPlain', 'term.copiedPlain']) assert.ok(d[k], `${loc}: ${k}`);
+  }
+});

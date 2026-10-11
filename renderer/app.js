@@ -3467,6 +3467,8 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
     // ⌘ conventions every macOS terminal user expects — and that a non-technical operator
     // will try first. Without these, ⌘C sent nothing and ⌘←/→ did nothing at all.
     const k = e.key;
+    /* AI-192 — ⇧⌘C copies the selection as plain text (scaffolding stripped, wraps rejoined). */
+    if (k === 'C' || (k === 'c' && e.shiftKey)) { const sel = term.getSelection(); if (sel) { void window.glassShell.copyPlainText(sel, term.cols).then(() => toast(t('term.copiedPlain'))); return false; } return true; }
     if (k === 'c') { const sel = term.getSelection(); if (sel) { void window.glassShell.copyText(sel); return false; } return true; }
     /* ⌘V is deliberately NOT handled here. It used to be, and it pasted EVERYTHING TWICE:
        returning false suppresses xterm's KEYBOARD handling but not the browser's native
@@ -3566,6 +3568,20 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
   // select-to-copy: mirror the selection to the clipboard as it changes, so a
   // mouse drag in the terminal copies (matches Claude Code's terminal behavior).
   term.onSelectionChange(() => { const sel = term.getSelection(); if (sel) void window.glassShell.copyText(sel); });
+  /* AI-192 — a right-click menu on the terminal: Copy / Copy as plain text. The selection is
+     stashed on mousedown, because on macOS xterm's right-click selects the word under the
+     pointer and would replace what the operator selected before the menu opens. */
+  let ctxSel = '';
+  el.addEventListener('mousedown', (ev) => { if (ev.button === 2) ctxSel = term.getSelection(); }, true);
+  el.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    const sel = ctxSel || term.getSelection();
+    if (!sel) return;
+    void window.glassShell.tabMenu([{ label: t('term.copy'), value: 'copy' }, { label: t('term.copyPlain'), value: 'plain' }]).then((pick) => {
+      if (pick === 'copy') void window.glassShell.copyText(sel);
+      else if (pick === 'plain') void window.glassShell.copyPlainText(sel, term.cols).then(() => toast(t('term.copiedPlain')));
+    });
+  });
   paintRunning(); // reflect the new terminal in the RUNNING card immediately
   return id;
 }

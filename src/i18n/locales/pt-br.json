@@ -1098,5 +1098,8 @@
   "restore.missing": "não encontradas: {names}",
   "restore.elsewhere": "já abertas em outro lugar: {names}",
   "restore.paused": "{name} ainda não está rodando",
-  "restore.resumeNow": "Retomar"
+  "restore.resumeNow": "Retomar",
+  "term.copy": "Copiar",
+  "term.copyPlain": "Copiar como texto simples   ⇧⌘C",
+  "term.copiedPlain": "Copiado como texto simples"
 }
