@@ -98,6 +98,12 @@ battery_low() {
   pct=$(pmset -g batt | grep -o '[0-9]*%' | head -1 | tr -d '%')
   [ -n "$pct" ] && [ "$pct" -le ${LID_BATTERY_FLOOR} ]
 }
+# The pidfile can outlive its guard (a SIGKILL skips the trap), and pids are reused. Signalling a
+# stale pid would have root signal whatever process now owns that number, so a pid is only ever
+# signalled after checking it is still this guard holding.
+is_guard() { [ -n "$1" ] && ps -p "$1" -o command= 2>/dev/null | grep -qF "$0 hold"; }
+# The App's identity is its pid AND its start time: a reused pid is a different process.
+started() { ps -p "$1" -o lstart= 2>/dev/null; }
 restore() {
   pmset -a disablesleep 0
   rm -f "$PIDFILE"
@@ -109,19 +115,27 @@ case "$1" in
     case "$2" in ''|*[!0-9]*) echo "hold needs the app's pid" >&2; exit 2 ;; esac
     # A previous holder (an App that restarted) steps aside WITHOUT restoring: USR1 means
     # "someone is taking over", and restoring here could sleep a closed-lid Mac mid-handover.
-    if [ -f "$PIDFILE" ]; then kill -USR1 "$(cat "$PIDFILE")" 2>/dev/null; sleep 1; fi
+    if [ -f "$PIDFILE" ]; then
+      prev=$(cat "$PIDFILE")
+      if is_guard "$prev"; then kill -USR1 "$prev" 2>/dev/null; sleep 1; fi
+    fi
+    APP_STARTED=$(started "$2")
+    [ -n "$APP_STARTED" ] || { echo "no process $2" >&2; exit 2; }
     echo $$ > "$PIDFILE"
     trap 'restore; exit 0' HUP INT TERM
     trap 'exit 0' USR1
     pmset -a disablesleep 1 || { rm -f "$PIDFILE"; exit 1; }
     echo held
-    while kill -0 "$2" 2>/dev/null; do
+    while [ "$(started "$2")" = "$APP_STARTED" ]; do
       if battery_low; then echo "battery at or below ${LID_BATTERY_FLOOR}%" >&2; break; fi
       sleep 5 & wait $!
     done
     restore ;;
   release)
-    if [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null; then exit 0; fi
+    if [ -f "$PIDFILE" ]; then
+      prev=$(cat "$PIDFILE")
+      if is_guard "$prev" && kill "$prev" 2>/dev/null; then exit 0; fi
+    fi
     restore ;;
   boot)
     pmset -a disablesleep 0

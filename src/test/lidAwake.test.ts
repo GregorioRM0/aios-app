@@ -207,3 +207,28 @@ test('the lid word fits the title-bar tooltip in every locale', () => {
     assert.ok(worst.length <= 64, `${loc}: "${worst}" is ${worst.length} chars`);
   }
 });
+
+test('a stale pidfile never makes root signal a process that is not the guard', { skip: skipOffPosix }, async () => {
+  /* The pidfile outlives a guard killed with SIGKILL (no trap runs), and pids are reused. Before
+     0.11.0, `release` ran `kill $(cat pidfile)` and `hold` sent USR1 to it, as root, without
+     checking what now owns that pid. USR1's default action terminates a process. */
+  const s = sandbox({ lidClosed: false });
+  const bystander = spawn('/bin/sleep', ['60']);
+  const died = new Promise((res) => bystander.on('exit', res));
+  let alive = true;
+  bystander.on('exit', () => { alive = false; });
+  fs.writeFileSync(path.join(s.dir, 'guard.pid'), String(bystander.pid));
+  assert.equal(spawnSync(s.guard, ['release']).status, 0);
+  assert.ok(alive, 'release must not kill an unrelated process named by a stale pidfile');
+  assert.deepEqual(s.calls(), ['-a disablesleep 0'], 'it still puts sleep back');
+  fs.writeFileSync(path.join(s.dir, 'guard.pid'), String(bystander.pid));
+  const app = spawn('/bin/sleep', ['60']);
+  const g = spawn(s.guard, ['hold', String(app.pid)]);
+  let out = '';
+  g.stdout.on('data', (d) => { out += d; });
+  await waitFor(() => out.includes('held'));
+  assert.ok(alive, 'hold must not USR1 an unrelated process either');
+  spawnSync(s.guard, ['release']);
+  await new Promise((res) => g.on('exit', res));
+  app.kill(); bystander.kill(); await died;
+});
