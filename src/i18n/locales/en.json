@@ -359,6 +359,8 @@
   "settings.fileIconsHint": "colorful type icons vs plain",
   "settings.autoReveal": "Auto-reveal",
   "settings.autoRevealHint": "the tree follows the active tab",
+  "settings.autoOpenExports": "Open new exports",
+  "settings.autoOpenExportsHint": "a new file in 03 - export opens in a tab by itself",
   "settings.sortDefault": "Default sort",
   "settings.sortDefaultHint": "every folder without its own sort follows this; changing it clears per-folder overrides",
   "sort.title": "Sort this folder — name or last-modified",

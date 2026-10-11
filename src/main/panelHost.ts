@@ -84,6 +84,8 @@ export class PanelHost {
           this.scheduleRefresh();
           const now = Date.now();
           if (now - this.bootAt < 10000 || now - this.lastReveal < 8000) return;
+          // read per event, not cached: the Settings toggle applies without a restart
+          if (!aios.shellSettings().autoOpenExports) return;
           const newest = aios.recentOutputs(1)[0];
           if (newest && now - newest.mtime < 6000 && /\.(html?|pdf|png|jpe?g|md)$/i.test(newest.name)) {
             this.lastReveal = now;

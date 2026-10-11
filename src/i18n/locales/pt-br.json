@@ -359,6 +359,8 @@
   "settings.fileIconsHint": "ícones de tipo coloridos vs. simples",
   "settings.autoReveal": "Revelar automaticamente",
   "settings.autoRevealHint": "a árvore segue a aba ativa",
+  "settings.autoOpenExports": "Abrir exportações novas",
+  "settings.autoOpenExportsHint": "um arquivo novo em 03 - export abre sozinho numa aba",
   "settings.sortDefault": "Ordenação padrão",
   "settings.sortDefaultHint": "toda pasta sem ordenação própria segue esta; mudá-la limpa os ajustes por pasta",
   "sort.title": "Ordenar esta pasta — nome ou última modificação",

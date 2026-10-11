@@ -87,6 +87,14 @@ test('getMonthData carries an ISO week number per week row', () => {
   assert.ok(d.weeks.flat().some((c) => c.date === '2026-07-20' && c.hasNote)); // fixture note still lands
 });
 
+test('shellSettings: autoOpenExports defaults on and persists off', () => {
+  assert.equal(aios.shellSettings().autoOpenExports, true);
+  aios.setShellSetting('autoOpenExports', false);
+  assert.equal(aios.shellSettings().autoOpenExports, false);
+  aios.setShellSetting('autoOpenExports', true);
+  assert.equal(aios.shellSettings().autoOpenExports, true);
+});
+
 test('shellSettings: showWeekNumbers defaults on and persists off', () => {
   assert.equal(aios.shellSettings().showWeekNumbers, true);
   aios.setShellSetting('showWeekNumbers', false);
