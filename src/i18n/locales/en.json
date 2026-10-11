@@ -1123,5 +1123,7 @@
   "tab.readAloudOff": "Stop reading answers aloud",
   "readAloud.on": "This session's answers will be read aloud. Press any key in it to stop.",
   "readAloud.off": "Read aloud is off for this session.",
-  "readAloud.rest": "The rest is on screen."
+  "readAloud.rest": "The rest is on screen.",
+  "pulse.updTesting": "testing",
+  "rail.updateTesting": "Testing {branch}, ahead of main — no update is offered while you test. Click to re-check."
 }

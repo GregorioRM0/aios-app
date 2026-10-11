@@ -96,7 +96,7 @@ test('a placeholder hash means "cannot tell", never "you are behind"', () => {
   const src = fs.readFileSync('src/main/aios.ts', 'utf8');
   const fn = src.slice(src.indexOf('export function checkForUpdates()'));
   const iGuard = fn.indexOf("if (!frameworkCheckable(status)) return Promise.resolve('unknown')");
-  const iCompare = fn.indexOf('remote.startsWith(status.hash)');
+  const iCompare = fn.indexOf('freshness({ hash: status.hash');   // the comparison moved into core/freshness (TESTING)
   assert.ok(iGuard > 0 && iCompare > iGuard, 'validate the hash before comparing against it');
 });
 

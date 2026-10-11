@@ -2221,7 +2221,7 @@ function paintCalendar() {
 }
 
 function renderPulseUpdate(m) {
-  updateRailStatus(m.state, m.framework || null, !!m.retrying);
+  updateRailStatus(m.state, m.framework || null, !!m.retrying, m.branch || '');
   /* The framework status lives ONLY in the panel header (updateRailStatus above). The old footer
      badge duplicated it at the bottom, and the "Needs you" card duplicated it a third time —
      which is the argument that retired the card: the operator already had the update pill sitting
@@ -5847,7 +5847,7 @@ dragGuide.addEventListener('click', () => void spawnNamed('onboarding-aios'));
    word in the panel header (NOT a boxed icon button), clickable to run the update when
    one is available, else to re-check. This is the single update surface; the old panel
    footer copy is gone. */
-function updateRailStatus(state, fw, retrying = false) {
+function updateRailStatus(state, fw, retrying = false, branch = '') {
   const dot = railUpdate.querySelector('.pdot');
   const txt = railUpdate.querySelector('.pupdtext');
   /* WRITE ONLY WHAT CHANGED. This runs on every status post — and a failing check now posts every
@@ -5863,7 +5863,14 @@ function updateRailStatus(state, fw, retrying = false) {
      and overwritten in the offline branch — idle then amber, on every post — and that flip alone
      cost a style recalc per "retrying" tick. The idle smoke gate measured it. */
   let dotCls = 'pdot ' + (state === 'available' ? 'st-warn' : state === 'up-to-date' ? 'st-ok' : 'st-idle');
-  if (state === 'available') {
+  if (state === 'testing') {
+    /* TESTING — the vault is on a non-default branch, AHEAD of main. Never offer or run an update:
+       it would pull the vault back to main. Clicking only re-checks. */
+    dotCls = 'pdot st-input';
+    setText(t('pulse.updTesting'));
+    setTitle(t('rail.updateTesting', { branch }));
+    railUpdate.onclick = () => pulse.send({ type: 'recheck' });
+  } else if (state === 'available') {
     setText(t('pulse.updAvailable'));
     setTitle(t('rail.updateAvailable'));
     railUpdate.onclick = () => pulse.cmd('aios.updateFramework');

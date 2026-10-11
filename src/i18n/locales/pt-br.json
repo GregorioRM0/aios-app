@@ -1123,5 +1123,7 @@
   "tab.readAloudOff": "Parar de ler respostas em voz alta",
   "readAloud.on": "As respostas desta sessão serão lidas em voz alta. Pressione qualquer tecla nela para parar.",
   "readAloud.off": "A leitura em voz alta está desligada para esta sessão.",
-  "readAloud.rest": "O resto está na tela."
+  "readAloud.rest": "O resto está na tela.",
+  "pulse.updTesting": "em teste",
+  "rail.updateTesting": "Testando {branch}, à frente da main: nenhuma atualização é oferecida enquanto você testa. Clique para verificar novamente."
 }

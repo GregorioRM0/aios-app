@@ -1,3 +1,4 @@
+import { freshness, parseLsRemote } from '../core/freshness';
 import { inScope, busNamesFrom, type SessionScope } from '../core/sessionScope';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -1144,7 +1145,7 @@ export function readCollabSpaces(): CollabSpace[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export interface FrameworkStatus { repo: string; hash: string; synced: string; }
+export interface FrameworkStatus { repo: string; hash: string; synced: string; ref: string; }
 
 export function readFrameworkStatus(): FrameworkStatus | undefined {
   const root = frameworkRoot();
@@ -1156,7 +1157,7 @@ export function readFrameworkStatus(): FrameworkStatus | undefined {
     const m = line.match(/^([a-z]+)=(.*)$/i);
     if (m) kv[m[1]] = m[2].trim();
   }
-  return { repo: kv.repo ?? '', hash: kv.hash ?? '', synced: kv.synced ?? '' };
+  return { repo: kv.repo ?? '', hash: kv.hash ?? '', synced: kv.synced ?? '', ref: kv.ref ?? '' };
 }
 
 /* THE GIT BINARY, resolved once and remembered. A packaged app's PATH finds the Xcode shim,
@@ -1196,7 +1197,13 @@ export function updateRetryDelay(failures: number, capMs: number): number {
   return Math.min(5_000 * 2 ** (n - 1), capMs);
 }
 
-export function checkForUpdates(): Promise<'up-to-date' | 'available' | 'unknown'> {
+/* TESTING (canonical freshness-probe.sh, release/2026-10-11): the vault is on a non-default branch,
+   ahead of main — never offer or run an update for it. The branch of the last check is kept here
+   so the status post can name it. */
+let lastTestingBranch = '';
+export function testingBranch(): string { return lastTestingBranch; }
+
+export function checkForUpdates(): Promise<'up-to-date' | 'available' | 'unknown' | 'testing'> {
   const status = readFrameworkStatus();
   if (!status || !status.repo || !status.hash) return Promise.resolve('unknown');
   /* The hash must LOOK like a commit before it is compared. A freshly written tracker can carry
@@ -1209,11 +1216,14 @@ export function checkForUpdates(): Promise<'up-to-date' | 'available' | 'unknown
   return new Promise((resolve) => {
     // SSH remotes need an agent the GUI process may not have — public repo, use https
     const url = status.repo.replace(/^git@github\.com:/, 'https://github.com/');
-    execFile(gitBin(), ['ls-remote', url, 'HEAD'], { timeout: 8000 }, (err, stdout) => {
+    /* Every branch head, not just HEAD: a vault on a release branch is AHEAD of main, and
+       comparing it with HEAD alone read it as "update available" — an offer that would pull it back
+       to main. `--symref` names the default branch. The decision is shared core (core/freshness). */
+    execFile(gitBin(), ['ls-remote', '--symref', url], { timeout: 8000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       if (err || !stdout) return resolve('unknown');
-      const remote = stdout.trim().split(/\s+/)[0];
-      if (!remote) return resolve('unknown');
-      resolve(remote.startsWith(status.hash) ? 'up-to-date' : 'available');
+      const f = freshness({ hash: status.hash, ref: status.ref }, parseLsRemote(stdout));
+      lastTestingBranch = f.state === 'testing' ? f.branch : '';
+      resolve(f.state);
     });
   });
 }

@@ -414,3 +414,15 @@ test('AI-169 step 1: read aloud — per session, on the session\'s own "done", a
     for (const k of ['tab.readAloudOn', 'tab.readAloudOff', 'readAloud.on', 'readAloud.rest']) assert.ok(d[k], `${loc}: ${k}`);
   }
 });
+
+test('TESTING: a vault on a non-default branch is never offered an update (canonical freshness-probe parity)', () => {
+  const aiosSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'aios.ts'), 'utf8');
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  assert.match(aiosSrc, /execFile\(gitBin\(\), \['ls-remote', '--symref', url\]/, 'every branch head, not just HEAD');
+  assert.match(aiosSrc, /const f = freshness\(\{ hash: status\.hash, ref: status\.ref \}, parseLsRemote\(stdout\)\);/);
+  const i = app.indexOf("if (state === 'testing') {");
+  assert.ok(i > 0);
+  const branch = app.slice(i, app.indexOf("} else if (state === 'available')", i));
+  assert.match(branch, /railUpdate\.onclick = \(\) => pulse\.send\(\{ type: 'recheck' \}\);/, 'clicking only re-checks');
+  assert.doesNotMatch(branch, /updateFramework/, 'never offers or runs an update');
+});

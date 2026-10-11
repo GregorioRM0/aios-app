@@ -389,7 +389,7 @@ export class PanelHost {
          armed, and a header that says "retrying…" must be true — the rule for which unknowns are
          retried lives here, and a second copy in the renderer is how the two would drift. */
       const retrying = state === 'unknown' && aios.frameworkCheckable(framework);
-      this.post({ type: 'updateStatus', state, framework, retrying });
+      this.post({ type: 'updateStatus', state, framework, retrying, branch: state === 'testing' ? aios.testingBranch() : '' });
       /* A FAILED CHECK RETRIES ITSELF. Operator-reported 2026-09-22: Wi-Fi off showed "offline",
          Wi-Fi back on showed "can't check" — and it stayed that way until the App was restarted.
          The reconnect DID trigger a check, at the one moment it is least likely to succeed: the
