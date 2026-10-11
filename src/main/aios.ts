@@ -1,3 +1,4 @@
+import { inScope, busNamesFrom, type SessionScope } from '../core/sessionScope';
 import * as fs from 'fs';
 import * as os from 'os';
 import {
@@ -437,7 +438,46 @@ export function isOperatorSession(a: { kind: string; entrypoint: string }): bool
   return a.kind === 'interactive' && !/^sdk-/i.test(a.entrypoint);
 }
 export function listOperatorSessions(): RunningAgent[] {
-  return listRunningAgents().filter(isOperatorSession);
+  const scope = sessionScope();
+  return listRunningAgents().filter(isOperatorSession).filter((a) => inScope({ ...a, cwd: realOr(a.cwd || '') }, scope));
+}
+
+/* AI-203 — the sessions open in this App's panes, reported by the renderer every pulse. */
+let paneSessionIds: ReadonlySet<string> = new Set();
+export function setPaneSessionIds(ids: unknown): void {
+  paneSessionIds = new Set(Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string' && !!x) : []);
+}
+/** Every name in USER.md's Identity table (a primary session), lowercased. */
+export function primaryNames(): Set<string> {
+  const out = new Set<string>();
+  const root = frameworkRoot();
+  if (!root) return out;
+  try {
+    let inSection = false;
+    for (const line of fs.readFileSync(path.join(root, 'USER.md'), 'utf8').split(/\r?\n/)) {
+      if (/^##\s+Identity/.test(line)) { inSection = true; continue; }
+      if (inSection && /^##\s/.test(line)) break;
+      if (inSection && line.startsWith('|')) {
+        const raw = (line.split('|')[1] ?? '').replace(/`/g, '').trim();
+        if (raw && raw !== 'Name' && !/^[ :-]+$/.test(raw)) out.add(raw.toLowerCase());
+      }
+    }
+  } catch { /* no USER.md */ }
+  return out;
+}
+const realOr = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };
+let scopeCache: { at: number; key: string; scope: SessionScope } | undefined;
+export function sessionScope(): SessionScope {
+  const fw = frameworkRoot();
+  const logPath = process.env.AIOS_BUS_LOG || path.join(os.homedir(), '.aios', 'bus-sent.jsonl');
+  const key = `${fw ?? ''}|${logPath}`;
+  if (scopeCache && scopeCache.key === key && Date.now() - scopeCache.at < 1500) return { ...scopeCache.scope, paneSessionIds };
+  const roots = [...(fw ? [fw] : []), ...workspaceFolders()].map(realOr);
+  let busNames = new Set<string>();
+  try { busNames = busNamesFrom(fs.readFileSync(logPath, 'utf8'), Math.floor(Date.now() / 1000)); } catch { /* none yet */ }
+  const scope: SessionScope = { paneSessionIds, primaries: primaryNames(), busNames, roots, caseInsensitive: process.platform !== 'linux' };
+  scopeCache = { at: Date.now(), key, scope };
+  return scope;
 }
 
 function isAlive(pid: number): boolean {

@@ -703,6 +703,7 @@ ipcMain.handle('shell:zoom', (_e, factor: number) => {
   return f;
 });
 /* AI-196 — a session's own OSC 7501 status, relayed by the renderer, merged in panelHost. */
+ipcMain.on('panes:sessions', (_e, ids: unknown) => aios.setPaneSessionIds(ids));   // AI-203
 ipcMain.on('pty:programStatus', (_e, m: { sessionId?: string; data?: string; at?: number }) => {
   host?.setProgramStatus(String(m?.sessionId ?? ''), String(m?.data ?? ''), Number(m?.at) || Date.now());
 });

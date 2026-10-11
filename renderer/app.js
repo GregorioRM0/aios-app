@@ -757,7 +757,11 @@ function fmtAgo(ts) {
 
 function renderPulse(msg) {
   if (msg.type === 'state') renderPulseState(msg);
-  else if (msg.type === 'running') { renderPulseRunning(msg); paintTabStates(msg); for (const [, p] of panes) flushProgramStatus(p); }   // #24.2b tab state, on the same 2s pulse
+  else if (msg.type === 'running') {
+    renderPulseRunning(msg); paintTabStates(msg); for (const [, p] of panes) flushProgramStatus(p);
+    /* AI-203: the sessions open in this App's panes are the operator's, wherever they run. */
+    window.glassShell.paneSessions([...panes.values()].map((p) => p.sessionId).filter(Boolean));
+  }   // #24.2b tab state, on the same 2s pulse
   else if (msg.type === 'month') renderPulseMonth(msg.data);
   else if (msg.type === 'updateStatus') renderPulseUpdate(msg);
   else if (msg.type === 'workspacePruned') toast(t('explorer.pruned', { paths: (msg.folders || []).join(', ') }));
