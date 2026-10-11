@@ -1,6 +1,8 @@
+import { latestSwitches, switchLine, type ModelSwitch } from '../core/modelSwitch';
 import { parseProgramStatus, overlayProgramStatus, type ProgramStatus } from '../core/programStatus';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { BrowserWindow, WebContents, nativeImage } from 'electron';
 import * as aios from './aios';
 import { t } from '../i18n';
@@ -292,6 +294,19 @@ export class PanelHost {
     this.postRunning();   // the point of the signal is that it is immediate — don't wait for the 2s poll
   }
 
+  /** AI-197 — the model-switch log, re-read only when it changed. */
+  private switchCache: { mtimeMs: number; size: number; map: Map<string, ModelSwitch> } = { mtimeMs: -1, size: -1, map: new Map() };
+  private modelSwitches(): Map<string, ModelSwitch> {
+    const p = process.env.AIOS_MODEL_SWITCH_LOG || path.join(os.homedir(), '.aios', 'model-switch.jsonl');
+    try {
+      const st = fs.statSync(p);
+      if (st.mtimeMs !== this.switchCache.mtimeMs || st.size !== this.switchCache.size) {
+        this.switchCache = { mtimeMs: st.mtimeMs, size: st.size, map: latestSwitches(fs.readFileSync(p, 'utf8')) };
+      }
+    } catch { this.switchCache = { mtimeMs: -1, size: -1, map: new Map() }; }
+    return this.switchCache.map;
+  }
+
   postRunning(): void {
     const registry = aios.listOperatorSessions();   // AI-165: never a daemon spare
     for (const id of this.programStatus.keys()) if (!registry.some((a) => a.sessionId === id)) this.programStatus.delete(id);
@@ -306,9 +321,10 @@ export class PanelHost {
       return fwReal && real === fwReal ? '' : path.basename(real);
     };
     const mem = aios.shellSettings().showMemory ? aios.sessionMemoryMB(running.map((a) => a.pid)) : {};
+    const switches = this.modelSwitches();
     this.post({
       type: 'running',
-      running: running.map((a) => ({ name: a.name, pid: a.pid, id: a.sessionId, key: sessionKey(a), status: a.status, proj: projOf(a.cwd), startedAt: a.startedAt, updatedAt: a.updatedAt, mem: mem[a.pid], waitingFor: a.waitingFor, statusUpdatedAt: a.statusUpdatedAt })),
+      running: running.map((a) => ({ name: a.name, pid: a.pid, id: a.sessionId, key: sessionKey(a), status: a.status, proj: projOf(a.cwd), startedAt: a.startedAt, updatedAt: a.updatedAt, mem: mem[a.pid], waitingFor: a.waitingFor, statusUpdatedAt: a.statusUpdatedAt, modelSwitch: switchLine(switches.get(a.sessionId), a.startedAt) })),
       quota: rl
         ? { has: true, fiveHour: rl.fiveHourPct, sevenDay: rl.sevenDayPct, fr: rl.fiveHourResetsAt, sr: rl.sevenDayResetsAt, showSwap: false, to: '' }
         : { has: false, fiveHour: 0, sevenDay: 0, showSwap: false, to: '' },

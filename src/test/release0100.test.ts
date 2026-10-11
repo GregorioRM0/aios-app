@@ -101,7 +101,7 @@ test('⌘+/− changes the terminal text when a terminal is focused, the editor 
 test('#23: a waiting row shows what it is waiting for; at rest the hover buttons take no space', () => {
   assert.match(app, /if \(s\.cls === 'input' && a\.waitingFor\) \{/);
   const host = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'panelHost.ts'), 'utf8');
-  assert.match(host, /mem: mem\[a\.pid\], waitingFor: a\.waitingFor, statusUpdatedAt: a\.statusUpdatedAt \}/, 'main sends it to the renderer');
+  assert.match(host, /mem: mem\[a\.pid\], waitingFor: a\.waitingFor, statusUpdatedAt: a\.statusUpdatedAt[,}]/, 'main sends it to the renderer');
   const css = fs.readFileSync('renderer/theme.css', 'utf8');
   assert.match(css, /\.prow2:not\(:hover\):not\(:focus-within\) \.runact:not\(\.has\) \{ display: none; \}/);
   assert.match(css, /body\.light \.zsplit \.pane\.termcard\.panefocus \{ border-color: var\(--accent\);/, '#24 (2c) light-theme focus border');

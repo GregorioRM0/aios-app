@@ -2025,6 +2025,8 @@ function sessionRow(a) {
       r.appendChild(el('span', 'pst', '· ' + label + (a.proj ? ' · ' + a.proj : '')));
     }
   }
+  /* AI-197 — a model switch this session did not choose (canonical's model-switch log). */
+  if (a.modelSwitch) { const ms = el('span', 'pswitch', '· ' + a.modelSwitch); ms.title = t('running.modelSwitched', { what: a.modelSwitch }); r.appendChild(ms); }
   const mem = fmtMem(a.mem);
   if (mem) r.appendChild(el('span', 'rmem', mem));
   // open: reveal the in-window pane, OR resume the session INTO the app (so external sessions actually load)

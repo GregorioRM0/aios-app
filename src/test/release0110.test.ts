@@ -294,3 +294,21 @@ test('AI-195: an advisor weaker than the main model is flagged — the rule Clau
     assert.match(d['settings.advisorCannot'], /\{advisor\}/);
   }
 });
+
+test('AI-197: the latest model switch of THIS run shows on the session row, in a person\'s words', async () => {
+  const { latestSwitches, switchLine, modelName } = await import('../core/modelSwitch');
+  const log = [
+    JSON.stringify({ at: '2026-10-11T20:00:00Z', session_id: 's1', name: 'w', from: 'claude-opus-5-5', to: 'claude-sonnet-5-5', reason: '' }),
+    JSON.stringify({ at: '2026-10-11T21:40:00Z', session_id: 's1', name: 'w', from: 'claude-opus-5-5', to: 'claude-opus-4-8', reason: 'flagged content' }),
+    '{torn',
+    JSON.stringify({ at: '2026-10-11T21:00:00Z', session_id: 's2', name: '', from: '', to: 'claude-haiku-4-5-20251001', reason: 'rate limited' }),
+  ].join('\n');
+  const m = latestSwitches(log);
+  assert.equal(switchLine(m.get('s1'), Date.parse('2026-10-11T19:00:00Z')), 'on Opus 4.8 — flagged content', 'the brief\'s own example');
+  assert.equal(switchLine(m.get('s2'), Date.parse('2026-10-11T22:00:00Z')), '', 'a switch from before this run started is old news');
+  assert.equal(switchLine(undefined, 0), '');
+  assert.equal(modelName('claude-haiku-4-5-20251001'), 'Haiku 4.5');
+  assert.equal(modelName('claude-opus-5-5[1m]'), 'Opus 5.5 (1M)');
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  assert.match(app, /if \(a\.modelSwitch\) \{ const ms = el\('span', 'pswitch'/);
+});

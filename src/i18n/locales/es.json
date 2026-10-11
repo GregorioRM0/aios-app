@@ -1112,5 +1112,6 @@
   "settings.advisor": "Asesor",
   "settings.advisorHint": "Un segundo modelo, más capaz, que Claude puede consultar en pasos difíciles. Apagado por defecto; cuesta más cuando se usa.",
   "settings.advisorOff": "Apagado",
-  "settings.advisorCannot": "{advisor} no puede asesorar al modelo de arriba: un asesor debe ser al menos tan capaz como el modelo principal, así que Claude no lo usaría, sin avisarte."
+  "settings.advisorCannot": "{advisor} no puede asesorar al modelo de arriba: un asesor debe ser al menos tan capaz como el modelo principal, así que Claude no lo usaría, sin avisarte.",
+  "running.modelSwitched": "El modelo de esta sesión cambió mientras corría: {what}. Nadie lo eligió, así que revisa su trabajo."
 }
