@@ -75,8 +75,9 @@ test('#50: a token GitHub accepts leaves a marker (a timestamp, never the token)
 
 test('#50: the gh probe passes on the marker, so a Mac whose token lives in Keychain can finish setup', { skip: process.platform === 'win32' }, withHome((home) => {
   const cp = require('child_process') as typeof import('child_process');
-  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-nogh-'));   // no gh at all
-  const probe = () => cp.execFileSync('/bin/sh', ['-c', aios.GH_PROBE_POSIX], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home } }).trim();
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-nogh-'));   // no gh at all — and no system dir, where a CI runner has one
+  fs.symlinkSync(String(cp.execFileSync('/bin/sh', ['-c', 'command -v grep'], { encoding: 'utf8' })).trim(), path.join(bin, 'grep'));
+  const probe = () => cp.execFileSync('/bin/sh', ['-c', aios.GH_PROBE_POSIX], { encoding: 'utf8', env: { PATH: bin, HOME: home } }).trim();
   assert.equal(probe(), 'NOGH', 'control: no gh, no token');
   fs.mkdirSync(path.join(home, '.aios'), { recursive: true });
   fs.writeFileSync(path.join(home, '.aios', 'github-pat-verified'), '2026-10-11T00:00:00Z\n');

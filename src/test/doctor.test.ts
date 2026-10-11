@@ -447,8 +447,11 @@ test('the gh probe counts a gh that does not RUN as absent, not as signed out', 
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-ghprobe-bin-'));
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-ghprobe-home-'));   // no .git-credentials
     if (ghBody !== null) fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\n${ghBody}\n`, { mode: 0o755 });
+    /* PATH is the fake bin ONLY, with the one tool the probe needs (grep) linked in. A system
+       directory on PATH let a CI runner's real gh (/usr/bin/gh on ubuntu) answer for "no gh". */
+    fs.symlinkSync(String(cp.execFileSync('/bin/sh', ['-c', 'command -v grep'], { encoding: 'utf8' })).trim(), path.join(bin, 'grep'));
     return cp.execFileSync('/bin/sh', ['-c', aios.GH_PROBE_POSIX], {
-      encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home },
+      encoding: 'utf8', env: { PATH: bin, HOME: home },
     }).trim();
   };
   assert.equal(run(null), 'NOGH', 'no gh at all');

