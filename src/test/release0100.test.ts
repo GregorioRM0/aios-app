@@ -63,7 +63,9 @@ test('AI-165: the panel, notifications and the palette use the operator list; th
   const host = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'panelHost.ts'), 'utf8');
   const main = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'main.ts'), 'utf8');
   const bus = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'commandBus.ts'), 'utf8');
-  assert.match(host, /const running = aios\.listOperatorSessions\(\);[^\n]*\n\s*this\.attention\.tick/, 'panel rows + "needs you" notifications');
+  /* 0.11.0 (AI-196): the operator list is now overlaid with each session's own OSC 7501 status
+     before it is read; what this guards is unchanged — the source is the OPERATOR list. */
+  assert.match(host, /const registry = aios\.listOperatorSessions\(\);[\s\S]{0,300}const running = overlayProgramStatus\(registry, this\.programStatus\);\s*this\.attention\.tick/, 'panel rows + "needs you" notifications');
   assert.match(main, /running: aios\.listOperatorSessions\(\),/, 'the palette session list');
   assert.match(bus, /aios\.listRunningAgents\(\)\.find\(\(a\) => a\.name === name\)/, 'send/kill still find background agents by name');
 });
