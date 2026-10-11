@@ -91,3 +91,41 @@ test('#50: the token lane tells a refused token apart from a stored one, in ever
     assert.ok(d['onboarding.patRejected'], `${loc} has patRejected`);
   }
 });
+
+import { resolvedTheme, WINDOW_BG } from '../core/theme';
+
+test('AI-190: with no pick the theme follows the OS; a pick is kept; garbage means "follow the OS"', () => {
+  assert.equal(resolvedTheme('system', false), 'light', 'light Mac, never touched → light first frame');
+  assert.equal(resolvedTheme('system', true), 'dark');
+  assert.equal(resolvedTheme('dark', false), 'dark', 'an explicit pick survives a light OS');
+  assert.equal(resolvedTheme('light', true), 'light');
+  assert.equal(resolvedTheme('', false), 'light');
+});
+
+test('AI-190: an absent or unknown stored theme normalises to "system"; light/dark are kept (no migration)', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'aios.ts'), 'utf8');
+  assert.match(src, /theme: raw\.theme === 'light' \|\| raw\.theme === 'dark' \? raw\.theme : 'system',/);
+});
+
+test('AI-190: the window background matches the theme tokens, so the first frame never flashes dark', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'renderer', 'theme.css'), 'utf8');
+  const root = /:root\s*\{[^}]*?--bg:\s*(#[0-9a-f]{6})/i.exec(css)!;
+  const light = /body\.light\s*\{[^}]*?--bg:\s*(#[0-9a-f]{6})/i.exec(css)!;
+  assert.equal(WINDOW_BG.dark, root[1].toLowerCase());
+  assert.equal(WINDOW_BG.light, light[1].toLowerCase());
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.ts'), 'utf8');
+  assert.match(main, /backgroundColor: WINDOW_BG\[firstTheme\]/);
+  assert.match(main, /loadFile\([^)]*index\.html'\), \{ query: \{ theme: firstTheme \} \}\)/);
+});
+
+test('AI-190: the renderer stamps the light class from the URL before anything paints, and follows the OS live only while unpicked', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  assert.match(app, /new URLSearchParams\(location\.search\)\.get\('theme'\) === 'light'\) document\.body\.classList\.add\('light'\)/);
+  assert.match(app, /OS_DARK\.addEventListener\('change', \(\) => \{\s*if \(THEME_PREF !== 'system'\) return;/);
+  assert.match(app, /THEME_PREF = THEME;\s*\/\/ the sun\/moon is a pick/);
+  for (const loc of ['en', 'es', 'pt-br']) {
+    const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'));
+    assert.ok(d['settings.themeSystem'], `${loc}: System option`);
+    assert.doesNotMatch(d['settings.themeHint'], /stay dark|oscuras|escuros/i, `${loc}: the hint no longer claims terminals stay dark`);
+  }
+});

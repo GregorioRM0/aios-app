@@ -1252,7 +1252,10 @@ export function shellSettings(): ShellSettings {
     // what a command-bus spawn/send does to the screen: 'stay' (default) keeps the operator where
     // they are and marks the target tab; 'follow' is the old behaviour (switch to it)
     busFocus: raw.busFocus === 'follow' ? 'follow' : 'stay',
-    theme: raw.theme === 'light' ? 'light' : 'dark',
+    /* AI-190: absent means FOLLOW THE SYSTEM, the way `locale: 'auto'` does. An exec on a
+       light-everywhere Mac was greeted by a dark first frame and only relaxed on finding the
+       sun button. A stored 'light'/'dark' is the operator's own pick and is kept as is. */
+    theme: raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : 'system',
     termFontSize: Number(raw.termFontSize) || 12.5,
     // interface scale, in the same "font size" language as the terminal's — 13 is 100%.
     // Applied as a real zoom factor (crisp text) rather than restyling every rule.

@@ -228,6 +228,19 @@ function termTheme(mode) {
     brightBlue: '#92c7ff', brightMagenta: '#d9b1f0', brightCyan: '#84e6e0', brightWhite: '#ffffff',
   };
 }
+/* AI-190: follow the OS until the operator picks. THEME_PREF is what is stored ('system' when
+   nothing is); resolveTheme() turns it into the light/dark actually painted. main passes the
+   resolved theme on the URL so the very first frame is already right — no dark flash. */
+const OS_DARK = window.matchMedia('(prefers-color-scheme: dark)');
+let THEME_PREF = 'system';
+function resolveTheme(pref) { return pref === 'light' || pref === 'dark' ? pref : (OS_DARK.matches ? 'dark' : 'light'); }
+if (new URLSearchParams(location.search).get('theme') === 'light') document.body.classList.add('light');
+OS_DARK.addEventListener('change', () => {
+  if (THEME_PREF !== 'system') return;            // the operator picked; the OS no longer decides
+  THEME = resolveTheme('system');
+  applyTheme(THEME);
+  paintThemeBtn();
+});
 function applyTheme(mode) {
   document.body.classList.toggle('light', mode === 'light');
   const t = termTheme(mode);
@@ -244,7 +257,8 @@ void window.glassShell.shellConfig().then((c) => {
   applyAppScale(c.appFontSize);
   applyHiddenCards(c.hiddenCards);
   TERMFONT = Number(c.termFontSize) || 12.5;
-  applyTheme(c.theme || 'dark');
+  THEME_PREF = c.theme || 'system';
+  applyTheme(resolveTheme(THEME_PREF));
   EXPLORER.icons = c.fileIcons !== false;
   EXPLORER.autoReveal = c.autoReveal !== false;
   BUS_FOCUS = c.busFocus === 'follow' ? 'follow' : 'stay';
@@ -5727,6 +5741,7 @@ let THEME = 'dark';
 function paintThemeBtn() { railTheme.innerHTML = icon(THEME === 'light' ? 'moon' : 'sun', 15); railTheme.title = THEME === 'light' ? t('rail.themeDark') : t('rail.themeLight'); }
 railTheme.addEventListener('click', async () => {
   THEME = THEME === 'light' ? 'dark' : 'light';
+  THEME_PREF = THEME;                              // the sun/moon is a pick: remembered from now on
   await window.glassShell.setSetting('theme', THEME);
   applyTheme(THEME);
   paintThemeBtn();
@@ -5737,7 +5752,8 @@ railTheme.addEventListener('click', async () => {
 async function initLocale() {
   try {
     const c = await window.glassShell.shellConfig();
-    THEME = c.theme || 'dark';
+    THEME_PREF = c.theme || 'system';
+    THEME = resolveTheme(THEME_PREF);
     // c.locale is the raw preference ('auto' | locale); c.localeResolved is what to render in.
     if (window.i18n) window.i18n.setLocale(c.localeResolved || c.locale || 'en');
   } catch { /* defaults: en + dark */ }
@@ -6735,9 +6751,16 @@ function openSettingsTab() {
     };
     const themeSel = document.createElement('select');
     themeSel.className = 'tinput';
-    for (const [l, v] of [[t('settings.themeDark'), 'dark'], [t('settings.themeLight'), 'light']]) { const o = document.createElement('option'); o.textContent = l; o.value = v; themeSel.appendChild(o); }
-    themeSel.value = cfg.theme || 'dark';
-    themeSel.addEventListener('change', async () => { await window.glassShell.setSetting('theme', themeSel.value); applyTheme(themeSel.value); toast(t('settings.saved')); });
+    for (const [l, v] of [[t('settings.themeSystem'), 'system'], [t('settings.themeDark'), 'dark'], [t('settings.themeLight'), 'light']]) { const o = document.createElement('option'); o.textContent = l; o.value = v; themeSel.appendChild(o); }
+    themeSel.value = cfg.theme || 'system';
+    themeSel.addEventListener('change', async () => {
+      await window.glassShell.setSetting('theme', themeSel.value);
+      THEME_PREF = themeSel.value;
+      THEME = resolveTheme(THEME_PREF);
+      applyTheme(THEME);
+      paintThemeBtn();
+      toast(t('settings.saved'));
+    });
     row(wrap, t('settings.theme'), themeSel, t('settings.themeHint'));
 
     // killBehavior (Glass parity): what the session trash button does.

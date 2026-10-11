@@ -1,7 +1,8 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, session } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, session, nativeTheme } from 'electron';
 import { markQuitting, isQuitting, closeShouldHide } from './quitState';
 import { installWebPermissionPolicy } from './webPermissions';
 import { withDefaultLocale } from './termLocale';
+import { resolvedTheme, WINDOW_BG } from '../core/theme';
 import { shellArgs } from './shellArgs';
 import * as path from 'path';
 import * as os from 'os';
@@ -43,13 +44,16 @@ const ptys = new Map<number, pty.IPty>();
 let nextId = 1;
 
 function createWindow(): BrowserWindow {
+  /* Resolved BEFORE the window exists, so neither the pre-paint background nor the first frame
+     is dark on a light machine (the body class used to land only after an IPC round-trip). */
+  const firstTheme = resolvedTheme(aios.shellSettings().theme, nativeTheme.shouldUseDarkColors);
   const win = new BrowserWindow({
     width: 1360,
     height: 860,
     minWidth: 880,
     minHeight: 560,
     show: !SMOKE,
-    backgroundColor: '#0b0b0d',
+    backgroundColor: WINDOW_BG[firstTheme],
     title: 'AIOS',
     // Frameless-with-inset-controls is a macOS affordance: 'hiddenInset' insets the traffic
     // lights into the content, and trafficLightPosition moves them. Neither concept exists
@@ -66,7 +70,7 @@ function createWindow(): BrowserWindow {
       webviewTag: true, // in-app browser panes (the Manual + operator-opened URLs) — #14
     },
   });
-  void win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
+  void win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'), { query: { theme: firstTheme } });
   return win;
 }
 
