@@ -2967,6 +2967,19 @@ function showUpdatePill(version, state = 'ready', pct = null) {
   }
   pill.dataset.version = version || '';
   pill.dataset.state = state;
+  /* AI-200 — "What's in it?" sits beside the pill, so understanding a release never requires
+     installing it first. */
+  let ex = document.getElementById('updExplain');
+  if (!ex) {
+    ex = document.createElement('button');
+    ex.id = 'updExplain';
+    ex.className = 'updexplain';
+    acts.insertBefore(ex, pill);
+    ex.addEventListener('click', () => explainRelease(pill.dataset.version));
+  }
+  ex.textContent = t('update.explain');
+  ex.title = t('update.explainTip', { version: version || '' });
+  ex.hidden = false;
   const downloading = state === 'downloading';
   pill.classList.toggle('downloading', downloading);
   pill.disabled = downloading;
@@ -2988,6 +3001,32 @@ function showUpdatePill(version, state = 'ready', pct = null) {
 function hideUpdatePill() {
   const pill = document.getElementById('updPill');
   if (pill) pill.hidden = true;
+  const ex = document.getElementById('updExplain');
+  if (ex) ex.hidden = true;
+}
+
+/* AI-200 — two doors into canonical's agents, from the two moments an operator needs them.
+   "Report this" (a terminal tab's menu) hands `aios-feedback` the tab's recent lines in a LOCAL
+   file and lets it interview the operator; the agent scrubs private details and shows the issue
+   before creating it. "What's in it?" (beside the update pill) asks `explainer` for a one-page
+   explanation of the release, written into the vault's export folder — which the App already
+   opens in its viewer when it appears. Both open as named sessions; nothing is sent anywhere. */
+async function reportThis(id) {
+  const p = panes.get(id);
+  if (!p || !p.term) return;
+  const b = p.term.buffer.active;
+  const lines = [];
+  for (let i = Math.max(0, b.length - 150); i < b.length; i++) lines.push(b.getLine(i)?.translateToString(true) ?? '');
+  const file = await window.glassShell.reportSnapshot(p.name || 'terminal', lines.join('\n')).catch(() => '');
+  spawnNamed('aios-feedback', `I want to report something about the AIOS App. It happened in the tab "${p.name}". `
+    + (file ? `Its last ${lines.length} lines are in ${file} (on this machine only). ` : '')
+    + 'Ask me what I noticed, then follow your process: scrub anything private and show me the issue before you create it.');
+}
+function explainRelease(version) {
+  const v = String(version || '').replace(/[^0-9a-z.\-]/gi, '');
+  if (!v) return;
+  spawnNamed('explainer', `Explain AIOS App ${v} to me as a non-technical operator: what changed and what it means for my day. `
+    + `Source: https://github.com/The-AIOS/aios-app/releases/tag/v${v} . Write it as one HTML page at "03 - export/explainers/aios-app-${v}.html" in my vault, then tell me it is there.`);
 }
 
 if (window.glassShell.onUpdater) {
@@ -3143,6 +3182,7 @@ function makeTab(id, name, iconName) {
     const partner = id === active[z] ? nextTabAfter(z, id) : id;
     if (partner !== null) items.push({ label: t('split.openRight'), value: 'right' });
     if (zoneSplit(z)) items.push({ label: t('split.unsplit'), value: 'unsplit' });
+    if (pane.kind === 'term') items.push({ label: t('tab.report'), value: 'report' });   // AI-200
     items.push({ label: '-', value: '-' }, { label: t('tab.close'), value: 'close' });
     /* A NATIVE menu, not the app's listModal. That picker carries a filter box because it was
        built for long searchable lists (sessions, skills, commands), and on four rows the operator
@@ -3153,6 +3193,7 @@ function makeTab(id, name, iconName) {
       if (pick === 'right') { if (partner !== null) splitWithPane(z, partner); }
       else if (pick === 'unsplit') unsplitZone(z);
       else if (pick === 'close') void requestClosePane(id);
+      else if (pick === 'report') void reportThis(id);
       else if (pick === 'rename') {
         const next = (await inputModal(t('tab.rename'), pane.name || t('pulse.terminal'), []) || '').trim();
         if (!next || next === pane.name) return;

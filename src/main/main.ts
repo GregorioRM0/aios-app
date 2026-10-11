@@ -706,6 +706,16 @@ ipcMain.handle('shell:zoom', (_e, factor: number) => {
 ipcMain.on('pty:programStatus', (_e, m: { sessionId?: string; data?: string; at?: number }) => {
   host?.setProgramStatus(String(m?.sessionId ?? ''), String(m?.data ?? ''), Number(m?.at) || Date.now());
 });
+/* AI-200 — "Report this": the tab's recent lines go to a LOCAL temp file for aios-feedback to read.
+   Never sent anywhere by the App; the agent scrubs and asks before anything leaves the machine. */
+ipcMain.handle('feedback:snapshot', (_e, name: string, text: string) => {
+  try {
+    const slug = String(name || 'terminal').replace(/[^a-z0-9-]+/gi, '-').slice(0, 40) || 'terminal';
+    const f = path.join(os.tmpdir(), `aios-report-${slug}-${Date.now()}.txt`);
+    fs.writeFileSync(f, String(text ?? '').slice(0, 200_000), { mode: 0o600 });
+    return f;
+  } catch { return ''; }
+});
 ipcMain.handle('shell:copyText', (_e, t: string) => { clipboard.writeText(String(t)); return true; });
 /* AI-192 — ⇧⌘C / right-click "Copy as plain text": the selection without Claude's TUI scaffolding
    (bullets, quote bars, indents, the footer) and with terminal wraps rejoined into paragraphs. */

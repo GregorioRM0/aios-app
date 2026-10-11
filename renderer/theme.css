@@ -1252,7 +1252,9 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 .xterm-viewport::-webkit-scrollbar-corner { background: transparent; }
 
 /* ── app update pill (title bar, rightmost) ──
-   Selector is `#dragacts .updpill` (1 id + 1 class), NOT a bare `.updpill`: the shared rule
+   Selector is `#dragacts .updexplain { background: transparent; border: 1px solid var(--line-strong); color: var(--ink); border-radius: 999px; font-size: 11px; padding: 2px 9px; margin-right: 6px; cursor: pointer; -webkit-app-region: no-drag; }   /* AI-200 */
+.updexplain:hover { border-color: var(--accent); }
+.updpill` (1 id + 1 class), NOT a bare `.updpill`: the shared rule
    `#dragacts button` forces every title-bar control into a 26×26 box with zero padding, and
    a one-class selector loses to it — so the pill rendered as cramped text sitting on top of
    the buttons rather than as a pill. Each override below undoes one of those forced values.

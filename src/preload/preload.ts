@@ -168,6 +168,7 @@ contextBridge.exposeInMainWorld('glassShell', {
   setZoom: (factor: number): Promise<number> => ipcRenderer.invoke('shell:zoom', factor),
   readText: (): Promise<string> => ipcRenderer.invoke('shell:readText'),
   copyText: (t: string): Promise<boolean> => ipcRenderer.invoke('shell:copyText', t),
+  reportSnapshot: (name: string, text: string): Promise<string> => ipcRenderer.invoke('feedback:snapshot', name, text),
   copyPlainText: (t: string, cols: number): Promise<boolean> => ipcRenderer.invoke('shell:copyPlainText', t, cols),
   htmlToPng: (p: string): Promise<{ out: string; w: number; h: number } | null> => ipcRenderer.invoke('html:toPng', p),
   onFsEvent: (cb: (m: { dirs: string[] }) => void) => ipcRenderer.on('shell:fsEvent', (_e, m) => cb(m)),

@@ -1113,5 +1113,8 @@
   "settings.advisorHint": "Um segundo modelo, mais capaz, que o Claude pode consultar em etapas difíceis. Desligado por padrão; custa mais quando usado.",
   "settings.advisorOff": "Desligado",
   "settings.advisorCannot": "{advisor} não pode assessorar o modelo acima: um assessor precisa ser pelo menos tão capaz quanto o modelo principal, então o Claude não o usaria, sem avisar.",
-  "running.modelSwitched": "O modelo desta sessão mudou enquanto rodava: {what}. Ninguém o escolheu, então revise o trabalho dela."
+  "running.modelSwitched": "O modelo desta sessão mudou enquanto rodava: {what}. Ninguém o escolheu, então revise o trabalho dela.",
+  "tab.report": "Reportar isto…",
+  "update.explain": "O que tem?",
+  "update.explainTip": "Um agente explica o que mudou na {version}, em uma página, antes de você instalar."
 }

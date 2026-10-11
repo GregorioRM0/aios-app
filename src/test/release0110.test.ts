@@ -329,3 +329,18 @@ test('AI-201: the demo builds a whole synthetic home — no real vault, registry
   assert.match(src, /'--use-mock-keychain'/, 'a fake HOME without a mock keychain pops "Keychain Not Found" on the presenter\'s screen');
   fs.rmSync(out, { recursive: true, force: true });
 });
+
+test('AI-200: Report this and What\'s in it? open the canonical agents with a brief — nothing leaves the machine', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.ts'), 'utf8');
+  assert.match(app, /if \(pane\.kind === 'term'\) items\.push\(\{ label: t\('tab\.report'\), value: 'report' \}\);/);
+  assert.match(app, /spawnNamed\('aios-feedback', /);
+  assert.match(app, /show me the issue before you create it/, 'the agent asks before anything is filed');
+  assert.match(app, /spawnNamed\('explainer', /);
+  assert.match(app, /03 - export\/explainers\/aios-app-\$\{v\}\.html/, 'lands where the viewer auto-opens exports');
+  assert.match(main, /fs\.writeFileSync\(f, String\(text \?\? ''\)\.slice\(0, 200_000\), \{ mode: 0o600 \}\);/, 'the snapshot is a private local file');
+  for (const loc of ['en', 'es', 'pt-br']) {
+    const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'));
+    for (const k of ['tab.report', 'update.explain', 'update.explainTip']) assert.ok(d[k], `${loc}: ${k}`);
+  }
+});
