@@ -1024,6 +1024,7 @@
   "onboarding.tag.github": "almacenamiento gratis y privado para el trabajo con IA",
   "onboarding.tag.firstrun": "una conversación guiada con IA",
   "onboarding.note.login": "AIOS se está construyendo para funcionar también con otras IA — esa parte sigue en desarrollo.",
+  "onboarding.note.github": "AIOS ya funciona sin este paso. Cuando conectes, dile a cualquier sesión de AIOS «conecta mi vault a GitHub» y crea tu copia de seguridad privada.",
   "caffeinate.title": "Mantener despierta",
   "caffeinate.unsupported": "rechazado por el sistema",
   "settings.caffeinate": "Mantener la computadora despierta",

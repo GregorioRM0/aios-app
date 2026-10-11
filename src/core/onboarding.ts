@@ -20,7 +20,7 @@ export interface OnboardingStepSpec {
   optional?: string[];
 }
 
-/** The sequence. FOUR steps, and the fourth is a conversation.
+/** The sequence. FOUR steps, and the third is a conversation.
  *
  *  It was seven. The operator who walked it named the problem exactly: every extra box is a
  *  decision handed to someone who has no basis for making it. "Starter pack" was the proof —
@@ -28,7 +28,7 @@ export interface OnboardingStepSpec {
  *  commissioned the feature cannot explain it at the moment of use, a newcomer certainly cannot.
  *
  *  So the app owns only what a script does better than a conversation — install, sign in,
- *  authorize — and everything downstream of "Claude runs and GitHub is authorized" belongs to
+ *  authorize — and everything downstream of "Claude runs" belongs to
  *  the setup session: the vault (fresh or cloned — a question worth ASKING, not two buttons),
  *  the wiring, the frequent tasks, the interview. That work needs judgment, and a session can
  *  ask a follow-up where a button can only guess.
@@ -41,12 +41,17 @@ export interface OnboardingStepSpec {
 export const ONBOARDING_STEPS: OnboardingStepSpec[] = [
   { id: 'prereqs', required: ['git', 'claude'], optional: ['node', 'psPolicy'] },
   { id: 'login', required: ['account'] },
-  { id: 'github', required: ['gh'] },
   {
     id: 'firstrun',
     required: ['personalized'],
     optional: ['framework', 'vault', 'skills', 'mcpObsidian', 'spawn', 'plugin', 'starter'],
   },
+  /* GitHub LAST, after the AIOS exists. It sat third, in front of the setup session, so a Mac with
+     no Homebrew could not reach "Set up my AIOS" until gh was installed AND signed in, and a newcomer
+     spent their first half hour on a backup tool before seeing anything work. Nothing upstream needs
+     it: SETUP.md calls GitHub "never a gate" and runs local-only without it. It buys one thing, an
+     off-machine backup, and that is worth asking for once there is something to back up. */
+  { id: 'github', required: ['gh'] },
 ];
 
 export interface OnboardingStepState<C extends OnboardingCheckLike = OnboardingCheckLike> {
