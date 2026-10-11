@@ -4,7 +4,8 @@ import * as os from 'os';
 import { execFileSync } from 'child_process';
 import * as path from 'path';
 import * as aios from './aios';
-import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, type BusRequest } from '../core/commandBus';
+import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, type BusRequest } from '../core/commandBus';
+import { recordTyped } from './busSent';
 import { ResumeIndex } from './resumeIndex';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
 import {
@@ -603,6 +604,7 @@ async function runSend(
     }
     attempts++;
     const emittedAt = Date.now();
+    recordTyped(deliverText, req.name, 'send');   // AI-172: before typing, so the label can never lose the race
     emit(win(), 'sendByName', { name: req.name, text: deliverText });
     /* If the surface says it could not deliver, stop here. Waiting out the verification window
        on a message that was never typed is how one request consumed its entire sibling-release
@@ -705,6 +707,8 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
     const cmd = buildSpawnCmd(aios.shellSettings().claudeCmd, req.name, {
       task: req.task || 'Start session', model, taskFile,
     });
+    // AI-172: the first prompt the worker receives is bus-typed too — record exactly that text.
+    recordTyped(taskFile ? taskFileInstruction(taskFile) : (req.task || 'Start session'), req.name, 'spawn');
     // background like every other bus path (#47): a fresh spawn was the one that still switched the
     // operator's screen, whatever busFocus said (operator-tested on 0.10.1).
     emit(win(), 'terminal', { name: req.name, cmd, background: true });
@@ -740,6 +744,7 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
         try { fs.writeFileSync(taskFile, req.prompt as string); } catch { taskFile = undefined; }
       }
       const cmd = buildResumeCmd(aios.shellSettings().claudeCmd, sid, { prompt: req.prompt, taskFile });
+      if (req.prompt) recordTyped(taskFile ? taskFileInstruction(taskFile) : req.prompt, req.name, 'resume');   // AI-172
       // background: the new session opens as a tab with an activity mark; the operator's
       // current tab and keyboard focus stay where they are (setting `busFocus`).
       emit(win(), 'terminal', { name: req.name, cmd, background: true });

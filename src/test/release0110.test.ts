@@ -169,3 +169,32 @@ test('AI-199: an unnamed session\'s topic labels its tab — never over a manual
   for (const t of ['✳ Claude Code', 'Qué es un respaldo']) f2(1, t);
   assert.equal(label(manual), 'build', 'a name the operator set wins');
 });
+
+test('AI-172: what the App records is what canonical provenance.py recognises — across the language boundary', { skip: !fs.existsSync(path.join(os.homedir(), 'aios', 'hooks', 'bus_log.py')) ? 'no canonical hooks on this machine' : false }, async () => {
+  const { recordTyped } = await import('../main/busSent');
+  const cp = require('child_process') as typeof import('child_process');
+  const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'aios-buslog-')), 'bus-sent.jsonl');
+  const saved = process.env.AIOS_BUS_LOG;
+  process.env.AIOS_BUS_LOG = log;
+  try {
+    const typed = 'Por favor revisa el PR → y dime qué opinas — 🎉 gracias';
+    recordTyped(typed, 'bg-test', 'send');
+    recordTyped(typed, 'bg-test', 'send');
+    assert.equal(fs.readFileSync(log, 'utf8').trim().split('\n').length, 1, 'one line per text per window');
+    const py = (text: string) => cp.execFileSync('python3', ['-c',
+      'import sys; sys.path.insert(0, sys.argv[1]); import bus_log; print(bus_log.is_bus_prompt(sys.argv[2]))',
+      path.join(os.homedir(), 'aios', 'hooks'), text], { encoding: 'utf8', env: { ...process.env, AIOS_BUS_LOG: log } }).trim();
+    assert.equal(py(typed), 'True', 'the provenance hook sees the App-typed prompt as bus-delivered');
+    assert.equal(py('  POR FAVOR revisa el PR →   y dime qué opinas — 🎉 gracias '), 'True', 'whitespace and case aside, as bus_log normalises');
+    assert.equal(py('something the operator really typed'), 'False', 'control: a text never typed by the bus is not');
+  } finally {
+    if (saved === undefined) delete process.env.AIOS_BUS_LOG; else process.env.AIOS_BUS_LOG = saved;
+  }
+});
+
+test('AI-172: every bus delivery records the exact text the session receives, before it is typed', () => {
+  const bus = fs.readFileSync(path.join(ROOT, 'src', 'main', 'commandBus.ts'), 'utf8');
+  assert.match(bus, /recordTyped\(deliverText, req\.name, 'send'\);[^\n]*\n\s*emit\(win\(\), 'sendByName'/);
+  assert.match(bus, /recordTyped\(taskFile \? taskFileInstruction\(taskFile\) : \(req\.task \|\| 'Start session'\), req\.name, 'spawn'\);/);
+  assert.match(bus, /if \(req\.prompt\) recordTyped\(taskFile \? taskFileInstruction\(taskFile\) : req\.prompt, req\.name, 'resume'\);/);
+});
