@@ -347,3 +347,14 @@ test('AI-200: Report this and What\'s in it? open the canonical agents with a br
     for (const k of ['tab.report', 'update.explain', 'update.explainTip']) assert.ok(d[k], `${loc}: ${k}`);
   }
 });
+
+test('AI-205: the App waits for the next idle, in order, superseding, aged — and verifies from the first type', () => {
+  const bus = fs.readFileSync(path.join(ROOT, 'src', 'main', 'commandBus.ts'), 'utf8');
+  assert.match(bus, /decideSend\(target, Date\.now\(\) - claimedAt, TIMINGS\.QUEUE_CEILING_MS\)/, 'a live busy target is held to the ceiling, not 30 min');
+  assert.match(bus, /const turn = queueTurn\(\{ key: path\.basename\(heldPath\), target: req\.name, from: req\.from, queuedAt: claimedAt \}, heldSends\(\)\);/);
+  assert.match(bus, /deliverText = stampAge\(rawDeliver, Date\.now\(\) - claimedAt, req\.from\);\s*needle = safeNeedle\(deliverText\);/, 'needle comes from the stamped text');
+  assert.match(bus, /heldMs: Date\.now\(\) - firstTypedAt,/, 'a message that queued for hours still gets its whole verification window');
+  assert.doesNotMatch(bus, /Date\.now\(\) - claimedAt >= MAX_HOLD_MS/);
+  const readme = fs.readFileSync(path.join(ROOT, 'src', 'core', 'inboxReadme.ts'), 'utf8');
+  assert.match(readme, /\*\*In order, latest wins\.\*\*/);
+});

@@ -6,7 +6,8 @@ import * as path from 'path';
 import * as aios from './aios';
 import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, type BusRequest } from '../core/commandBus';
 import { recordTyped } from './busSent';
-import { contract4LaunchArgs } from '../core/contract4';
+import { contract4LaunchArgs, cleanFrom } from '../core/contract4';
+import { normalizeVerb } from '../core/busVerbs';
 import { ResumeIndex } from './resumeIndex';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
 import {
@@ -14,6 +15,7 @@ import {
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
   shouldReleaseForSibling, countDeliveries, verifyVerdict, isDeliverable, maxAttemptsFor,
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
+  queueTurn, stampAge, type QueuedSend,
 } from '../core/sendQueue';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
 import { MY_SURFACE } from './surface';
@@ -389,6 +391,23 @@ function resumeIdFor(name: string, excludeSessionId?: string): Promise<string | 
   return resumeIndex.lookup(name, excludeSessionId).catch(() => undefined);
 }
 
+/** AI-205 — every send currently held by any surface (both surfaces' `.holding` files). */
+function heldSends(): QueuedSend[] {
+  const dir = inboxDir();
+  const out: QueuedSend[] = [];
+  let names: string[] = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json.holding')); } catch { return out; }
+  for (const n of names) {
+    try {
+      const b = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')) as Record<string, unknown>;
+      if (normalizeVerb(b.action) !== 'send' || typeof b.name !== 'string') continue;
+      const c = parseClaim(b._claim);
+      out.push({ key: n, target: b.name, from: cleanFrom(b.from), queuedAt: c ? c.at : fs.statSync(path.join(dir, n)).mtimeMs });
+    } catch { /* mid-write or gone */ }
+  }
+  return out;
+}
+
 /** Read the target's transcript; the counting RULE is pure and lives in core/sendQueue. */
 function readTranscript(sessionId: string): string {
   if (!sessionId) return '';
@@ -560,7 +579,11 @@ async function runSend(
     deliverText = pointerText(spilled);
     log(`send → '${req.name}' is ${byteLength(req.prompt)} bytes; delivering a pointer to ${spilled}`);
   }
-  const needle = safeNeedle(deliverText);
+  let needle = safeNeedle(deliverText);
+  /* AI-205: the delivered text is fixed at the FIRST type — a message that queued gets its age
+     stamped on, so the needle and baseline are taken from that text, then. */
+  const rawDeliver = deliverText;
+  let firstTypedAt = 0;
   let attempts = 0;   // how many times we have actually TYPED into the target
   /* Captured ONCE, before the first type, and reused by every attempt in this runSend.
      It used to be recomputed at the top of each iteration, which made a LATE delivery invisible:
@@ -572,12 +595,31 @@ async function runSend(
   let baseline: number | undefined;
   for (;;) {
     const target = targetByName(req.name);
-    const decision = decideSend(target, Date.now() - claimedAt, MAX_HOLD_MS);
+    /* AI-205: a live but busy target is waited on until its next idle (QUEUE_CEILING_MS), not
+       30 min; the never-type-into-busy rule is unchanged. */
+    const decision = decideSend(target, Date.now() - claimedAt, TIMINGS.QUEUE_CEILING_MS);
     if (decision.do === 'undeliverable') { markUndelivered(heldPath, req, decision.reason); return; }
     if (decision.do === 'hold') {
       if (!fs.existsSync(heldPath)) return;   // adopted or cleaned up elsewhere
       await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
       continue;
+    }
+    /* AI-205 — one at a time, oldest first; a newer message from the same sender replaces an older
+       one still waiting. Only before the first type: once typed, a message is in flight. */
+    if (!firstTypedAt) {
+      const turn = queueTurn({ key: path.basename(heldPath), target: req.name, from: req.from, queuedAt: claimedAt }, heldSends());
+      if (turn.do === 'superseded') {
+        try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+        log(`send → '${req.name}' SUPERSEDED by a newer message from '${req.from}' (${turn.by}) — the older one is not delivered`);
+        return;
+      }
+      if (turn.do === 'wait') {
+        if (!fs.existsSync(heldPath)) return;
+        await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
+        continue;
+      }
+      deliverText = stampAge(rawDeliver, Date.now() - claimedAt, req.from);
+      needle = safeNeedle(deliverText);
     }
     // idle → deliver, then prove it in the target's own transcript
     const sessionId = target ? target.sessionId : '';
@@ -595,8 +637,8 @@ async function runSend(
         log(`delivered → '${req.name}' (verified late)`);
         return;
       }
-      if (Date.now() - claimedAt >= MAX_HOLD_MS) {
-        markUndelivered(heldPath, req, `sent to '${req.name}' ${attempts}x over ${Math.round((Date.now() - claimedAt) / 60000)} min without it ever appearing in that session's transcript`);
+      if (Date.now() - firstTypedAt >= MAX_HOLD_MS) {
+        markUndelivered(heldPath, req, `sent to '${req.name}' ${attempts}x over ${Math.round((Date.now() - firstTypedAt) / 60000)} min without it ever appearing in that session's transcript`);
         return;
       }
       await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
@@ -604,6 +646,7 @@ async function runSend(
       continue;   // watch, never type again
     }
     attempts++;
+    if (!firstTypedAt) firstTypedAt = Date.now();
     const emittedAt = Date.now();
     recordTyped(deliverText, req.name, 'send', req.from);   // AI-172: before typing, so the label can never lose the race
     emit(win(), 'sendByName', { name: req.name, text: deliverText });
@@ -648,7 +691,7 @@ async function runSend(
     const miss = decideAfterVerifyMiss({
       targetAlive: !!after,
       targetBusy: !!after && !isDeliverable(after.status),
-      heldMs: Date.now() - claimedAt,
+      heldMs: Date.now() - firstTypedAt,   // AI-205: the verification budget runs from the first type
       attempts,
       maxAttempts: maxAttemptsFor(deliverText),
     });
