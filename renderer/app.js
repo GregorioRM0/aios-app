@@ -6943,6 +6943,8 @@ function openSettingsTab() {
     row(wrap, t('settings.showHidden'), exToggle('showHidden', cfg.showHidden, () => void paintExplorer()), t('settings.showHiddenHint'));
     row(wrap, t('settings.fileIcons'), exToggle('fileIcons', cfg.fileIcons !== false, (on) => { EXPLORER.icons = on; void paintExplorer(); }), t('settings.fileIconsHint'));
     row(wrap, t('settings.autoReveal'), exToggle('autoReveal', cfg.autoReveal !== false, (on) => { EXPLORER.autoReveal = on; }), t('settings.autoRevealHint'));
+    // main reads this per export event, so nothing renderer-side to update
+    row(wrap, t('settings.autoOpenExports'), exToggle('autoOpenExports', cfg.autoOpenExports !== false, () => {}), t('settings.autoOpenExportsHint'));
 
     // AI-58: the MASTER default sort — app-only operators have no VS Code settings UI,
     // so the global default lives here. Setting it clears every per-folder override.

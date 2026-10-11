@@ -359,6 +359,8 @@
   "settings.fileIconsHint": "iconos de tipo a color vs. simples",
   "settings.autoReveal": "Revelar automáticamente",
   "settings.autoRevealHint": "el árbol sigue la pestaña activa",
+  "settings.autoOpenExports": "Abrir exportaciones nuevas",
+  "settings.autoOpenExportsHint": "un archivo nuevo en 03 - export se abre solo en una pestaña",
   "settings.sortDefault": "Orden predeterminado",
   "settings.sortDefaultHint": "toda carpeta sin orden propio sigue este; cambiarlo borra los ajustes por carpeta",
   "sort.title": "Ordenar esta carpeta — nombre o última modificación",
