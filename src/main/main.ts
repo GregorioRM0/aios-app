@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, session } from 'electron';
 import { markQuitting, isQuitting, closeShouldHide } from './quitState';
 import { installWebPermissionPolicy } from './webPermissions';
+import { withDefaultLocale } from './termLocale';
 import { shellArgs } from './shellArgs';
 import * as path from 'path';
 import * as os from 'os';
@@ -81,7 +82,7 @@ function createWindow(): BrowserWindow {
 //  • AIOS_GLASS_TERM — mark the terminal so the shell `spawn` wrapper boots a worker IN-PLACE
 //    here (not osascript a detached window) if `spawn` is ever run from inside a pane.
 function termEnv(cmd?: string, name?: string): Record<string, string> {
-  const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+  const env: Record<string, string> = withDefaultLocale({ ...(process.env as Record<string, string>) }, process.platform);
   delete env.CLAUDE_CODE_CHILD_SESSION;
   env.CLAUDE_CODE_FORCE_SESSION_PERSIST = '1';
   env.AIOS_GLASS_TERM = '1';
