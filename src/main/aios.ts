@@ -1646,6 +1646,34 @@ function whichCheck(id: string, cmd: string, severity: 'fail' | 'warn', missingK
 }
 
 /**
+ * The gh probe, POSIX lane. Exported so a test can run it against a fake `gh`.
+ *
+ * "Installed" means `gh --version` RUNS, not that `command -v gh` answers — the same definition
+ * install-tool.sh uses (`works`). `command -v` alone said yes on a Mac where the terminal said
+ * "command not found: gh": the row read "not authenticated", Connect GitHub ran `gh auth login`
+ * into the error, and Re-check kept the same verdict, so the operator had no way forward from
+ * inside the app.
+ */
+export const GH_PROBE_POSIX =
+  'gh_runs() { command -v gh >/dev/null 2>&1 && gh --version >/dev/null 2>&1; }; ' +
+  'if gh_runs && gh auth status >/dev/null 2>&1; then echo AUTHED; ' +
+  "elif grep -qs 'github\\.com' \"$HOME/.git-credentials\"; then echo PATOK; " +
+  'elif gh_runs; then echo NOAUTH; else echo NOGH; fi';
+
+/**
+ * gh is here but signed out. The login still goes THROUGH the installer ladder, never straight to
+ * `gh auth login`: the probe and the terminal that runs the login are two different shells, and
+ * when they disagree about where gh is, a bare login dies on "command not found: gh". The ladder
+ * settles it inside the terminal itself — gh already runs there, it says so and logs in; it does
+ * not, it installs gh first and then logs in. Same command either way, so a wrong verdict here
+ * can no longer strand anyone. The bare login is only the fallback for a build without the ladder.
+ */
+function ghNoAuth(loginCmd: string): CheckResult {
+  const cmd = installToolCmd('gh', loginCmd) || loginCmd;
+  return { id: 'gh', label: t('setupCheck.gh'), status: 'warn', message: t('setupCheck.ghNoAuth'), repairCmd: cmd, repairHint: cmd, canRepair: false };
+}
+
+/**
  * The gh check, Windows lane — same four verdicts as the POSIX one (authed / stored-token /
  * installed-but-not-authed / absent), reached with tools that exist here.
  *
@@ -1658,7 +1686,9 @@ function whichCheck(id: string, cmd: string, severity: 'fail' | 'warn', missingK
  * this change's scope), and a missing key renders as the key itself.
  */
 async function ghCheckWin(): Promise<CheckResult> {
-  const probe = 'if (Get-Command gh -ErrorAction SilentlyContinue) { '
+  /* `gh --version` as well as Get-Command, for the same reason as GH_PROBE_POSIX: a gh that is
+     found but does not run is not installed. */
+  const probe = 'if ((Get-Command gh -ErrorAction SilentlyContinue) -and (gh --version 2>$null)) { '
     + 'gh auth status *> $null; if ($?) { "AUTHED" } '
     + 'elseif ((cmdkey /list:git:https://github.com 2>$null | Out-String) -match "github") { "PATOK" } '
     + 'elseif ((Test-Path "$HOME\\.git-credentials") -and (Select-String -Quiet -Path "$HOME\\.git-credentials" -Pattern "github.com")) { "PATOK" } '
@@ -1669,7 +1699,7 @@ async function ghCheckWin(): Promise<CheckResult> {
   const loginCmd = 'gh auth login --web --git-protocol https';
   if (out?.includes('AUTHED')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghOk'), canRepair: false };
   if (out?.includes('PATOK')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghPat'), canRepair: false };
-  if (out?.includes('NOAUTH')) return { id: 'gh', label: t('setupCheck.gh'), status: 'warn', message: t('setupCheck.ghNoAuth'), repairCmd: loginCmd, repairHint: loginCmd, canRepair: false };
+  if (out?.includes('NOAUTH')) return ghNoAuth(loginCmd);
   /* gh genuinely absent. This used to be winget-or-nothing, and winget-then-login in ONE pane:
      winget installed gh into a PATH that pane could not see, so the login that followed failed
      with "gh is not recognized", and a real first install ended with gh installed by hand from
@@ -2000,18 +2030,14 @@ function doctorChecks(): DoctorCheck[] {
            from ~/.git-credentials, which the `store` helper writes in plain text and which costs
            nothing to read; an osxkeychain-only PAT will read as "not authenticated", a
            false-negative that is merely a redundant login rather than a modal loop. */
-        const probe =
-          'if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then echo AUTHED; ' +
-          "elif grep -qs 'github\\.com' \"$HOME/.git-credentials\"; then echo PATOK; " +
-          'elif command -v gh >/dev/null 2>&1; then echo NOAUTH; else echo NOGH; fi';
-        const out = await zshOut(probe);
+        const out = await zshOut(GH_PROBE_POSIX);
         const loginCmd = 'gh auth login --web --git-protocol https';
         // rank the answers: both shells reply, and the BEST answer wins. Without this, a
         // non-interactive "NOGH" would outrank the interactive shell's "NOAUTH" and send someone
         // to install a tool they already have.
         if (out?.includes('AUTHED')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghOk'), canRepair: false };
         if (out?.includes('PATOK')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghPat'), canRepair: false };
-        if (out?.includes('NOAUTH')) return { id: 'gh', label: t('setupCheck.gh'), status: 'warn', message: t('setupCheck.ghNoAuth'), repairCmd: loginCmd, repairHint: loginCmd, canRepair: false };
+        if (out?.includes('NOAUTH')) return ghNoAuth(loginCmd);
         /* gh genuinely absent. This branch used to ask one question — can Homebrew write? — and
            had nothing to offer when the answer was no. A Mac with no Homebrew was then told its
            Homebrew "belongs to another account", given no command, and Connect GitHub ran
