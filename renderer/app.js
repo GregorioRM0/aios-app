@@ -5905,12 +5905,15 @@ const byName = (name, id) => {
     const hit = [...panes.entries()].find(([, p]) => p.kind === 'term' && p.sessionId === id);
     if (hit) return hit;
   }
-  return [...panes.entries()].find(([, p]) => p.kind === 'term' && p.name === name);
+  const named = [...panes.entries()].filter(([, p]) => p.kind === 'term' && p.name === name);
+  return named.find(([, p]) => !p.exited) || named[0];   // a live session before an ended tab
 };
 
 /** More than one pane answers to this name — so a name alone cannot say which is meant. */
+/* A tab whose session ended (p.exited, set by onPtyExit) is not a session: closed from outside the
+   App it keeps its name, and counting it made every later message to that name "ambiguous". */
 const ambiguous = (name) =>
-  [...panes.values()].filter((p) => p.kind === 'term' && p.name === name).length > 1;
+  [...panes.values()].filter((p) => p.kind === 'term' && p.name === name && !p.exited).length > 1;
 
 /* The pane of ONE session, for callers that are about to close it. By `sessionId` when known;
    by name only when the name is unique. `byName` falls back to the first name match, which is
