@@ -74,7 +74,7 @@ test('there are exactly four steps, in the order an operator can follow', () => 
   /* Seven boxes asked seven decisions of someone with no basis for making them. "Starter pack"
      was the proof: the operator read it, clicked it, and still could not say what it did — and if
      the person who commissioned the feature cannot explain it at the moment of use, a newcomer
-     cannot either. Four steps, each one thing, the last one a conversation. */
+     cannot either. Four steps, each one thing, the last one GitHub. */
   assert.deepEqual(ONBOARDING_STEPS.map((x) => x.id), ['prereqs', 'login', 'firstrun', 'github']);
   for (const dead of ['vault', 'wiring', 'starter', 'identity']) {
     assert.ok(!ONBOARDING_STEPS.some((x) => x.id === dead), `${dead} is no longer a step`);

@@ -108,7 +108,7 @@ contextBridge.exposeInMainWorld('glassShell', {
   // the Onboarding flow: sequenced onboarding stepper (steps + which one is active)
   onboardingState: (): Promise<{ steps: { id: string; done: boolean; state: 'done' | 'active' | 'locked'; required: string[]; optional: string[]; checks: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[] }[]; current: number }> => ipcRenderer.invoke('onboarding:state'),
   // PAT lane of the GitHub step — stored via git's credential helper, never echoed
-  onboardingStorePat: (pat: string): Promise<boolean> => ipcRenderer.invoke('onboarding:storePat', pat),
+  onboardingStorePat: (pat: string): Promise<'verified' | 'unverified' | 'failed'> => ipcRenderer.invoke('onboarding:storePat', pat),
   // starter packs (the Onboarding persona step): list + apply (seeds .glass/state.json)
   starterPacks: (): Promise<{ id: string; tasks: string[]; agents: string[] }[]> => ipcRenderer.invoke('starter:packs'),
   starterApply: (id: string): Promise<{ id: string; tasks: number; agents: string[] } | null> => ipcRenderer.invoke('starter:apply', id),

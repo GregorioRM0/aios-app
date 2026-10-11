@@ -884,7 +884,13 @@ ipcMain.handle('starter:apply', (_e, id: string) => {
 // the Onboarding flow: one doctor battery → the gated stepper (done/active/locked)
 ipcMain.handle('onboarding:state', () => aios.onboardingState());
 // PAT lane: store a GitHub token via `git credential approve` (never echoed)
-ipcMain.handle('onboarding:storePat', (_e, pat: string) => aios.storeGitHubPat(String(pat ?? '')));
+/* #50: stored → verified once with GitHub → the gh step can pass on macOS, where the token lives
+   in Keychain and the poll may not read it. 'unverified' = stored, but GitHub refused it. */
+ipcMain.handle('onboarding:storePat', async (_e, pat: string): Promise<'verified' | 'unverified' | 'failed'> => {
+  const p = String(pat ?? '');
+  if (!aios.storeGitHubPat(p)) return 'failed';
+  return (await aios.verifyGitHubPat(p)) ? 'verified' : 'unverified';
+});
 // doctor: headless repair + re-run-the-same-check proof (see aios.repairCheck)
 ipcMain.handle('doctor:repair', (_e, id: string) => aios.repairCheck(String(id)));
 ipcMain.handle('doctor:health', () => aios.computeHealth());

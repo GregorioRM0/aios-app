@@ -7428,8 +7428,8 @@ function openSetupTab() {
           mkBtn(adv, t('onboarding.usePat'), async () => {
             const pat = await inputModal(t('onboarding.patTitle'), t('onboarding.patPlaceholder'), null, { password: true });
             if (!pat) return;
-            const ok = await window.glassShell.onboardingStorePat(pat).catch(() => false);
-            toast(ok ? t('onboarding.patStored') : t('onboarding.patFailed'));
+            const res = await window.glassShell.onboardingStorePat(pat).catch(() => 'failed');
+            toast(res === 'verified' ? t('onboarding.patStored') : res === 'unverified' ? t('onboarding.patRejected') : t('onboarding.patFailed'));
             void paint();
           });
           adv.appendChild(el('div', 'step-note', t('onboarding.patHint')));

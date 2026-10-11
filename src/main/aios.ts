@@ -1665,6 +1665,10 @@ export const GH_PROBE_POSIX =
   'gh_runs() { command -v gh >/dev/null 2>&1 && gh --version >/dev/null 2>&1; }; ' +
   'if gh_runs && gh auth status >/dev/null 2>&1; then echo AUTHED; ' +
   "elif grep -qs 'github\\.com' \"$HOME/.git-credentials\"; then echo PATOK; " +
+  /* #50: on macOS a stored token lives in Keychain (osxkeychain), which this probe must not read —
+     a `git credential fill` on the 5-second poll raised an endless loop of Keychain modals. The
+     token lane verifies the token ONCE, on the operator's own click, and leaves this marker. */
+  'elif [ -f "$HOME/.aios/github-pat-verified" ]; then echo PATOK; ' +
   'elif gh_runs; then echo NOAUTH; else echo NOGH; fi';
 
 /**
@@ -2254,6 +2258,40 @@ export function storeGitHubPat(pat: string): boolean {
     });
     return true;
   } catch { return false; }
+}
+
+/** #50 — the marker the gh probe reads. Holds a timestamp, never the token. */
+export const githubPatMarker = (): string => path.join(os.homedir(), '.aios', 'github-pat-verified');
+
+/**
+ * #50 — check a just-stored token with GitHub ONCE, on the operator's click, and record that it
+ * worked. Without this, a Mac's token (stored in Keychain) could never pass the gh check, because
+ * the check reads only ~/.git-credentials. One request, the token never logged or written by us.
+ */
+export function verifyGitHubPat(pat: string, get: (token: string) => Promise<number> = githubUserStatus): Promise<boolean> {
+  const token = (pat || '').trim();
+  if (!token) return Promise.resolve(false);
+  return get(token).then((status) => {
+    if (status !== 200) return false;
+    try {
+      fs.mkdirSync(path.dirname(githubPatMarker()), { recursive: true });
+      fs.writeFileSync(githubPatMarker(), new Date().toISOString() + '\n');
+    } catch { return false; }
+    return true;
+  }, () => false);
+}
+
+function githubUserStatus(token: string): Promise<number> {
+  return new Promise((resolve) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const https = require('https') as typeof import('https');
+    const req = https.get('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'aios-app', Accept: 'application/vnd.github+json' },
+      timeout: 8000,
+    }, (res) => { res.resume(); resolve(res.statusCode || 0); });
+    req.on('timeout', () => { req.destroy(); resolve(0); });
+    req.on('error', () => resolve(0));
+  });
 }
 
 // ── Claude Code global config (ported from the extension — all fs-only) ─────

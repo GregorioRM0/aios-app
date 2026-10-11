@@ -46,3 +46,48 @@ test('AI-191: pbcopy really needs it (macOS only) — with the default, a UTF-8 
     cp.execFileSync('/usr/bin/pbcopy', { input: saved, env: { LANG: 'C.UTF-8' } });
   }
 });
+
+import * as os from 'node:os';
+import * as aios from '../main/aios';
+
+function withHome(fn: (home: string) => Promise<void> | void) {
+  return async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-pat-home-'));
+    const saved = { h: process.env.HOME, u: process.env.USERPROFILE };
+    process.env.HOME = home; process.env.USERPROFILE = home;
+    try { await fn(home); } finally {
+      if (saved.h === undefined) delete process.env.HOME; else process.env.HOME = saved.h;
+      if (saved.u === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = saved.u;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  };
+}
+
+test('#50: a token GitHub accepts leaves a marker (a timestamp, never the token); a refused one leaves none', withHome(async () => {
+  assert.equal(await aios.verifyGitHubPat('ghp_refused', async () => 401), false);
+  assert.ok(!fs.existsSync(aios.githubPatMarker()));
+  assert.equal(await aios.verifyGitHubPat('ghp_offline', () => Promise.reject(new Error('ENOTFOUND'))), false);
+  assert.ok(!fs.existsSync(aios.githubPatMarker()));
+  assert.equal(await aios.verifyGitHubPat('ghp_good', async () => 200), true);
+  const mark = fs.readFileSync(aios.githubPatMarker(), 'utf8');
+  assert.doesNotMatch(mark, /ghp_/, 'the marker never holds the token');
+}));
+
+test('#50: the gh probe passes on the marker, so a Mac whose token lives in Keychain can finish setup', { skip: process.platform === 'win32' }, withHome((home) => {
+  const cp = require('child_process') as typeof import('child_process');
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-nogh-'));   // no gh at all
+  const probe = () => cp.execFileSync('/bin/sh', ['-c', aios.GH_PROBE_POSIX], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home } }).trim();
+  assert.equal(probe(), 'NOGH', 'control: no gh, no token');
+  fs.mkdirSync(path.join(home, '.aios'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.aios', 'github-pat-verified'), '2026-10-11T00:00:00Z\n');
+  assert.equal(probe(), 'PATOK');
+}));
+
+test('#50: the token lane tells a refused token apart from a stored one, in every locale', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  assert.match(app, /res === 'verified' \? t\('onboarding\.patStored'\) : res === 'unverified' \? t\('onboarding\.patRejected'\)/);
+  for (const loc of ['en', 'es', 'pt-br']) {
+    const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'));
+    assert.ok(d['onboarding.patRejected'], `${loc} has patRejected`);
+  }
+});
