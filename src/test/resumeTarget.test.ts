@@ -115,15 +115,22 @@ test('every known verb survives a round trip, case-insensitively', () => {
 
 import fs from 'node:fs';
 
-/** runImmediate's body, with comments stripped so prose never counts as code. */
-function runImmediateBody(): string {
+/** One function's body from the bus source, with comments stripped so prose never counts as code. */
+function fnBody(name: string): string {
   const src = fs.readFileSync('src/main/commandBus.ts', 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/(^|[^:])\/\/.*$/gm, '$1');
-  const start = src.indexOf('function runImmediate');
-  assert.ok(start > 0, 'runImmediate not found — this guard is reading the wrong thing');
-  const end = src.indexOf('\nfunction ', start + 10);
-  const body = src.slice(start, end === -1 ? undefined : end);
+  const start = src.indexOf(`function ${name}(`);
+  assert.ok(start > 0, `${name} not found — this guard is reading the wrong thing`);
+  const end = src.slice(start + 10).search(/\n(async )?function /);
+  return src.slice(start, end === -1 ? undefined : start + 10 + end);
+}
+
+/** The request-handling path: runImmediate plus runResume, the async closed-session half of
+ *  `resume` it hands off to (split out so the name lookup can read transcripts without blocking
+ *  the bus). Read together because the seams below span both. */
+function runImmediateBody(): string {
+  const body = fnBody('runImmediate') + '\n' + fnBody('runResume');
   // Controls: the stripper must have stripped, and must not have eaten the code.
   assert.doesNotMatch(body, /ALREADY AWAKE/, 'the comment stripper did not strip');
   assert.match(body, /req\.action === 'resume'/, 'the comment stripper ate the code');
@@ -137,7 +144,10 @@ test('no path leaves runImmediate without disposing the held request', () => {
      disposal leaves a request either replayed forever or silently dropped — neither of which
      the compiler can see. */
   const body = runImmediateBody();
-  const disposes = (s: string) => /unlinkSync\(heldPath\)|markUndelivered\(heldPath/.test(s);
+  /* Handing the request to runResume is a transfer of ownership, not a leak: runResume disposes
+     it on every path, which this same loop checks because its body is part of `body`. */
+  const disposes = (s: string) =>
+    /unlinkSync\(heldPath\)|markUndelivered\(heldPath|runResume\(win, heldPath, req\)/.test(s);
   let from = 0, seen = 0;
   for (;;) {
     const at = body.indexOf('return', from);
@@ -150,8 +160,8 @@ test('no path leaves runImmediate without disposing the held request', () => {
   }
   assert.ok(seen >= 3, `expected several early exits to check, saw ${seen}`);
   // and exactly one shared tail for the branches that fall through
-  assert.equal(body.match(/unlinkSync\(heldPath\)/g)?.length ?? 0, 3,
-    'expected exactly three disposals: unknown-verb (via dead letter), already-awake, resumed, and one shared tail');
+  assert.equal(body.match(/unlinkSync\(heldPath\)/g)?.length ?? 0, 4,
+    'expected exactly four unlinks: already-awake and the shared tail in runImmediate; resumed and the opt-in spawn fallback in runResume');
 });
 
 test('resume reaches the SAME launcher spawn does — one extracted function, two callers', () => {
@@ -170,7 +180,8 @@ test('a live session is revealed and SENT to — never resumed into a second pro
 });
 
 test('no transcript REFUSES by default, and names the miss', () => {
-  const body = runImmediateBody();
+  runImmediateBody();                       // its stripper controls still apply
+  const body = fnBody('runResume');
   const gate = body.slice(body.indexOf('resumeIdFor'), body.indexOf('runSpawn(win, heldPath, req)'));
   assert.match(gate, /fallback !== 'spawn'/, 'the fallback is opt-in — absent means refuse');
   assert.match(gate, /markUndelivered\(heldPath, req,[\s\S]{0,200}\$\{req\.name\}/,
