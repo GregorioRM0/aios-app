@@ -2316,16 +2316,9 @@ const claudeJsonPath = () => process.env.GLASS_CLAUDE_JSON || path.join(os.homed
    actually advertises (2.1.270 carries claude-opus-5, claude-opus-5[1m], claude-sonnet-5) rather
    than from memory. It had been a generation behind — topping out at Opus 4.8 while the operator
    was running Opus 5.
-   STILL A HARDCODED LIST, and it will go stale again: nothing here derives from the binary. That
-   is the real fix and it is not this one. Until then, this list is a release-time checklist item. */
-export const MODEL_OPTIONS = [
-  { label: 'Opus 5 — 1M context', value: 'claude-opus-5[1m]' },
-  { label: 'Opus 5', value: 'claude-opus-5' },
-  { label: 'Sonnet 5 — 1M context', value: 'claude-sonnet-5[1m]' },
-  { label: 'Sonnet 5', value: 'claude-sonnet-5' },
-  { label: 'Haiku 4.5', value: 'claude-haiku-4-5' },
-  { label: 'Default (clear the override)', value: '' },
-];
+   AI-194 (0.11.0): it WENT stale again — a generation behind MODEL_LADDER, which is what the
+   picker actually shows. It is now derived from the ladder, so there is one list to refresh. */
+export const MODEL_OPTIONS: { label: string; value: string }[] = [];   // filled below, from MODEL_LADDER
 export const MODE_OPTIONS = ['default', 'auto', 'acceptEdits', 'plan', 'bypassPermissions'];
 
 function readJson(p: string): Record<string, unknown> {
@@ -2400,16 +2393,29 @@ function writeClaudeUserJson(mutate: (j: Record<string, unknown>) => void): void
    carries account extras and the operator's own pinned value, neither of which can be ranked —
    and one caller needs a ranking. */
 const MODEL_LADDER = [
-  /* Opus 5.5 — verified present in Claude Code 2.1.280's own model catalog before it was listed
-     here, because an id the catalog does not know is refused outright rather than falling back.
-     Opus 5 stays below it: an operator pinned to it must still see a named option, not a raw id. */
+  /* AI-194 (0.11.0) — the current generation, each id VERIFIED in Claude Code 2.1.296's own model
+     catalog first, because an id the catalog does not know is refused outright rather than
+     falling back: claude-fable-5-1, claude-opus-5-5[1m], claude-sonnet-5-5[1m], claude-haiku-5-5.
+     Ordered as MODEL-ROUTING's ladder (frontier → judgment → scale → fast); the setup step does
+     not read index 0 (it recommends an alias, RECOMMENDED_SETUP_MODEL), so Fable at the top is a
+     ranking, not a recommendation. Fable has no 1M variant in the catalog. The previous generation
+     stays at the bottom so an operator pinned to it sees a name, not a raw id. */
+  { label: 'Fable 5.1', value: 'claude-fable-5-1' },
   { label: 'Opus 5.5 — 1M context', value: 'claude-opus-5-5[1m]' },
   { label: 'Opus 5.5', value: 'claude-opus-5-5' },
+  { label: 'Sonnet 5.5 — 1M context', value: 'claude-sonnet-5-5[1m]' },
+  { label: 'Sonnet 5.5', value: 'claude-sonnet-5-5' },
+  { label: 'Haiku 5.5', value: 'claude-haiku-5-5' },
   { label: 'Opus 5 — 1M context', value: 'claude-opus-5[1m]' },
   { label: 'Opus 5', value: 'claude-opus-5' },
   { label: 'Sonnet 5', value: 'claude-sonnet-5' },
   { label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
 ];
+MODEL_OPTIONS.push(...MODEL_LADDER, { label: 'Default (clear the override)', value: '' });
+
+/** AI-194 — Claude Code's persisted effort levels (`effortLevel` in settings; verified in the
+ *  2.1.296 schema: low · medium · high · xhigh — `max` exists for a session, never persisted). */
+export const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh'] as const;
 
 /* Claude Code accepts ALIASES — `opus`, `opus[1m]`, `sonnet` — each meaning "the latest of that
    family". They are not ids, so they never match the ladder, and an unlabelled alias surfaced in
@@ -2516,6 +2522,7 @@ export function outputStyleOptions(): string[] {
 
 export interface ClaudeConfig {
   account: string; model: string; mode: string; remoteControl: boolean; autoUpdates: boolean;
+  effort: string;            // AI-194: effortLevel ('' = Claude's default for the model)
   // Claude-owned toggles surfaced in Settings (see src/core/claudeConfig.ts for the stores)
   outputStyle: string; reduceMotion: boolean; switchModelsOnFlag: boolean;
   claudeInChrome: boolean; copyOnSelect: boolean;
@@ -2549,6 +2556,7 @@ export function claudeConfig(): ClaudeConfig {
     account: cj?.oauthAccount?.emailAddress || '',
     // every one of these reads through the registry, so the row and the file agree
     model: str('model'),
+    effort: str('effort'),
     mode: str('mode'),
     remoteControl: bool('remoteControl'),
     outputStyle: str('outputStyle'),

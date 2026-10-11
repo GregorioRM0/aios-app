@@ -58,6 +58,9 @@ export const CLAUDE_KEYS: Record<string, ClaudeKeySpec> = {
   /* model + outputStyle are NOT seeded: for these, absent genuinely means "not pinned", and
      writing a value would take a decision away from the operator rather than make one for them. */
   model: { path: 'model', store: 'settings', kind: 'enum', seed: '' },
+  /* AI-194 — Claude Code's persisted effort (`effortLevel`, low · medium · high · xhigh). Not
+     seeded: absent means "the model's default", and the default is Claude's to choose. */
+  effort: { path: 'effortLevel', store: 'settings', kind: 'enum', seed: '' },
   mode: { path: 'permissions.defaultMode', store: 'settings', kind: 'enum', seed: 'default', seedOnInstall: true },
   /* SEEDED TRUE, deliberately. Publishing App-launched sessions to the operator's account is the
      product default (it is what `spawn` has always done), and seeding makes the toggle honest by

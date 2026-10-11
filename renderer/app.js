@@ -7122,6 +7122,10 @@ function openSettingsTab() {
       return sel;
     };
     row(wrap, t('settings.model'), mkSelect(MODELS, cc.model, 'model'), t('settings.modelHint'));
+    /* AI-194 — effort, Claude's second knob (`effortLevel`). "Default" deletes the key, so the
+       session keeps Claude's own default for whichever model it runs. */
+    const EFFORTS = [[t('settings.effortDefault'), ''], [t('effort.low'), 'low'], [t('effort.medium'), 'medium'], [t('effort.high'), 'high'], [t('effort.xhigh'), 'xhigh']];
+    row(wrap, t('settings.effort'), mkSelect(EFFORTS, cc.effort || '', 'effort'), t('settings.effortHint'));
     row(wrap, t('settings.permissionMode'), mkSelect(MODES, cc.mode, 'mode'), t('settings.permissionModeHint'));
     /* Claude's own output styles — built-ins plus anything under ~/.claude/output-styles/.
        Selecting the default DELETES the key rather than writing the string "default", so

@@ -250,3 +250,24 @@ test('AI-198: the provenance record carries via "surface" and the sender', async
     assert.deepEqual([e.to, e.action, e.via, e.from], ['worker', 'resume', 'surface', 'coordinator']);
   } finally { if (saved === undefined) delete process.env.AIOS_BUS_LOG; else process.env.AIOS_BUS_LOG = saved; }
 });
+
+test('AI-194: the picker carries the current generation, ordered by the ladder; effort is a real Claude setting', async () => {
+  const aiosMod = await import('../main/aios');
+  const { CLAUDE_KEYS, coerce } = await import('../core/claudeConfig');
+  const values = aiosMod.MODEL_OPTIONS.map((m) => m.value);
+  assert.deepEqual(values.slice(0, 6), ['claude-fable-5-1', 'claude-opus-5-5[1m]', 'claude-opus-5-5', 'claude-sonnet-5-5[1m]', 'claude-sonnet-5-5', 'claude-haiku-5-5'],
+    'frontier → judgment → scale → fast, the 5.x generation first');
+  assert.ok(values.includes('claude-opus-5'), 'an operator pinned to the previous generation still sees a name');
+  assert.equal(values[values.length - 1], '', 'and Default clears the override');
+  assert.equal(aiosMod.modelLabel('claude-haiku-5-5'), 'Haiku 5.5', 'labels come from the same list (no stale twin)');
+  assert.deepEqual([...aiosMod.EFFORT_OPTIONS], ['low', 'medium', 'high', 'xhigh'], 'what effortLevel persists (max is session-only)');
+  assert.equal(CLAUDE_KEYS.effort.path, 'effortLevel');
+  assert.equal(coerce('effort', ''), undefined, 'Default deletes the key rather than writing a value');
+  assert.equal(coerce('effort', 'high'), 'high');
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  assert.match(app, /row\(wrap, t\('settings\.effort'\), mkSelect\(EFFORTS, cc\.effort \|\| '', 'effort'\), t\('settings\.effortHint'\)\);/);
+  for (const loc of ['en', 'es', 'pt-br']) {
+    const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'));
+    for (const k of ['settings.effort', 'settings.effortHint', 'settings.effortDefault', 'effort.low', 'effort.xhigh']) assert.ok(d[k], `${loc}: ${k}`);
+  }
+});

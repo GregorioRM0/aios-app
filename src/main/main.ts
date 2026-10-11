@@ -1044,7 +1044,7 @@ ipcMain.handle('shell:frameworkPath', () => aios.frameworkPathSetting());
 ipcMain.handle('shell:setFrameworkPath', (_e, v: string) => { aios.setFrameworkPath(String(v ?? '')); return aios.frameworkPathSetting(); });
 ipcMain.handle('claude:setKeys', () => aios.claudeConfigSetKeys());
 ipcMain.handle('claude:stores', () => aios.claudeConfigStores());
-ipcMain.handle('claude:set', (_e, key: 'model' | 'mode' | 'remoteControl' | 'autoUpdates', value: unknown) => {
+ipcMain.handle('claude:set', (_e, key: 'model' | 'effort' | 'mode' | 'remoteControl' | 'autoUpdates', value: unknown) => {
   aios.setClaudeConfig(key, value);
   return aios.claudeConfig();
 });

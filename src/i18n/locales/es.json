@@ -1101,5 +1101,12 @@
   "restore.resumeNow": "Reanudar",
   "term.copy": "Copiar",
   "term.copyPlain": "Copiar como texto simple   ⇧⌘C",
-  "term.copiedPlain": "Copiado como texto simple"
+  "term.copiedPlain": "Copiado como texto simple",
+  "settings.effort": "Esfuerzo",
+  "settings.effortHint": "Qué tanto piensa Claude antes de responder. Más alto es más lento y cuesta más.",
+  "settings.effortDefault": "El del modelo",
+  "effort.low": "Bajo",
+  "effort.medium": "Medio",
+  "effort.high": "Alto",
+  "effort.xhigh": "Muy alto"
 }

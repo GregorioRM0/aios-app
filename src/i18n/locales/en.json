@@ -1101,5 +1101,12 @@
   "restore.resumeNow": "Resume",
   "term.copy": "Copy",
   "term.copyPlain": "Copy as plain text   ⇧⌘C",
-  "term.copiedPlain": "Copied as plain text"
+  "term.copiedPlain": "Copied as plain text",
+  "settings.effort": "Effort",
+  "settings.effortHint": "How hard Claude thinks before answering. Higher is slower and costs more.",
+  "settings.effortDefault": "Default for the model",
+  "effort.low": "Low",
+  "effort.medium": "Medium",
+  "effort.high": "High",
+  "effort.xhigh": "Extra high"
 }
