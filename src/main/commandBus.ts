@@ -965,7 +965,7 @@ export function initCommandBus(getWin: () => BrowserWindow | undefined, appVersi
   void resumeIndex.refresh()
     .then(() => log(`resume index ready: ${resumeIndex.size()} transcripts in ${Date.now() - t0} ms`))
     .catch((e) => log(`resume index build failed (${e instanceof Error ? e.message : String(e)})`));
-  recheck =(p: string) => { if (fs.existsSync(p)) consume(getWin, p); };
+  recheck = (p: string) => { if (fs.existsSync(p)) consume(getWin, p); };
   try {
     // Only `*.json` is a request — `.holding` and `.undelivered` sit deliberately OUTSIDE
     // the glob, so a claimed or abandoned request can never be re-picked-up as a new one.

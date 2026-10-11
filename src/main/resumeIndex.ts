@@ -55,12 +55,15 @@ async function namesFrom(file: string, from: number): Promise<string[]> {
   const fh = await fs.promises.open(file, 'r');
   try {
     const decoder = new StringDecoder('utf8');
-    const buf = Buffer.allocUnsafe(CHUNK);
+    /* Sized to what is left to read: a cold build reads thousands of small transcripts, and a
+       full CHUNK per file was thousands of large allocations for a few KB each. */
+    const { size } = await fh.stat();
+    const buf = Buffer.allocUnsafe(Math.max(1, Math.min(CHUNK, size - from)));
     let pos = from;
     let carry = '';
     let last: string[] = [];
     for (;;) {
-      const { bytesRead } = await fh.read(buf, 0, CHUNK, pos);
+      const { bytesRead } = await fh.read(buf, 0, buf.length, pos);
       if (bytesRead <= 0) break;
       pos += bytesRead;
       const text = carry + decoder.write(buf.subarray(0, bytesRead));
@@ -94,26 +97,35 @@ export class ResumeIndex {
     } catch { /* absent or corrupt → cold build */ }
   }
 
-  private save(): void {
+  /* Async: this runs in the App's main process, on every lookup that found a live transcript
+     changed, so a synchronous write of the whole index would stall the UI. Saves are serialised
+     by the pass chain and by awaiting here, so two never share the temp file. */
+  private async save(): Promise<void> {
     if (!this.dirty) return;
+    this.dirty = false;
     try {
-      fs.mkdirSync(path.dirname(this.indexPath), { recursive: true });
+      await fs.promises.mkdir(path.dirname(this.indexPath), { recursive: true });
       const tmp = `${this.indexPath}.${process.pid}.tmp`;
       const body: IndexFile = { version: INDEX_VERSION, base: this.base, files: this.files };
-      fs.writeFileSync(tmp, JSON.stringify(body), { mode: 0o600 });
-      fs.renameSync(tmp, this.indexPath);
-      this.dirty = false;
-    } catch { /* an unsaved index is only a slower next start */ }
+      await fs.promises.writeFile(tmp, JSON.stringify(body), { mode: 0o600 });
+      await fs.promises.rename(tmp, this.indexPath);
+    } catch { this.dirty = true; /* an unsaved index is only a slower next start */ }
   }
 
-  /** Every transcript on disk, newest first, with its stat. */
-  private async listing(): Promise<{ f: string; mtimeMs: number; size: number }[]> {
+  /**
+   * Every transcript on disk, newest first, with its stat — plus the folders that could NOT be
+   * read. A folder that failed to list is not a folder with no transcripts: pruning on its
+   * absence would throw away the whole index (or that project's part) over a passing outage,
+   * and the next resume would pay the full cold build.
+   */
+  private async listing(): Promise<{ items: { f: string; mtimeMs: number; size: number }[]; unreadable: Set<string> | 'all' }> {
     const out: { f: string; mtimeMs: number; size: number }[] = [];
+    const unreadable = new Set<string>();
     let dirs: string[] = [];
-    try { dirs = await fs.promises.readdir(this.base); } catch { return out; }
+    try { dirs = await fs.promises.readdir(this.base); } catch { return { items: out, unreadable: 'all' }; }
     for (const d of dirs) {
       let entries: string[] = [];
-      try { entries = await fs.promises.readdir(path.join(this.base, d)); } catch { continue; }
+      try { entries = await fs.promises.readdir(path.join(this.base, d)); } catch { unreadable.add(path.join(this.base, d)); continue; }
       for (const e of entries) {
         if (!e.endsWith('.jsonl')) continue;
         const f = path.join(this.base, d, e);
@@ -123,20 +135,23 @@ export class ResumeIndex {
         } catch { /* vanished between readdir and stat */ }
       }
     }
-    return out.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return { items: out.sort((a, b) => b.mtimeMs - a.mtimeMs), unreadable };
   }
 
   private async pass(): Promise<void> {
     this.load();
     const seen = new Set<string>();
     const todo: { f: string; mtimeMs: number; size: number }[] = [];
-    for (const it of await this.listing()) {
+    const { items, unreadable } = await this.listing();
+    for (const it of items) {
       seen.add(it.f);
       const prev = this.files[it.f];
       if (!prev || prev.mtimeMs !== it.mtimeMs || prev.size !== it.size) todo.push(it);
     }
-    for (const f of Object.keys(this.files)) {
-      if (!seen.has(f)) { delete this.files[f]; this.dirty = true; }
+    if (unreadable !== 'all') {
+      for (const f of Object.keys(this.files)) {
+        if (!seen.has(f) && !unreadable.has(path.dirname(f))) { delete this.files[f]; this.dirty = true; }
+      }
     }
     let done = 0;
     let next = 0;
@@ -144,7 +159,9 @@ export class ResumeIndex {
       while (next < todo.length) {
         const it = todo[next++];
         const prev = this.files[it.f];
-        /* Grown → read only the new tail. Shrunk, or same size with a new mtime → rewritten, read all. */
+        /* Grown → read only the new tail. Shrunk, or same size with a new mtime → rewritten, read all.
+           A rewrite that leaves the file LARGER also reads as growth and only its tail is read; Claude
+           Code's transcripts are append-only, so that case is not expected to occur. */
         const grew = !!prev && it.size > prev.size;
         try {
           const names = await namesFrom(it.f, grew ? Math.max(0, prev.size - OVERLAP) : 0);
@@ -156,11 +173,11 @@ export class ResumeIndex {
           };
           this.dirty = true;
         } catch { /* unreadable now; retried on the next pass because it stays unindexed */ }
-        if (++done % SAVE_EVERY === 0) this.save();
+        if (++done % SAVE_EVERY === 0) await this.save();
       }
     };
     await Promise.all(Array.from({ length: Math.min(POOL, todo.length) }, worker));
-    this.save();
+    await this.save();
   }
 
   /** Bring the index up to date. Passes are serialised: concurrent callers share one queue. */

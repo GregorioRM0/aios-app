@@ -117,3 +117,25 @@ test('concurrent lookups share one pass and agree', async () => {
   const got = await Promise.all([ix.lookup('n-39'), ix.lookup('n-0'), ix.lookup('n-20')]);
   assert.deepEqual(got, [sid(39), sid(0), sid(20)]);
 });
+
+test('an unreadable projects folder keeps the index — an outage is not "every transcript deleted"', { skip: process.platform === 'win32' ? 'chmod' : false }, async () => {
+  const { base, index, proj } = tree();
+  const now = Math.floor(Date.now() / 1000);
+  write(proj, 1, `${rec('fq-tools', sid(1))}\n`, now - 60);
+  const ix = new ResumeIndex(base, index);
+  assert.equal(await ix.lookup('fq-tools'), sid(1));
+  fs.chmodSync(proj, 0o000);                       // this project's folder cannot be listed
+  try {
+    await ix.refresh();
+    assert.equal(ix.size(), 1, 'a project folder that failed to list keeps its entries');
+  } finally { fs.chmodSync(proj, 0o755); }
+  fs.chmodSync(base, 0o000);                       // the whole projects folder cannot be listed
+  try {
+    await ix.refresh();
+    assert.equal(ix.size(), 1, 'nor does a projects folder that failed to list');
+  } finally { fs.chmodSync(base, 0o755); }
+  assert.equal(JSON.parse(fs.readFileSync(index, 'utf8')).files[path.join(proj, `${sid(1)}.jsonl`)].latestName, 'fq-tools', 'and the saved index still has it');
+  fs.rmSync(path.join(proj, `${sid(1)}.jsonl`));
+  await ix.refresh();
+  assert.equal(ix.size(), 0, 'a transcript really deleted is still pruned');
+});
