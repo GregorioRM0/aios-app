@@ -51,6 +51,9 @@ export interface ClaudeKeySpec {
      by accident; a deliberate omission still has to say what it is, in code, or the next reader
      will "restore" the row and reintroduce whatever made it unsurfaceable. */
   notSurfaced?: string;
+  /** An unsurfaced key that is STILL seeded must say why it is safe to write something the operator does
+   *  not see in Settings. Narrow by design: today only the diff panel, by operator decision. */
+  seededHidden?: string;
 }
 
 export const CLAUDE_KEYS: Record<string, ClaudeKeySpec> = {
@@ -93,7 +96,9 @@ export const CLAUDE_KEYS: Record<string, ClaudeKeySpec> = {
      changed files beside the transcript (operator test). Operator decision: off by default, a toggle
      to bring it back. `diffSidebarOpen` is one of Claude's global-config keys (~/.claude.json);
      `/diff` writes the same key, so a choice made either way is respected. */
-  diffPanel: { path: 'diffSidebarOpen', store: 'user', kind: 'bool', seed: false, seedOnInstall: true },
+  diffPanel: { path: 'diffSidebarOpen', store: 'user', kind: 'bool', seed: false, seedOnInstall: true,
+    notSurfaced: 'A Settings toggle read as broken in operator testing: turning it ON does not open the panel (only /diff does); it only governs whether Claude opens it by itself.',
+    seededHidden: 'Default off is the operator decision (no surprise panel after /aios:update). Written once, only when nothing is on disk; /diff writes this same key, so the operator stays in control from inside any session.' },
   /* Three more that a non-technical operator actually reaches for — all confirmed present
      in ~/.claude/settings.json on a real machine, so no inference here.
      NOTE on agentPushNotif: the audit of 2026-07-31 found it present in BOTH stores. `readStore()`

@@ -118,7 +118,7 @@ test('every registry key is surfaced in Settings, and every Settings row is in t
   for (const id of Object.keys(CLAUDE_KEYS)) {
     if (CLAUDE_KEYS[id].notSurfaced) {
       assert.ok(CLAUDE_KEYS[id].notSurfaced!.length > 30, `${id} needs a real reason, not a shrug`);
-      assert.ok(!CLAUDE_KEYS[id].seedOnInstall, `${id} is not shown, so it must not be written either`);
+      if (CLAUDE_KEYS[id].seedOnInstall) assert.ok((CLAUDE_KEYS[id].seededHidden ?? '').length > 30, `${id} is not shown, so it must not be written either — unless it states why (seededHidden)`);
       continue;
     }
     assert.match(app, new RegExp(`'${id}'`), `${id} has no Settings row and no notSurfaced reason`);

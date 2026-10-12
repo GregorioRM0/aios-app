@@ -387,7 +387,7 @@ test('AI-200: Report this and What\'s in it? open the canonical agents with a br
   assert.match(app, /spawnNamed\('aios-feedback', /);
   // Review 12: the brief carries the safety itself, not only canonical's agent.
   assert.match(app, /run hooks\/issue-scrub\.py over everything you will include/);
-  assert.match(app, /The GitHub repository The-AIOS\/aios-app|repository The-AIOS\/aios-app/, 'names the target repo');
+  assert.match(app, /The-AIOS\/aios-app \(the desktop app itself[\s\S]*?The-AIOS\/aios \(the framework[\s\S]*?The-AIOS\/aios-glass \(the VS Code/, 'the session picks the repo from what was reported (operator test: never assume the App)');
   assert.match(app, /do not run gh issue create, gh pr create or post any comment until I approve that exact text/);
   assert.match(app, /until I approve that exact text\.', undefined, 'default'\);/, 'permission mode default, whatever the operator usually runs');
   assert.match(app, /if \(byName\('aios-feedback'\)\) \{ setActive\(byName\('aios-feedback'\)\[0\]\); toast\(t\('report\.alreadyOpen'\)\); return; \}/, 'a second report writes no orphan snapshot');
@@ -463,7 +463,8 @@ test('AI-171 step 1: a session row says which skills and agents it used, from it
 test('AI-169 step 1: read aloud — per session, on the session\'s own "done", any key stops it', () => {
   const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
   const main = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.ts'), 'utf8');
-  assert.match(app, /if \(p\.readAloud && \/\^state=done\\b\/\.test\(s\)\) void speakAnswer\(p, paneId\);/, 'triggered by OSC 7501 done');
+  assert.match(app, /if \(READ_ALOUD && p\.readAloud && \/\^state=done\\b\/\.test\(s\)\) void speakAnswer\(p, paneId\);/, 'triggered by OSC 7501 done');
+  assert.match(app, /const READ_ALOUD = false;/, 'hidden for now (operator decision) — menu row and trigger both gated');
   assert.match(app, /if \(e\.type === 'keydown' && speaking && speaking\.paneId === id\) stopSpeaking\(id\);/, 'barge-in: any key in that pane');
   assert.match(main, /return \{ text: speakable\(answer, rest\), lang: lang \?\? '' \};/, 'main reduces the answer to what is worth hearing, in its own language');
   assert.match(main, /if \(!\/\^\[A-Za-z0-9-\]\{8,\}\$\/\.test\(sid\)\) return \{ text: '', lang: '' \};/, 'the session id is validated before it touches a path');
