@@ -26,12 +26,13 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
      .5-.65, which measured 2.4-3.3:1. This value clears 4.5:1 on every dark surface (worst:
      --surface-2 at 4.74) and still sits well below --subtle (5.7-6.6). */
   --faint: #85858e;
-  /* Operator decision (0.11.0): the coral BUTTON fill is darkened until white text passes AA —
-     #ff5d4d under white was 3.03:1; this is 4.67:1, and hover goes darker (5.32:1), never
-     lighter. The bright --accent stays for the logo and accents. Same in both themes: the coral
-     does not flip, and neither does the white text on it. */
-  --accent-fill: #d63a2a;
-  --accent-fill-hover: #c8331f;
+  /* Operator decision (0.11.0, after testing it): the coral stays the 0.10.1 brand coral everywhere.
+     A darker #d63a2a fill was tried because white on #ff5d4d MEASURES 3.03:1 — a computed finding,
+     not a reported one (the human readability report, #24, was about dimmed grey text, fixed
+     separately). Seen in light, the darker coral read as off-brand, so the brand wins. The tokens
+     stay, so a future change is one line. */
+  --accent-fill: var(--accent);
+  --accent-fill-hover: var(--accent-soft);
   /* INK variants: the same hues where they are used as TEXT. Dark theme is the reference and
      needs nothing (coral 6.5:1, the status colours higher), so here they are aliases. */
   --accent-ink: var(--accent);
@@ -572,7 +573,7 @@ body.light {
      the bright hues; only text switches. */
   --faint: #626269;
   --st-testing: #7c4fc4;
-  --accent-ink: #c2342a;
+  --accent-ink: var(--accent);   /* operator decision: the brand coral as text too (see --accent-fill) */
   --st-ok-ink: #1b7843; --st-busy-ink: #935600; --st-input-ink: #1d61bb;
   --st-warn-ink: #835d00; --st-error-ink: #bb2c32;
   --edge: inset 0 1px 0 rgba(255,255,255,.7);
