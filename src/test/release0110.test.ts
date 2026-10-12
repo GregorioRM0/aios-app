@@ -614,3 +614,14 @@ test('operator test: a model the operator PICKED is not flagged as a switch', ()
   assert.equal(swParts({ at, to: 'claude-opus-5-5', from: 'claude-haiku-4-5', reason: 'picker' }, at - 1000), undefined, '"on Opus 5.5 — picker" was the operator\'s own /model');
   assert.deepEqual(swParts({ at, to: 'claude-opus-4-8', from: 'claude-fable-5-1', reason: 'fallback' }, at - 1000), { model: 'Opus 4.8', reason: 'fallback' }, 'a fallback still shows');
 });
+
+test('operator decision: "with the lid closed" is asked ONCE, Yes preselected, the first time the cup turns on', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  const fn = /async function maybeAskLid\(st\) \{[\s\S]*?\n\}/.exec(app);
+  assert.ok(fn, 'maybeAskLid exists');
+  assert.match(fn![0], /if \(!IS_MAC \|\| !st \|\| !st\.on \|\| \(st\.lid && \(st\.lid\.enabled \|\| st\.lid\.installed\)\)\) return;/, 'only on a Mac, only when the cup just turned on, never when it is already set up');
+  assert.match(fn![0], /if \(!cfg \|\| cfg\.lidAsked \|\| cfg\.lidAwake\) return;\s*await window\.glassShell\.setSetting\('lidAsked', true\);/, 'asked once: marked before asking, so Cancel is remembered');
+  assert.match(fn![0], /if \(!window\.confirm\(t\('caffeinate\.lidAsk'\)\)\) return;/, 'OK — the default button — is Yes');
+  assert.match(app, /paintCaffeine\(st\);\s*void maybeAskLid\(st\);/, 'on the operator\'s own click');
+  for (const loc of ['en', 'es', 'pt-br']) assert.ok(JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'))['caffeinate.lidAsk'], loc);
+});

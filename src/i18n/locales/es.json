@@ -1077,6 +1077,7 @@
   "caffeinate.lidRemove": "Quitar",
   "caffeinate.lidFailed": "No se pudo instalar:",
   "caffeinate.lidPrompt": "AIOS quiere instalar un pequeño ayudante para que tus sesiones sigan trabajando con la tapa cerrada.",
+  "caffeinate.lidAsk": "¿Seguir trabajando también con la tapa cerrada?\n\nMientras la taza esté encendida, cerrar la tapa no dormirá la computadora; cuando tus sesiones terminen, se duerme. Se te pedirá tu contraseña una vez.\n\nAceptar = Sí · Cancelar = No (puedes cambiarlo en Ajustes).",
   "caffeinate.lidPromptRemove": "AIOS quiere quitar su ayudante de tapa cerrada.",
   "ctx.openOutside": "Abrir fuera de AIOS",
   "ctx.openOutsideFailed": "No se pudo abrir fuera de AIOS — puede que ya no exista o esté fuera de tus carpetas",

@@ -5840,6 +5840,20 @@ function attachTip(el, text) {
    second implementation of the rule. It shows what main reports and sends intent. */
 const dragCaffeine = document.getElementById('dragCaffeine');
 let caffState = null;
+/* Operator decision (0.11.0): "with the lid closed" should be the default — but it needs a root helper
+   that macOS installs only behind its own password prompt, so it cannot be switched on silently. So
+   it is ASKED ONCE, Yes preselected, the first time the operator turns the cup on. Yes → the helper
+   is installed and the lid hold enabled; No → remembered, never asked again. Settings still has it. */
+async function maybeAskLid(st) {
+  if (!IS_MAC || !st || !st.on || (st.lid && (st.lid.enabled || st.lid.installed))) return;
+  const cfg = await window.glassShell.shellConfig().catch(() => null);
+  if (!cfg || cfg.lidAsked || cfg.lidAwake) return;
+  await window.glassShell.setSetting('lidAsked', true);
+  if (!window.confirm(t('caffeinate.lidAsk'))) return;   // OK (the default button) = Yes
+  const res = await window.glassShell.caffeinateLid(true, t('caffeinate.lidPrompt')).catch(() => null);
+  paintCaffeine(res);
+  if (res && res.lid && res.lid.error && res.lid.error !== 'cancelled') toast(t('caffeinate.lidFailed') + ' ' + res.lid.error);
+}
 let caffTip = '';   // the hover text, kept outside paint so the tip element can read it any time
 function paintCaffeine(st) {
   caffState = st;
@@ -5915,7 +5929,11 @@ if (dragCaffeine) {
   dragCaffeine.title = caffTip;
   dragCaffeine.innerHTML = icon('coffee', 15);
   attachTip(dragCaffeine, () => caffTip);
-  dragCaffeine.addEventListener('click', async () => { paintCaffeine(await window.glassShell.caffeinateToggle()); });
+  dragCaffeine.addEventListener('click', async () => {
+    const st = await window.glassShell.caffeinateToggle();
+    paintCaffeine(st);
+    void maybeAskLid(st);
+  });
   window.glassShell.onCaffeinate(paintCaffeine);
   void window.glassShell.caffeinateState().then(paintCaffeine);
 }

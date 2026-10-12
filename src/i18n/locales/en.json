@@ -1077,6 +1077,7 @@
   "caffeinate.lidRemove": "Remove",
   "caffeinate.lidFailed": "Could not install:",
   "caffeinate.lidPrompt": "AIOS wants to install a small helper so your sessions can keep working with the lid closed.",
+  "caffeinate.lidAsk": "Keep working with the lid closed too?\n\nWhile the cup is on, closing the lid won't put the computer to sleep; when your sessions finish, it sleeps. Your password is asked for once.\n\nOK = Yes · Cancel = No (you can change it in Settings).",
   "caffeinate.lidPromptRemove": "AIOS wants to remove its lid-closed helper.",
   "ctx.openOutside": "Open outside AIOS",
   "ctx.openOutsideFailed": "Could not open it outside AIOS — it may be gone, or outside your folders",
