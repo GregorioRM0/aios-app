@@ -382,8 +382,14 @@ export function countNotes(kind: 'declared' | 'observed' | 'projects'): number {
    entered, so it answers "blocked longest" without us having to remember anything. */
 export interface RunningAgent { pid: number; name: string; status: string; sessionId: string; cwd: string; startedAt: number; updatedAt: number; waitingFor?: string; statusUpdatedAt?: number; kind: string; entrypoint: string; }
 
+/** Claude Code's config folder. It honours CLAUDE_CONFIG_DIR, so the App reads where Claude Code
+ *  actually writes (the registry, transcripts, settings). Unset — every Finder launch — it is ~/.claude. */
+export const claudeConfigDir = (): string => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+/** ~/.claude.json, or $CLAUDE_CONFIG_DIR/.claude.json when that is set (Claude Code's own rule). */
+export const claudeJsonDefault = (): string => (process.env.CLAUDE_CONFIG_DIR ? path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(os.homedir(), '.claude.json'));
+
 export function listRunningAgents(): RunningAgent[] {
-  const dir = path.join(os.homedir(), '.claude', 'sessions');
+  const dir = path.join(claudeConfigDir(), 'sessions');
   let files: string[] = [];
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return []; }
   const out: RunningAgent[] = [];
@@ -632,7 +638,7 @@ export interface RateLimit { fiveHourPct: number; sevenDayPct: number; fiveHourR
 
 export function rateLimit(): RateLimit | undefined {
   try {
-    const d = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'rate-limit-cache.json'), 'utf8'));
+    const d = JSON.parse(fs.readFileSync(path.join(claudeConfigDir(), 'rate-limit-cache.json'), 'utf8'));
     return {
       fiveHourPct: Number(d.five_hour_pct) || 0,
       sevenDayPct: Number(d.seven_day_pct) || 0,
@@ -2410,9 +2416,9 @@ function githubUserStatus(token: string): Promise<{ status: number; expires?: st
  *  Env-overridable (GLASS_CLAUDE_HOME / GLASS_CLAUDE_JSON) so the doctor's
  *  account/skills/plugin checks are testable against a fixture, not the
  *  developer's real machine state. Production never sets these. */
-export const claudeDir = () => process.env.GLASS_CLAUDE_HOME || path.join(os.homedir(), '.claude');
+export const claudeDir = () => process.env.GLASS_CLAUDE_HOME || claudeConfigDir();
 const claudeSettingsPath = () => path.join(claudeDir(), 'settings.json');
-const claudeJsonPath = () => process.env.GLASS_CLAUDE_JSON || path.join(os.homedir(), '.claude.json');
+const claudeJsonPath = () => process.env.GLASS_CLAUDE_JSON || claudeJsonDefault();
 
 /* ORDERED BY CAPABILITY, STRONGEST FIRST — and that order is now load-bearing, not cosmetic.
    The setup step recommends `MODEL_OPTIONS[0]` by name as "the most capable one available here",

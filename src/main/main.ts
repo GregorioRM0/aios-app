@@ -22,6 +22,7 @@ import { taskFileInstruction, needsTaskFile } from '../core/commandBus';
 import { needsSpill } from '../core/ptyLine';
 import { initAutoUpdater } from './updater';
 import * as aios from './aios';
+import { redactSecrets } from './redact';
 import * as connectors from './connectors';
 import * as fs from 'fs';
 
@@ -330,8 +331,8 @@ function setupClaudeConfigWatch(win: BrowserWindow): void {
      fact, and the third was easy to forget precisely because the first two were already right. */
   const framework = aios.frameworkRoot();
   const watched = [
-    path.join(os.homedir(), '.claude', 'settings.json'),
-    path.join(os.homedir(), '.claude.json'),
+    path.join(aios.claudeConfigDir(), 'settings.json'),
+    aios.claudeJsonDefault(),
     ...(framework ? [path.join(framework, '.claude', 'settings.json'), path.join(framework, '.claude', 'settings.local.json')] : []),
   ];
   lastClaudeCfg = JSON.stringify(aios.claudeConfig());   // baseline, so the first real change is the first event
@@ -473,7 +474,7 @@ function sessionNameFromTranscript(file: string, mtime: number): string {
    The id becomes part of a PATH, so anything that is not id-shaped is refused before it is joined. */
 ipcMain.handle('sessions:locate', (_e, ids: unknown) => {
   const want = (Array.isArray(ids) ? ids : []).map(String).filter((id) => /^[0-9a-f][0-9a-f-]{7,63}$/i.test(id));
-  const dir = path.join(os.homedir(), '.claude', 'projects');
+  const dir = path.join(aios.claudeConfigDir(), 'projects');
   let projs: string[] = [];
   try { projs = fs.readdirSync(dir); } catch { /* no transcripts at all */ }
   const live = new Set(aios.listRunningAgents().map((a: { sessionId?: string }) => a.sessionId).filter(Boolean));
@@ -486,7 +487,7 @@ ipcMain.handle('sessions:locate', (_e, ids: unknown) => {
 });
 
 ipcMain.handle('sessions:resumable', () => {
-  const dir = path.join(os.homedir(), '.claude', 'projects');
+  const dir = path.join(aios.claudeConfigDir(), 'projects');
   let files: Array<{ file: string; at: number }> = [];
   try {
     for (const proj of fs.readdirSync(dir)) {
@@ -711,7 +712,7 @@ ipcMain.handle('session:speakable', (_e, sessionId: string) => {
   const sid = String(sessionId || '');
   if (!/^[A-Za-z0-9-]{8,}$/.test(sid)) return { text: '', lang: '' };
   try {
-    const base = path.join(os.homedir(), '.claude', 'projects');
+    const base = path.join(aios.claudeConfigDir(), 'projects');
     for (const d of fs.readdirSync(base)) {
       const f = path.join(base, d, `${sid}.jsonl`);
       if (!fs.existsSync(f)) continue;
@@ -736,13 +737,29 @@ ipcMain.on('pty:programStatus', (_e, m: { sessionId?: string; data?: string; at?
 /* AI-200 — "Report this": the tab's recent lines go to a LOCAL temp file for aios-feedback to read.
    Never sent anywhere by the App; the agent scrubs and asks before anything leaves the machine. */
 ipcMain.handle('feedback:snapshot', (_e, name: string, text: string) => {
+  sweepReportSnapshots();
   try {
     const slug = String(name || 'terminal').replace(/[^a-z0-9-]+/gi, '-').slice(0, 40) || 'terminal';
     const f = path.join(os.tmpdir(), `aios-report-${slug}-${Date.now()}.txt`);
-    fs.writeFileSync(f, String(text ?? '').slice(0, 200_000), { mode: 0o600 });
+    /* Review should-fix 12: written ALREADY REDACTED — token shapes, keys, credentials in URLs. The
+       agent still scrubs; the App no longer depends on it. */
+    fs.writeFileSync(f, redactSecrets(String(text ?? '').slice(0, 200_000)), { mode: 0o600 });
     return f;
   } catch { return ''; }
 });
+/* Snapshots are read once, by the session the report opened. Any older than a day is an orphan
+   (a report abandoned, or one dropped because the feedback pane already existed) — remove it. */
+function sweepReportSnapshots(maxAgeMs = 24 * 60 * 60 * 1000): void {
+  try {
+    const dir = os.tmpdir();
+    for (const n of fs.readdirSync(dir)) {
+      if (!/^aios-report-.*\.txt$/.test(n)) continue;
+      const f = path.join(dir, n);
+      try { if (Date.now() - fs.statSync(f).mtimeMs > maxAgeMs) fs.unlinkSync(f); } catch { /* gone */ }
+    }
+  } catch { /* tmp unreadable */ }
+}
+app.whenReady().then(() => sweepReportSnapshots()).catch(() => undefined);
 ipcMain.handle('shell:copyText', (_e, t: string) => { clipboard.writeText(String(t)); return true; });
 /* AI-192 — ⇧⌘C / right-click "Copy as plain text": the selection without Claude's TUI scaffolding
    (bullets, quote bars, indents, the footer) and with terminal wraps rejoined into paragraphs. */

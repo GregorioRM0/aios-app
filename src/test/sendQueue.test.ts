@@ -159,7 +159,7 @@ test('delivery is verified by counting USER TURNS, not substring hits', () => {
   assert.doesNotMatch(src, /countDeliveries\(readTranscript\(sessionId\), deliverText, needle, emittedAt\)/,
     'emittedAt moves on every retry; a moving bound resets the count mid-flight — the moving-baseline bug again');
   assert.doesNotMatch(src, /countInTranscript/, 'the substring counter is retired');
-  assert.match(src, /\.claude', 'projects'/);
+  assert.match(src, /claudeConfigDir\(\), 'projects'/);   // honours CLAUDE_CONFIG_DIR
 });
 
 test('a mid-write request is re-checked, not condemned', () => {

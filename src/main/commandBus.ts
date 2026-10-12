@@ -415,7 +415,7 @@ function heldSends(): QueuedSend[] {
 /** Read the target's transcript; the counting RULE is pure and lives in core/sendQueue. */
 function readTranscript(sessionId: string): string {
   if (!sessionId) return '';
-  const base = path.join(os.homedir(), '.claude', 'projects');
+  const base = path.join(aios.claudeConfigDir(), 'projects');
   let dirs: string[] = [];
   try { dirs = fs.readdirSync(base); } catch { return ''; }
   for (const d of dirs) {
