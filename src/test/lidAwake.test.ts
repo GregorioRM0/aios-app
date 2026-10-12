@@ -113,6 +113,9 @@ function waitFor(cond: () => boolean, ms = 15_000): Promise<void> {
 }
 
 const skipOffPosix = process.platform === 'win32' ? 'POSIX shell' : false;
+/* The guard now holds only for a pid the sudo caller owns (review nit, #54). sudo sets SUDO_UID; these
+   tests run the guard directly, as the same user, so they set it to what sudo would. */
+if (process.getuid) process.env.SUDO_UID = String(process.getuid());
 
 test('the guard parses as sh', { skip: skipOffPosix }, () => {
   const r = spawnSync('/bin/sh', ['-n'], { input: guardScript() });
@@ -231,4 +234,20 @@ test('a stale pidfile never makes root signal a process that is not the guard', 
   spawnSync(s.guard, ['release']);
   await new Promise((res) => g.on('exit', res));
   app.kill(); bystander.kill(); await died;
+});
+
+test('review nit (#54): the guard holds only for ONE pid that the sudo caller owns', { skip: process.platform === 'win32' }, () => {
+  const cp = require('node:child_process') as typeof import('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-guard-'));
+  const g = path.join(dir, 'guard.sh');
+  fs.writeFileSync(g, guardScript(), { mode: 0o755 });
+  const run = (args: string[], uid: string) => cp.spawnSync('/bin/sh', [g, ...args], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin:/usr/sbin', SUDO_UID: uid } });
+  const me = String(process.getuid?.() ?? '');
+  let r = run(['hold', '1'], me);
+  assert.equal(r.status, 2, 'launchd (pid 1, root) is not the caller\'s process'); assert.match(r.stderr, /not the caller's process/);
+  r = run(['hold', String(process.pid)], String(Number(me) + 1));
+  assert.equal(r.status, 2, 'a pid owned by someone other than the sudo caller is refused');
+  r = run(['hold', String(process.pid), 'extra'], me);
+  assert.equal(r.status, 2, 'one pid, nothing more'); assert.match(r.stderr, /exactly one pid/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

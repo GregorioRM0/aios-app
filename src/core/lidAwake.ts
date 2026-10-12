@@ -113,6 +113,12 @@ restore() {
 case "$1" in
   hold)
     case "$2" in ''|*[!0-9]*) echo "hold needs the app's pid" >&2; exit 2 ;; esac
+    [ $# -eq 2 ] || { echo "hold takes exactly one pid" >&2; exit 2; }
+    # The sudoers rule matches \`hold *\` (the pid changes every launch), so the guard is what limits
+    # it: only a process the CALLER owns. Without this, \`hold 1\` kept sleep off for as long as
+    # launchd lives. SUDO_UID is set by sudo itself, not by the caller.
+    owner=$(ps -p "$2" -o uid= 2>/dev/null | tr -d ' ')
+    { [ -n "$SUDO_UID" ] && [ "$owner" = "$SUDO_UID" ]; } || { echo "pid $2 is not the caller's process" >&2; exit 2; }
     # A previous holder (an App that restarted) steps aside WITHOUT restoring: USR1 means
     # "someone is taking over", and restoring here could sleep a closed-lid Mac mid-handover.
     if [ -f "$PIDFILE" ]; then
@@ -149,7 +155,7 @@ esac
 /**
  * The sudoers rule: this user, this one file, these two verbs. Nothing else runs without a
  * password. `hold *` is a wildcard on purpose — the pid changes every launch — and the guard
- * rejects anything that is not digits.
+ * rejects anything that is not ONE pid owned by the user who ran sudo (review nit, #54).
  */
 export function sudoersRule(user: string): string {
   if (!/^[A-Za-z0-9._-]+$/.test(user)) throw new Error(`unexpected user name: ${user}`);
