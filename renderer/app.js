@@ -3536,7 +3536,7 @@ const needsSetup = (cmd) => {
   /* The remedies are exempt, or the operator could never climb out. Three of them:
      /login and /logout fix the account; the aios-setup session IS the setup; and the
      cold-start interview is what writes the declared context the gate asks for. */
-  return !/\/(login|logout)\b/.test(c) && !/--name\s+aios-setup\b/.test(c) && !/cold-start-interview/.test(c);
+  return !/\/(login|logout)\b/.test(c) && !/--name\s+(aios-setup|github-help)\b/.test(c) && !/cold-start-interview/.test(c);
 };
 
 /* One gate for every runnable action. Before this, a missing prerequisite surfaced as
@@ -7398,6 +7398,7 @@ function openSettingsTab() {
     row(wrap, t('settings.remoteControl'), mkCToggle('remoteControl', cc.remoteControl, setKeys.remoteControl !== false, false, stores.remoteControl), t('settings.remoteControlHint'));
     row(wrap, t('settings.claudeInChrome'), mkCToggle('claudeInChrome', cc.claudeInChrome, setKeys.claudeInChrome !== false, false, stores.claudeInChrome), t('settings.claudeInChromeHint'));
     row(wrap, t('settings.copyOnSelect'), mkCToggle('copyOnSelect', cc.copyOnSelect, setKeys.copyOnSelect !== false, true, stores.copyOnSelect), t('settings.copyOnSelectHint'));
+    row(wrap, t('settings.diffPanel'), mkCToggle('diffPanel', cc.diffPanel, setKeys.diffPanel !== false, true, stores.diffPanel), t('settings.diffPanelHint'));
     /* THE TWO PUSH TOGGLES ARE NOT SURFACED. "Push when actions required" and "Push when Claude
        decides" are Claude's own names, and even with those exact words the operator could not tell
        which did what — tested on a real person, twice. A setting nobody can predict the effect of
@@ -7771,6 +7772,17 @@ function openSetupTab() {
           /* Operator decision (0.11.0 test): GitHub comes before the setup session, so it must never
              block it — "Skip for now" passes the step, the setup session takes the local-only path,
              and connecting later is one sentence to any session. */
+          /* Operator decision: GitHub now comes right after the Claude sign-in, so Claude is ready to help
+             with exactly this step. A session that installs gh if needed and walks the sign-in, asking
+             before every command (`default` mode), and never creates a repo or pushes. Exempt from the
+             setup gate (needsSetup) — it IS a remedy. */
+          if (s.state === 'active') mkBtn(acts, t('onboarding.githubHelp'), async () => {
+            const cwd = await window.glassShell.prepareSetupCwd().catch(() => null);
+            spawnNamed('github-help', 'Help me connect GitHub for my AIOS. I am at the "Log in to GitHub" step of the AIOS App setup and it is not working. '
+              + 'First check whether the GitHub CLI runs (`gh --version`). If it does not, install it for this computer, explaining in plain words and asking before you install anything. '
+              + 'Then sign me in with `gh auth login --web --git-protocol https` and confirm with `gh auth status`. '
+              + 'Do not create repositories, push, or change anything else. When `gh auth status` passes, tell me to go back to the setup screen and click Re-check.', cwd || undefined, 'default');
+          }, { title: t('onboarding.githubHelpHint') });
           if (s.state === 'active') mkBtn(acts, t('onboarding.skipGithub'), async () => { await window.glassShell.onboardingSkip('github').catch(() => {}); void paint(); }, { title: t('onboarding.skipGithubHint') });
           if (s.skipped) acts.appendChild(el('div', 'step-note', t('onboarding.githubSkipped')));
           break;

@@ -88,6 +88,12 @@ export const CLAUDE_KEYS: Record<string, ClaudeKeySpec> = {
   /* store CONFIRMED 2026-07-31: found in ~/.claude.json on a real machine, so the inference above
      was correct and `storeUncertain` is retired rather than carried as permanent doubt. */
   copyOnSelect: { path: 'copyOnSelect', store: 'user', kind: 'bool', seed: true, seedOnInstall: true },   // Claude default TRUE (`?? !0`)
+  /* Claude Code 2.1.296's diff panel. Unset, Claude OPENS it by itself beside the conversation when
+     the terminal is ≥144 columns in a git repo — an App pane usually is, so /aios:update put 191
+     changed files beside the transcript (operator test). Operator decision: off by default, a toggle
+     to bring it back. `diffSidebarOpen` is one of Claude's global-config keys (~/.claude.json);
+     `/diff` writes the same key, so a choice made either way is respected. */
+  diffPanel: { path: 'diffSidebarOpen', store: 'user', kind: 'bool', seed: false, seedOnInstall: true },
   /* Three more that a non-technical operator actually reaches for — all confirmed present
      in ~/.claude/settings.json on a real machine, so no inference here.
      NOTE on agentPushNotif: the audit of 2026-07-31 found it present in BOTH stores. `readStore()`

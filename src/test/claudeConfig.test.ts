@@ -358,8 +358,15 @@ test('seeding NEVER overwrites, and is marked so it cannot repeat', () => {
   assert.ok(fn, 'seedClaudeDefaults must exist');
   assert.match(fn[0], /if \(isSet\(id, settings, user, project, local\)\) continue;/,
     'an existing value belongs to the operator and must never be overwritten — checked across all four stores');
-  assert.match(fn[0], /if \(raw\.claudeDefaultsSeeded\) return \{ seeded: \[\], already: true \}/,
+  assert.match(fn[0], /if \(raw\.claudeDefaultsSeeded\) \{/,
     're-seeding every launch would undo the operator\'s own choices — worse than the bug it fixes');
+  /* The one late key (Claude's diff panel, default off by operator decision) is seeded ONCE, under its
+     own marker, only when nothing is on disk — so a `/diff` choice is never overwritten — and the
+     marker is set only once the value really landed (a fresh machine has no ~/.claude.json yet). */
+  assert.match(fn[0], /if \(!raw\.claudeDefaultsSeededDiffPanel && seedDiffPanelOnce\(\)\)/);
+  const once = /function seedDiffPanelOnce\(\): boolean \{[\s\S]*?\n\}/.exec(src);
+  assert.ok(once);
+  assert.match(once![0], /if \(!isSet\('diffPanel', \.\.\.claudeStores\(\)\)\) return false;   \/\/ not written yet/);
   assert.match(fn[0], /setShellSetting\('claudeDefaultsSeeded', true\)/,
     'the marker belongs in OUR settings, never as a foreign key in Claude\'s schema');
 });

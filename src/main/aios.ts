@@ -2664,7 +2664,7 @@ export interface ClaudeConfig {
   advisor: string;           // AI-195: advisorModel ('' = no advisor)
   // Claude-owned toggles surfaced in Settings (see src/core/claudeConfig.ts for the stores)
   outputStyle: string; reduceMotion: boolean; switchModelsOnFlag: boolean;
-  claudeInChrome: boolean; copyOnSelect: boolean;
+  claudeInChrome: boolean; copyOnSelect: boolean; diffPanel: boolean;
   agentPushNotif: boolean; inputNeededNotif: boolean; awaySummary: boolean; autoCompact: boolean;
 }
 
@@ -2704,6 +2704,7 @@ export function claudeConfig(): ClaudeConfig {
     switchModelsOnFlag: bool('switchModelsOnFlag'),
     claudeInChrome: bool('claudeInChrome'),
     copyOnSelect: bool('copyOnSelect'),
+    diffPanel: bool('diffPanel'),
     agentPushNotif: bool('agentPushNotif'),
     inputNeededNotif: bool('inputNeededNotif'),
     awaySummary: bool('awaySummary'),
@@ -2738,7 +2739,13 @@ export function seedClaudeDefaults(): { seeded: string[]; already: boolean } {
   const r = frameworkRoot();
   let raw: Record<string, unknown> = {};
   if (r) { try { raw = JSON.parse(fs.readFileSync(path.join(r, '.glass', 'shell.json'), 'utf8')); } catch { raw = {}; } }
-  if (raw.claudeDefaultsSeeded) return { seeded: [], already: true };
+  /* Keys added AFTER a framework was first seeded get their own one-time pass, under the same rule
+     (only when nothing is on disk): otherwise every existing install would never receive them. */
+  if (raw.claudeDefaultsSeeded) {
+    const late: string[] = [];
+    if (!raw.claudeDefaultsSeededDiffPanel && seedDiffPanelOnce()) late.push('diffPanel');
+    return { seeded: late, already: true };
+  }
   const [settings, user, project, local] = claudeStores();
   const seeded: string[] = [];
   for (const id of seedableKeys()) {
@@ -2748,7 +2755,18 @@ export function seedClaudeDefaults(): { seeded: string[]; already: boolean } {
     try { setClaudeConfig(id as ClaudeConfigKey, CLAUDE_KEYS[id].seed); seeded.push(id); } catch { /* skip */ }
   }
   setShellSetting('claudeDefaultsSeeded', true);
+  if (seeded.includes('diffPanel') && isSet('diffPanel', ...claudeStores())) setShellSetting('claudeDefaultsSeededDiffPanel', true);
   return { seeded, already: false };
+}
+/* The diff panel's own one-time pass. The marker is set only once a value is really ON DISK — the
+   writer refuses an empty or missing ~/.claude.json (a fresh machine before the Claude sign-in), and
+   marking that as done would mean the default never lands. Returns whether it wrote. */
+function seedDiffPanelOnce(): boolean {
+  if (isSet('diffPanel', ...claudeStores())) { setShellSetting('claudeDefaultsSeededDiffPanel', true); return false; }   // already chosen
+  try { setClaudeConfig('diffPanel' as ClaudeConfigKey, false); } catch { return false; }
+  if (!isSet('diffPanel', ...claudeStores())) return false;   // not written yet — retried next launch
+  setShellSetting('claudeDefaultsSeededDiffPanel', true);
+  return true;
 }
 
 /** Which Claude keys are actually PRESENT on disk. The UI needs this to tell "the operator chose
