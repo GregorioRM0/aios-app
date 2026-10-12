@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as aios from './aios';
 import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, type BusRequest } from '../core/commandBus';
 import { recordTyped } from './busSent';
-import { contract4LaunchArgs, cleanFrom } from '../core/contract4';
+import { contract4LaunchArgs, cleanFrom, advisorModelFor } from '../core/contract4';
 import { normalizeVerb } from '../core/busVerbs';
 import { ResumeIndex } from './resumeIndex';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
@@ -810,20 +810,12 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
 /** spawn / kill act immediately once claimed — nothing about the target can refuse them. */
 /**
  * AI-198 — the arguments contract 4 adds to a launch: `--effort` and the advisor (as
- * `--settings {"advisorModel":…}`). A rung is resolved through hooks/resolve-tier like `tier`;
- * one that resolves to the session default names no model, so it is refused, never guessed.
+ * `--settings {"advisorModel":…}`). A rung names a fixed model from the contract's table.
  */
 function contract4Args(req: BusRequest): { args: string[] } | { error: string } {
-  let advisorModel: string | undefined;
-  if (req.advisor) {
-    if (req.advisorRung) {
-      const r = resolveTier(req.advisor);
-      if ('error' in r) return { error: r.error };
-      if (!r.model) return { error: `advisor rung '${req.advisor}' resolves to the session default and names no model — pass a model id` };
-      advisorModel = r.model;
-    } else advisorModel = req.advisor;
-  }
-  return { args: contract4LaunchArgs({ effort: req.effort, advisorModel }) };
+  /* A rung names a FIXED advisor model from the contract's own table (judgment = claude-opus-5-5),
+     never hooks/resolve-tier, which answers judgment with '' ("inherit the default"). */
+  return { args: contract4LaunchArgs({ effort: req.effort, advisorModel: advisorModelFor(req.advisor, req.advisorRung) }) };
 }
 
 function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
