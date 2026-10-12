@@ -16,7 +16,7 @@ import {
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
   shouldReleaseForSibling, countDeliveries, verifyVerdict, isDeliverable, maxAttemptsFor,
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
-  queueTurn, stampAge, withQueuedAt, queuedAtOf, type QueuedSend,
+  queueTurn, stampAge, withQueuedAt, queuedAtOf, isQueuedDelivery, type QueuedSend,
 } from '../core/sendQueue';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
 import { MY_SURFACE } from './surface';
@@ -401,7 +401,7 @@ function heldSends(): QueuedSend[] {
   for (const n of names) {
     try {
       const b = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')) as Record<string, unknown>;
-      if (normalizeVerb(b.action) !== 'send' || typeof b.name !== 'string') continue;
+      if (!isQueuedDelivery(normalizeVerb(b.action), b) || typeof b.name !== 'string') continue;   // sends + resume-to-live (should-fix 11)
       const c = parseClaim(b._claim);
       /* A hold whose holder is DEAD is not in line (review should-fix 8): it would block its target
          until someone adopts it. The periodic adoption below picks it up. */
