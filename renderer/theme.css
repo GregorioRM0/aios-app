@@ -47,6 +47,7 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --st-input: #6cb0ff;   /* waiting on the operator (blue) */
   --st-warn:  #e8b75a;   /* attention soon (soft gold) */
   --st-error: #e5484d;   /* failure — a REAL red, deliberately distinct from coral */
+  --st-testing: #b58cf0; /* framework on a branch ahead of main — violet: not "fine" (green), not "update" (coral/amber), not "needs you" (blue) */
   --ok: var(--st-ok);    /* legacy alias — prefer --st-ok */
   --edge: inset 0 1px 0 rgba(255,255,255,.05);
   --depth: 0 10px 26px -16px rgba(0,0,0,.6);
@@ -66,7 +67,7 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
 .status-fill { --sc: var(--st-idle); background: var(--sc); color: var(--bg);
                border: 1px solid color-mix(in srgb, var(--sc) 55%, transparent); }
 .st-idle { --sc: var(--st-idle); } .st-ok { --sc: var(--st-ok); } .st-busy { --sc: var(--st-busy); }
-.st-input { --sc: var(--st-input); } .st-warn { --sc: var(--st-warn); } .st-error { --sc: var(--st-error); }
+.st-input { --sc: var(--st-input); } .st-warn { --sc: var(--st-warn); } .st-error { --sc: var(--st-error); } .st-testing { --sc: var(--st-testing); }
 
 html, body { height: 100%; margin: 0; background: var(--bg); font-family: var(--font); user-select: none; }
 * { scrollbar-width: thin; scrollbar-color: var(--surface-2) transparent; }
@@ -121,6 +122,7 @@ html, body { height: 100%; margin: 0; background: var(--bg); font-family: var(--
 .pstatus .pupdtext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pstatus .pdot.st-ok { background: var(--st-ok); }
 .pstatus .pdot.st-warn { background: var(--st-warn); }
+.pstatus .pdot.st-testing { background: var(--st-testing); }   /* framework ahead of main: violet */
 /* "update available" is CORAL — dot and word — matching the Glass extension's
    .status.upd exactly (its dot + text both take var(--accent), underlined on
    hover). Gold read as a generic warning and diverged from Glass. The two rules
@@ -569,6 +571,7 @@ body.light {
      values clear 4.5:1 on every light surface (worst: --zone-edit). Fills, dots and borders keep
      the bright hues; only text switches. */
   --faint: #626269;
+  --st-testing: #7c4fc4;
   --accent-ink: #c2342a;
   --st-ok-ink: #1b7843; --st-busy-ink: #935600; --st-input-ink: #1d61bb;
   --st-warn-ink: #835d00; --st-error-ink: #bb2c32;

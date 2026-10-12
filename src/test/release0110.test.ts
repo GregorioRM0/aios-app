@@ -426,3 +426,10 @@ test('TESTING: a vault on a non-default branch is never offered an update (canon
   assert.match(branch, /railUpdate\.onclick = \(\) => pulse\.send\(\{ type: 'recheck' \}\);/, 'clicking only re-checks');
   assert.doesNotMatch(branch, /updateFramework/, 'never offers or runs an update');
 });
+
+test('TESTING has its own colour: violet, distinct from up-to-date green, update coral and needs-you blue', () => {
+  const css = fs.readFileSync(path.join(ROOT, 'renderer', 'theme.css'), 'utf8');
+  assert.match(css, /\.pstatus \.pdot\.st-testing \{ background: var\(--st-testing\); \}/, 'the header dot really paints it (it fell back to green)');
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  assert.match(app, /dotCls = 'pdot st-testing';/);
+});

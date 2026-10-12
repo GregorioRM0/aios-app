@@ -5866,7 +5866,7 @@ function updateRailStatus(state, fw, retrying = false, branch = '') {
   if (state === 'testing') {
     /* TESTING — the vault is on a non-default branch, AHEAD of main. Never offer or run an update:
        it would pull the vault back to main. Clicking only re-checks. */
-    dotCls = 'pdot st-input';
+    dotCls = 'pdot st-testing';
     setText(t('pulse.updTesting'));
     setTitle(t('rail.updateTesting', { branch }));
     railUpdate.onclick = () => pulse.send({ type: 'recheck' });
