@@ -3336,6 +3336,7 @@ function makeTab(id, name, iconName) {
     if (partner !== null) items.push({ label: t('split.openRight'), value: 'right' });
     if (zoneSplit(z)) items.push({ label: t('split.unsplit'), value: 'unsplit' });
     if (pane.kind === 'term' && hasFeedback) items.push({ label: t('tab.report'), value: 'report' });   // AI-200 (hidden without the aios-feedback agent)
+    if (pane.kind === 'term' && pane.sessionId) items.push({ label: t('tab.copyAnswer'), value: 'copyAnswer' });   // AI-192, revised: from the transcript
     if (pane.kind === 'term' && (pane.isSession || pane.sessionId)) items.push({ label: t(pane.readAloud ? 'tab.readAloudOff' : 'tab.readAloudOn'), value: 'readAloud' });   // AI-169
     items.push({ label: '-', value: '-' }, { label: t('tab.close'), value: 'close' });
     /* A NATIVE menu, not the app's listModal. That picker carries a filter box because it was
@@ -3349,6 +3350,7 @@ function makeTab(id, name, iconName) {
       else if (pick === 'close') void requestClosePane(id);
       else if (pick === 'report') void reportThis(id);
       else if (pick === 'readAloud') setReadAloud(id, !pane.readAloud);
+      else if (pick === 'copyAnswer') void window.glassShell.copyLastAnswer(pane.sessionId).then((n) => toast(t(n > 0 ? 'term.copiedAnswer' : 'term.noAnswer')));
       else if (pick === 'rename') {
         const next = (await inputModal(t('tab.rename'), pane.name || t('pulse.terminal'), []) || '').trim();
         if (!next || next === pane.name) return;
@@ -3592,7 +3594,6 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
     cursorBlink: true,
     scrollback: 8000,
     theme: termTheme(THEME),
-    rightClickSelectsWord: true,           // right-click selects the word under the cursor
     macOptionClickForcesSelection: true,   // ⌥-drag selects even over mouse-mode TUIs
     // Option must send ESC-prefixed sequences, not composed characters — this is what makes
     // ⌥↵ (newline in Claude's composer) and ⌥←/→ (word jumps) actually reach the TUI.
@@ -3734,8 +3735,8 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
     // ⌘ conventions every macOS terminal user expects — and that a non-technical operator
     // will try first. Without these, ⌘C sent nothing and ⌘←/→ did nothing at all.
     const k = e.key;
-    /* AI-192 — ⇧⌘C copies the selection as plain text (scaffolding stripped, wraps rejoined). */
-    if (k === 'C' || (k === 'c' && e.shiftKey)) { const sel = term.getSelection(); if (sel) { void window.glassShell.copyPlainText(sel, term.cols).then(() => toast(t('term.copiedPlain'))); return false; } return true; }
+    /* ⇧⌘C is the App menu's "Run command…" — AI-192's copy shortcut collided with it (operator test),
+       so plain-text copy moved to the session tab's "Copy last answer". */
     if (k === 'c') { const sel = term.getSelection(); if (sel) { void window.glassShell.copyText(sel); return false; } return true; }
     /* ⌘V is deliberately NOT handled here. It used to be, and it pasted EVERYTHING TWICE:
        returning false suppresses xterm's KEYBOARD handling but not the browser's native
@@ -3837,20 +3838,11 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
   // select-to-copy: mirror the selection to the clipboard as it changes, so a
   // mouse drag in the terminal copies (matches Claude Code's terminal behavior).
   term.onSelectionChange(() => { const sel = term.getSelection(); if (sel) void window.glassShell.copyText(sel); });
-  /* AI-192 — a right-click menu on the terminal: Copy / Copy as plain text. The selection is
-     stashed on mousedown, because on macOS xterm's right-click selects the word under the
-     pointer and would replace what the operator selected before the menu opens. */
-  let ctxSel = '';
-  el.addEventListener('mousedown', (ev) => { if (ev.button === 2) ctxSel = term.getSelection(); }, true);
-  el.addEventListener('contextmenu', (ev) => {
-    ev.preventDefault();
-    const sel = ctxSel || term.getSelection();
-    if (!sel) return;
-    void window.glassShell.tabMenu([{ label: t('term.copy'), value: 'copy' }, { label: t('term.copyPlain'), value: 'plain' }]).then((pick) => {
-      if (pick === 'copy') void window.glassShell.copyText(sel);
-      else if (pick === 'plain') void window.glassShell.copyPlainText(sel, term.cols).then(() => toast(t('term.copiedPlain')));
-    });
-  });
+  /* AI-192, revised after the operator's test: no right-click menu on the terminal. Inside a Claude
+     session the selection belongs to Claude's own TUI (which already copies on select), so xterm
+     saw only the single word its right-click selected and "Copy as plain text" copied that word.
+     Plain-text copy lives on the session TAB as "Copy last answer", read from the transcript —
+     no selection needed. A plain terminal keeps select-to-copy. */
   paintRunning(); // reflect the new terminal in the RUNNING card immediately
   return id;
 }
@@ -7656,11 +7648,10 @@ function openSetupTab() {
          and it counts itself. */
       'Set up my AI-OS from https://github.com/The-AIOS/aios — read its SETUP.md and follow the sequence in the "Reading this as Claude?" block. '
       + 'I reached you from the AIOS App, so the app is already my execution surface: do not send me to install an IDE or the Glass extension. '
-      /* GitHub is the App's LAST step now, after this session. Without this line SETUP.md's step 1
-         asks for `! gh auth login` up front, which puts back the very sign-in the reorder moved out
-         of the way. SETUP already has the local-only path for exactly this; the App's own GitHub
-         step is where the backup happens. */
-      + 'Do not ask me to sign in to GitHub: the app connects it as its own step after this one, so take the local-only path if GitHub is not connected yet. '
+      /* GitHub is the App's own step, BEFORE this session, and skippable. Without this line SETUP.md's
+         step 1 asks for `! gh auth login` up front — a second ask for something the operator already
+         did, or chose to skip. Either way the session must not re-ask; it uses what is there. */
+      + 'GitHub is handled by the app before this session: if `gh auth status` passes, use it for the private backup as SETUP describes; if not, I chose to skip it for now, so take the local-only path and do not ask me to sign in to GitHub. '
       /* No trailing instruction to run /aios:today. Front A moved the first ritual INSIDE the
          interview (its Step 10) and made it exclusive: nothing else may run it, because the
          interview closes on "Welcome to The AIOS" and anything firing after that goodbye is the
@@ -7777,6 +7768,11 @@ function openSetupTab() {
             void paint();
           });
           adv.appendChild(el('div', 'step-note', t('onboarding.patHint')));
+          /* Operator decision (0.11.0 test): GitHub comes before the setup session, so it must never
+             block it — "Skip for now" passes the step, the setup session takes the local-only path,
+             and connecting later is one sentence to any session. */
+          if (s.state === 'active') mkBtn(acts, t('onboarding.skipGithub'), async () => { await window.glassShell.onboardingSkip('github').catch(() => {}); void paint(); }, { title: t('onboarding.skipGithubHint') });
+          if (s.skipped) acts.appendChild(el('div', 'step-note', t('onboarding.githubSkipped')));
           break;
         }
         case 'firstrun': {

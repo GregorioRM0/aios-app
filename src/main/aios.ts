@@ -2334,7 +2334,18 @@ export async function computeHealth(): Promise<CheckResult[]> {
 
 /** One battery of doctor checks → the gated stepper (done/active/locked). */
 export async function onboardingState(): Promise<OnboardingDerived<CheckResult>> {
-  return deriveOnboarding(await setupChecks());
+  return deriveOnboarding(await setupChecks(), onboardingSkipped());
+}
+/* Steps the operator passed with "Skip for now". In ~/.aios, not the framework's shell.json: the
+   framework may not exist yet when GitHub is offered (it comes before the setup session). */
+const skippedFile = (): string => path.join(os.homedir(), '.aios', 'onboarding-skipped.json');
+export function onboardingSkipped(): Set<string> {
+  try { const j = JSON.parse(fs.readFileSync(skippedFile(), 'utf8')); return new Set(Array.isArray(j) ? j.filter((x) => typeof x === 'string') : []); } catch { return new Set(); }
+}
+export function skipOnboardingStep(id: string): void {
+  if (id !== 'github') return;   // only skippable steps; today that is GitHub alone
+  const s = onboardingSkipped(); s.add(id);
+  try { fs.mkdirSync(path.dirname(skippedFile()), { recursive: true }); fs.writeFileSync(skippedFile(), JSON.stringify([...s]) + '\n'); } catch { /* unwritable — the step stays offered */ }
 }
 
 /**

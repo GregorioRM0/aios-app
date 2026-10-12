@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('glassShell', {
   programStatus: (sessionId: string, data: string, at: number) => ipcRenderer.send('pty:programStatus', { sessionId, data, at }),
   paneSessions: (ids: string[]) => ipcRenderer.send('panes:sessions', ids),
   speakable: (sessionId: string): Promise<{ text: string; lang: string }> => ipcRenderer.invoke('session:speakable', sessionId),
+  copyLastAnswer: (sessionId: string): Promise<number> => ipcRenderer.invoke('session:copyLastAnswer', sessionId),
   ptyResize: (id: number, cols: number, rows: number) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   ptyKill: (id: number) => ipcRenderer.send('pty:kill', { id }),
   onPtyData: (cb: (m: { id: number; data: string }) => void) => ipcRenderer.on('pty:data', (_e, m) => cb(m)),
@@ -109,7 +110,8 @@ contextBridge.exposeInMainWorld('glassShell', {
   connectorsDelete: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('connectors:delete', id),
   connectorsAddCustom: (input: string, service?: string): Promise<ConnResult & { id?: string }> => ipcRenderer.invoke('connectors:addCustom', input, service),
   // the Onboarding flow: sequenced onboarding stepper (steps + which one is active)
-  onboardingState: (): Promise<{ steps: { id: string; done: boolean; state: 'done' | 'active' | 'locked'; required: string[]; optional: string[]; checks: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[] }[]; current: number }> => ipcRenderer.invoke('onboarding:state'),
+  onboardingState: (): Promise<{ steps: { id: string; done: boolean; state: 'done' | 'active' | 'locked'; required: string[]; optional: string[]; skipped?: boolean; checks: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[] }[]; current: number }> => ipcRenderer.invoke('onboarding:state'),
+  onboardingSkip: (id: string): Promise<unknown> => ipcRenderer.invoke('onboarding:skip', id),
   // PAT lane of the GitHub step — stored via git's credential helper, never echoed
   onboardingStorePat: (pat: string): Promise<'verified' | 'unverified' | 'failed'> => ipcRenderer.invoke('onboarding:storePat', pat),
   // starter packs (the Onboarding persona step): list + apply (seeds .glass/state.json)

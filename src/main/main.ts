@@ -5,6 +5,7 @@ import { withDefaultLocale } from './termLocale';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
 import { plainText } from '../core/plainText';
 import { speakable, lastAnswer, guessLang } from '../core/speakable';
+import { answerPlain } from '../core/answerPlain';
 import { t } from '../i18n';
 import { shellArgs } from './shellArgs';
 import * as path from 'path';
@@ -730,6 +731,28 @@ ipcMain.handle('session:speakable', (_e, sessionId: string) => {
   } catch { /* unreadable — say nothing */ }
   return { text: '', lang: '' };
 });
+/* AI-192, revised — "Copy last answer": the session's final answer from its transcript, as plain text,
+   straight to the clipboard. Returns its length (0 = no answer yet). */
+ipcMain.handle('session:copyLastAnswer', (_e, sessionId: string) => {
+  const sid = String(sessionId || '');
+  if (!/^[A-Za-z0-9-]{8,}$/.test(sid)) return 0;
+  try {
+    const base = path.join(aios.claudeConfigDir(), 'projects');
+    for (const d of fs.readdirSync(base)) {
+      const f = path.join(base, d, `${sid}.jsonl`);
+      if (!fs.existsSync(f)) continue;
+      const size = fs.statSync(f).size;
+      const len = Math.min(size, 2 * 1024 * 1024);
+      const fd = fs.openSync(f, 'r');
+      const buf = Buffer.alloc(len);
+      try { fs.readSync(fd, buf, 0, len, size - len); } finally { fs.closeSync(fd); }
+      const text = answerPlain(lastAnswer(buf.toString('utf8')));
+      if (text) clipboard.writeText(text);
+      return text.length;
+    }
+  } catch { /* unreadable */ }
+  return 0;
+});
 ipcMain.on('panes:sessions', (_e, ids: unknown) => aios.setPaneSessionIds(ids));   // AI-203
 ipcMain.on('pty:programStatus', (_e, m: { sessionId?: string; data?: string; at?: number }) => {
   host?.setProgramStatus(String(m?.sessionId ?? ''), String(m?.data ?? ''), Number(m?.at) || Date.now());
@@ -949,6 +972,7 @@ ipcMain.handle('starter:apply', (_e, id: string) => {
 });
 // the Onboarding flow: one doctor battery → the gated stepper (done/active/locked)
 ipcMain.handle('onboarding:state', () => aios.onboardingState());
+ipcMain.handle('onboarding:skip', (_e, id: string) => { aios.skipOnboardingStep(String(id ?? '')); return aios.onboardingState(); });
 // PAT lane: store a GitHub token via `git credential approve` (never echoed)
 /* #50: stored → verified once with GitHub → the gh step can pass on macOS, where the token lives
    in Keychain and the poll may not read it. 'unverified' = stored, but GitHub refused it. */

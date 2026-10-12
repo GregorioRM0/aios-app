@@ -150,17 +150,27 @@ test('AI-190: the renderer stamps the light class from the URL before anything p
   }
 });
 
-test('AI-192: ⇧⌘C and the terminal right-click menu copy as plain text, through the tested core', () => {
+test('AI-192, revised after the operator test: no terminal copy menu, no ⇧⌘C clash; the session tab copies its last answer', () => {
   const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
   const main = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.ts'), 'utf8');
-  assert.match(main, /ipcMain\.handle\('shell:copyPlainText', \(_e, t: string, cols: number\) => \{ clipboard\.writeText\(plainText\(String\(t\), Number\(cols\) \|\| 80\)\)/);
-  assert.match(app, /if \(k === 'C' \|\| \(k === 'c' && e\.shiftKey\)\) \{ const sel = term\.getSelection\(\); if \(sel\) \{ void window\.glassShell\.copyPlainText\(sel, term\.cols\)/);
-  assert.ok(app.indexOf("k === 'C' ||") < app.indexOf("if (k === 'c') { const sel"), '⇧⌘C is checked before plain ⌘C');
-  assert.match(app, /el\.addEventListener\('mousedown', \(ev\) => \{ if \(ev\.button === 2\) ctxSel = term\.getSelection\(\); \}, true\);/, 'the selection is kept before right-click selects a word');
+  const menu = fs.readFileSync(path.join(ROOT, 'src', 'main', 'menu.ts'), 'utf8');
+  assert.match(menu, /accelerator: 'CmdOrCtrl\+Shift\+C', click: \(\) => intent\('pickCommand'\)/, '⇧⌘C stays "Run command…"');
+  assert.doesNotMatch(app, /k === 'C' \|\|/, 'the terminal no longer claims ⇧⌘C');
+  assert.doesNotMatch(app, /rightClickSelectsWord: true/, 'a right-click no longer selects one word');
+  assert.doesNotMatch(app, /ctxSel/, 'no terminal right-click menu');
+  assert.match(app, /if \(pane\.kind === 'term' && pane\.sessionId\) items\.push\(\{ label: t\('tab\.copyAnswer'\), value: 'copyAnswer' \}\);/, 'sessions only');
+  assert.match(main, /const text = answerPlain\(lastAnswer\(buf\.toString\('utf8'\)\)\);\s*if \(text\) clipboard\.writeText\(text\);/);
   for (const loc of ['en', 'es', 'pt-br']) {
     const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'));
-    for (const k of ['term.copy', 'term.copyPlain', 'term.copiedPlain']) assert.ok(d[k], `${loc}: ${k}`);
+    for (const k of ['tab.copyAnswer', 'term.copiedAnswer', 'term.noAnswer']) assert.ok(d[k], `${loc}: ${k}`);
   }
+});
+
+import { answerPlain } from '../core/answerPlain';
+test('Copy last answer: markdown in, WhatsApp-ready text out — accents, arrows, bullets kept', () => {
+  const md = '## Resumen\n\nEsto **funciona** → bien — sin `código` raro.\n\n* uno\n* dos con [enlace](https://x.example)\n\n```\nnpm test\n```\n\nVer session_insights y _énfasis_.';
+  const out = answerPlain(md);
+  assert.equal(out, 'Resumen\n\nEsto funciona → bien — sin código raro.\n\n- uno\n- dos con enlace (https://x.example)\n\nnpm test\n\nVer session_insights y énfasis.');
 });
 
 test('AI-199: an unnamed session\'s topic labels its tab — never over a manual name, never from a shell title', () => {
