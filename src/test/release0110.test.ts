@@ -394,7 +394,8 @@ test('release gate: a draft is published only when all three platform feeds are 
 test('AI-171 step 1: a session row says which skills and agents it used, from its transcript', () => {
   const host = fs.readFileSync(path.join(ROOT, 'src', 'main', 'panelHost.ts'), 'utf8');
   const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
-  assert.match(host, /usageIn\(cut === -1 \? '' : text\.slice\(0, cut\), c\.usage\);/, 'incremental: only appended bytes, whole lines');
+  assert.match(host, /private usage = new UsageReader\(fsUsageIo\);/, 'the shared async reader (review 17: incremental, bounded, byte-split)');
+  assert.match(host, /this\.usage\.prune\(running\.map\(\(a\) => a\.sessionId\)\);/, 'pruned to the running list');
   assert.match(app, /if \(a\.used && a\.used\.chip\) \{\s*const u = el\('span', 'pused', t\('running\.used', \{ what: a\.used\.chip \}\)\);/);
   for (const loc of ['en', 'es', 'pt-br']) {
     const d = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'));

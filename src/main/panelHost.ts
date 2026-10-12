@@ -1,4 +1,6 @@
-import { usageIn, usageChip, type ToolUsage } from '../core/toolUse';
+import { usageChip, type ToolUsage } from '../core/toolUse';
+import { UsageReader } from '../core/usageReader';
+import { fsUsageIo } from './usageIo';
 import { latestSwitches, switchLine, type ModelSwitch } from '../core/modelSwitch';
 import { parseProgramStatus, overlayProgramStatus, type ProgramStatus } from '../core/programStatus';
 import * as fs from 'fs';
@@ -308,38 +310,10 @@ export class PanelHost {
     return this.switchCache.map;
   }
 
-  /** AI-171 — what each session used, read incrementally: only bytes appended since last tick. */
-  private usageCache = new Map<string, { file: string; offset: number; carry: string; usage: ToolUsage }>();
-  private usageFor(sessionId: string): ToolUsage | undefined {
-    if (!sessionId) return undefined;
-    let c = this.usageCache.get(sessionId);
-    if (!c) {
-      const base = path.join(os.homedir(), '.claude', 'projects');
-      let file = '';
-      try { for (const d of fs.readdirSync(base)) { const f = path.join(base, d, `${sessionId}.jsonl`); if (fs.existsSync(f)) { file = f; break; } } } catch { /* none */ }
-      if (!file) return undefined;
-      c = { file, offset: 0, carry: '', usage: { skills: [], agents: [] } };
-      this.usageCache.set(sessionId, c);
-    }
-    try {
-      const size = fs.statSync(c.file).size;
-      if (size < c.offset) { c.offset = 0; c.carry = ''; c.usage = { skills: [], agents: [] }; }   // rewritten
-      if (size > c.offset) {
-        const fd = fs.openSync(c.file, 'r');
-        try {
-          const len = Math.min(size - c.offset, 8 * 1024 * 1024);
-          const buf = Buffer.alloc(len);
-          fs.readSync(fd, buf, 0, len, c.offset);
-          c.offset += len;
-          const text = c.carry + buf.toString('utf8');
-          const cut = text.lastIndexOf('\n');
-          usageIn(cut === -1 ? '' : text.slice(0, cut), c.usage);
-          c.carry = cut === -1 ? text : text.slice(cut + 1);
-        } finally { fs.closeSync(fd); }
-      }
-    } catch { /* transcript momentarily unreadable */ }
-    return c.usage;
-  }
+  /** AI-171 — what each session used. The shared reader (core/usageReader) reads ASYNC, bounded per
+   *  tick, prunes ended sessions and byte-splits at newlines (review should-fix 17). */
+  private usage = new UsageReader(fsUsageIo);
+  private usageFor(sessionId: string): ToolUsage | undefined { return this.usage.get(sessionId); }
 
   postRunning(): void {
     const registry = aios.listOperatorSessions();   // AI-165: never a daemon spare
@@ -356,6 +330,7 @@ export class PanelHost {
     };
     const mem = aios.shellSettings().showMemory ? aios.sessionMemoryMB(running.map((a) => a.pid)) : {};
     const switches = this.modelSwitches();
+    this.usage.prune(running.map((a) => a.sessionId));   // the cache follows the running list
     this.post({
       type: 'running',
       /* Review blocker 6: liveness ("(ended)") is judged against EVERY registered session,
