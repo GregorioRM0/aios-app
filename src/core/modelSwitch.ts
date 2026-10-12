@@ -41,7 +41,12 @@ export function switchLine(s: ModelSwitch | undefined, startedAt: number): strin
 
 /** Review nit: the same answer as data, so the renderer words it in the operator's language (main
  *  used to build the English "on …" itself). `reason` is Claude's own text and stays as written. */
+/** A switch the operator CHOSE (the /model picker, a typed command) is not news — the line exists
+ *  for the switch nobody picked (a fallback, flagged content). Operator test: "on Opus 5.5 — picker". */
+export function operatorChose(reason: string): boolean {
+  return /^(picker|user|model|\/model|command|slash|manual)\b/i.test(String(reason ?? '').trim());
+}
 export function switchParts(s: ModelSwitch | undefined, startedAt: number): { model: string; reason: string } | undefined {
-  if (!s || (startedAt && s.at < startedAt)) return undefined;
+  if (!s || (startedAt && s.at < startedAt) || operatorChose(s.reason)) return undefined;
   return { model: modelName(s.to), reason: s.reason };
 }

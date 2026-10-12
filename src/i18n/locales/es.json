@@ -1118,7 +1118,7 @@
   "settings.advisorCannot": "{advisor} no puede asesorar al modelo de arriba: un asesor debe ser al menos tan capaz como el modelo principal, así que Claude no lo usaría, sin avisarte.",
   "running.modelSwitched": "El modelo de esta sesión cambió mientras corría: {what}. Nadie lo eligió, así que revisa su trabajo.",
   "running.switchedTo": "en {model}",
-  "tab.report": "Reportar esto…",
+  "tab.report": "Enviar comentarios…",
   "report.alreadyOpen": "Ya hay un reporte abierto — termínalo primero.",
   "update.explain": "¿Qué trae?",
   "update.explainTip": "Un agente explica qué cambió en {version}, en una sola página, antes de que instales.",

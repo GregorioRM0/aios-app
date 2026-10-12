@@ -589,3 +589,11 @@ test('review nit: read-aloud keeps snake_case words, strips only emphasis, and s
   const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
   assert.match(app, /stopSpeaking\(id\);   \/\/ review nit: a closed pane's answer stops being read aloud/);
 });
+
+import { switchParts as swParts, operatorChose } from '../core/modelSwitch';
+test('operator test: a model the operator PICKED is not flagged as a switch', () => {
+  const at = Date.parse('2026-10-11T22:00:00Z');
+  assert.equal(operatorChose('picker'), true);
+  assert.equal(swParts({ at, to: 'claude-opus-5-5', from: 'claude-haiku-4-5', reason: 'picker' }, at - 1000), undefined, '"on Opus 5.5 — picker" was the operator\'s own /model');
+  assert.deepEqual(swParts({ at, to: 'claude-opus-4-8', from: 'claude-fable-5-1', reason: 'fallback' }, at - 1000), { model: 'Opus 4.8', reason: 'fallback' }, 'a fallback still shows');
+});

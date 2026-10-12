@@ -1118,7 +1118,7 @@
   "settings.advisorCannot": "{advisor} can't advise the model above: an advisor must be at least as capable as the main model, so Claude would silently not use it.",
   "running.modelSwitched": "This session's model changed while it ran: {what}. Nobody picked it, so check its work.",
   "running.switchedTo": "on {model}",
-  "tab.report": "Report this…",
+  "tab.report": "Send feedback…",
   "report.alreadyOpen": "A report is already open — finish that one first.",
   "update.explain": "What's in it?",
   "update.explainTip": "An agent explains what changed in {version}, as one page — before you install.",
