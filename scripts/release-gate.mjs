@@ -28,5 +28,17 @@ if (d.do === 'wait') {
   console.log(`release-gate: ${tag} stays a DRAFT — still missing ${d.missing.join(', ')} (another lane may still be running; nobody's updater sees a draft)`);
   process.exit(0);
 }
+/* PRESENT IS NOT USABLE (0.11.0 review blocker). A lane can upload its files and THEN fail its own
+   "feed is usable" check — and the next lane would see three manifests and publish a release whose
+   Windows or Linux feed breaks every updater on that platform. So before anything goes public,
+   every platform's feed is checked against the draft with the same rules each lane uses. */
+for (const platform of ['darwin', 'win32', 'linux']) {
+  try {
+    execFileSync('node', ['scripts/assert-release-assets.mjs', '--tag', tag, '--platform', platform], { stdio: 'inherit' });
+  } catch {
+    console.error(`release-gate: ✗ ${tag} stays a DRAFT — the ${platform} feed on it is not usable; fix and re-run that lane`);
+    process.exit(1);
+  }
+}
 execFileSync('gh', ['release', 'edit', tag, '--draft=false', '--latest'], { stdio: 'inherit' });
-console.log(`release-gate: ✓ ${tag} published — all three platform feeds are attached`);
+console.log(`release-gate: ✓ ${tag} published — all three platform feeds are attached and usable`);

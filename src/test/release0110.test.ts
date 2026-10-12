@@ -433,3 +433,18 @@ test('TESTING has its own colour: violet, distinct from up-to-date green, update
   const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
   assert.match(app, /dotCls = 'pdot st-testing';/);
 });
+
+test('release gate (review blocker): every feed must be USABLE before publishing, and a live release is never overwritten', () => {
+  const gate = fs.readFileSync(path.join(ROOT, 'scripts', 'release-gate.mjs'), 'utf8');
+  const i = gate.indexOf("for (const platform of ['darwin', 'win32', 'linux'])");
+  const j = gate.indexOf("'--draft=false'");
+  assert.ok(i > 0 && j > i, 'all three feeds are asserted BEFORE the draft is flipped');
+  assert.match(gate, /execFileSync\('node', \['scripts\/assert-release-assets\.mjs', '--tag', tag, '--platform', platform\]/);
+  assert.match(gate, /process\.exit\(1\);\s*\}\s*\}\s*execFileSync\('gh', \['release', 'edit'/, 'a failing feed exits before publishing');
+  for (const f of ['release.yml', 'release-linux.yml', 'release-windows.yml']) {
+    const wf = fs.readFileSync(path.join(ROOT, '.github', 'workflows', f), 'utf8');
+    const up = wf.indexOf('gh release upload');
+    const guard = wf.indexOf('refusing to upload or overwrite files on a live release');
+    assert.ok(guard > 0 && guard < up, `${f}: the published-release guard runs before any upload`);
+  }
+});

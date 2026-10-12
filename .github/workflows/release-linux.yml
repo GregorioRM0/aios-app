@@ -9,8 +9,9 @@ name: Release (Linux)
 # mac job owns creation; this one only adds to what already exists.
 #
 # Two triggers:
-#   workflow_dispatch  attach Linux artifacts to a tag that is already published (today's case)
-#   push: tags v*      future releases pick up Linux automatically, after mac has published
+#   workflow_dispatch  re-run the Linux lane for a tag whose release is still a DRAFT
+#   push: tags v*      the normal path: attach to mac's draft; the gate publishes once all three
+#                      feeds are attached AND usable. A PUBLISHED release is never touched.
 #
 # WHY `ref` IS A SEPARATE INPUT, AND WHEN IT MATTERS:
 # Normally you build the tag you are attaching to, and `ref` should be left blank. But the first
@@ -129,6 +130,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -la dist/*.AppImage dist/*.deb dist/latest-linux.yml
+          # Never touch files on a release that is already PUBLIC (0.11.0 review blocker): users'
+          # updaters read it, and overwriting a live feed is how a working update breaks.
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ]; then
+            echo "::error::$RELEASE_TAG is already published — refusing to upload or overwrite files on a live release"; exit 1
+          fi
           gh release upload "$RELEASE_TAG" \
             dist/*.AppImage dist/*.deb dist/latest-linux.yml --clobber
 
