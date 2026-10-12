@@ -26,7 +26,7 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
      .5-.65, which measured 2.4-3.3:1. This value clears 4.5:1 on every dark surface (worst:
      --surface-2 at 4.74) and still sits well below --subtle (5.7-6.6). */
   --faint: #85858e;
-  /* Chuy's decision (0.11.0): the coral BUTTON fill is darkened until white text passes AA —
+  /* Operator decision (0.11.0): the coral BUTTON fill is darkened until white text passes AA —
      #ff5d4d under white was 3.03:1; this is 4.67:1, and hover goes darker (5.32:1), never
      lighter. The bright --accent stays for the logo and accents. Same in both themes: the coral
      does not flip, and neither does the white text on it. */
@@ -157,7 +157,7 @@ button.tpick:hover { border-color: var(--accent); }
 .dzkind:hover { color: var(--ink); border-color: var(--accent); }
 .dzkind.on { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
 .dzabout { font-size: 12px; color: var(--subtle); line-height: 1.55; }
-.dzhome { font-size: 11px; color: var(--subtle); font-family: var(--mono); opacity: .8; margin-top: 6px; }
+.dzhome { font-size: 11px; color: var(--faint); font-family: var(--mono); margin-top: 6px; }
 /* stacked fields — label + hint above a full-width control (a form you type prose into) */
 .dzfield { margin: 14px 0; }
 .dzlabel { font-size: 12.5px; font-weight: 600; color: var(--ink); margin-bottom: 3px; }
@@ -640,7 +640,7 @@ body.light .modal-wrap { background: rgba(0,0,0,.25); }
             color: var(--faint); margin-left: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xdot.ring { background: transparent; border: 1.5px solid var(--accent); box-sizing: border-box; opacity: .6; }
 .xext { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
-.xempty { color: var(--subtle); font-size: 11px; line-height: 1.45; padding: 4px 14px 8px; opacity: .7; }
+.xempty { color: var(--faint); font-size: 11px; line-height: 1.45; padding: 4px 14px 8px; }
 .xadd { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--subtle); border-radius: 6px;
         width: 19px; height: 19px; font-size: 14px; cursor: pointer; padding: 0; flex: 0 0 auto;
         display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
@@ -946,7 +946,7 @@ body.no-hints .xsectsub { display: none; }
 .pbtn:hover { background: var(--surface); border-color: var(--accent); }
 .pbemoji { width: 16px; flex: 0 0 auto; opacity: .92; display: inline-flex; align-items: center; justify-content: center; color: var(--subtle); }
 .pblabel { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.pbkey { color: var(--subtle); font-size: 10px; font-family: var(--mono); opacity: .72; white-space: nowrap; }
+.pbkey { color: var(--faint); font-size: 10px; font-family: var(--mono); white-space: nowrap; }
 .pbval { color: var(--accent-ink); font-family: var(--mono); font-size: 11px; min-width: 14px; text-align: right; flex: 0 0 auto; }
 .pbtn.primary { background: var(--accent-fill); color: #fff; border-color: var(--accent-fill); font-weight: 650; justify-content: center; }
 .pbtn.primary:hover { background: var(--accent-fill-hover); border-color: var(--accent-fill-hover); }
@@ -977,7 +977,7 @@ body.no-hints .xsectsub { display: none; }
 .plug-badge.coach { color: #6cb0ff; border-color: rgba(108,176,255,.4); }
 .plug-badge.plugin-partner { color: #c792ea; border-color: rgba(199,146,234,.4); }
 .plug-desc { color: var(--subtle); font-size: 12px; line-height: 1.5; margin-top: 8px; flex: 1; }
-.plug-mkt { color: var(--subtle); font-size: 10.5px; font-family: var(--mono); margin-top: 10px; opacity: .7;
+.plug-mkt { color: var(--faint); font-size: 10.5px; font-family: var(--mono); margin-top: 10px;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plug-foot { display: flex; align-items: center; gap: 8px; margin-top: 13px; }
 .plug-foot .vbtn { display: inline-flex; align-items: center; gap: 5px; }
@@ -1038,6 +1038,12 @@ body.compact .plitem { padding: 4px 6px; }
 .psubbox .prow2 { padding: 5px 8px; }
 .psubbox .pdot { width: 8px; height: 8px; }
 .psubempty { color: var(--faint); font-size: 11px; padding: 5px 10px; }
+/* Review 13 — what AI-203's scope hid: a count that opens into plain rows. Muted with --faint (which
+   passes 4.5:1), never with opacity, and with no actions: these rows never notify. */
+.phiddentoggle { background: none; border: 0; color: var(--faint); font: inherit; font-size: 11px; padding: 5px 10px; cursor: pointer; text-align: left; }
+.phiddentoggle:hover { color: var(--muted); text-decoration: underline; }
+.prow.phidden { color: var(--faint); display: flex; gap: 8px; padding: 3px 10px; font-size: 11.5px; }
+.prow.phidden .pproj, .prow.phidden .pstate { font-family: var(--mono); font-size: 10.5px; }
 
 /* ═══ rail framework-status colors ═══ */
 .ribtn.updok { color: var(--st-ok-ink); }
@@ -1107,7 +1113,7 @@ body.compact .plitem { padding: 4px 6px; }
           border: 1px solid rgba(255,93,77,.28); color: var(--ink); border-radius: 11px 11px 4px 11px;
           padding: 7px 10px; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
           user-select: text; }
-.dz-note { color: var(--subtle); font-size: 10px; font-family: var(--mono); padding: 0 2px; opacity: .8; }
+.dz-note { color: var(--faint); font-size: 10px; font-family: var(--mono); padding: 0 2px; }
 .dz-composer { flex: 0 0 auto; border-top: 1px solid var(--line); padding: 10px 12px; display: flex; gap: 8px;
                align-items: flex-end; }
 .dz-ask { flex: 1; min-width: 0; background: var(--bg); color: var(--ink); border: 1px solid var(--line);
@@ -1124,15 +1130,15 @@ body.compact .plitem { padding: 4px 6px; }
 .dz-label { display: flex; align-items: baseline; gap: 8px; color: var(--subtle); font-size: 10px;
             font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
 .dz-label .dz-count { margin-left: auto; font-family: var(--mono); font-weight: 500; letter-spacing: 0;
-                      text-transform: none; opacity: .75; }
-.dz-hint { color: var(--subtle); font-size: 11px; opacity: .8; }
+                      text-transform: none; color: var(--faint); }
+.dz-hint { color: var(--faint); font-size: 11px; }
 .dz-input, .dz-sel, .dz-ta { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--ink);
              border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; font-size: 13px;
              font-family: var(--font); outline: none; transition: border-color .15s; }
 .dz-ta { font-size: 12.5px; line-height: 1.55; resize: vertical; }
 .dz-bigta { font-family: var(--mono); font-size: 12px; line-height: 1.6; min-height: 240px; }
 .dz-input:focus, .dz-sel:focus, .dz-ta:focus { border-color: var(--accent); }
-.dz-empty { color: var(--subtle); font-size: 12.5px; text-align: center; padding: 40px 16px; opacity: .75; }
+.dz-empty { color: var(--faint); font-size: 12.5px; text-align: center; padding: 40px 16px; }
 .dz-foot { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--line);
            padding: 11px 18px; }
 .dz-path { flex: 1; min-width: 0; color: var(--subtle); font-size: 10.5px; font-family: var(--mono);
@@ -1447,7 +1453,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 /* AI-82 split view. `.shown` is every pane on screen; `.active` is the one the keystrokes reach.
    Two marks because the operator needs both answers, and with two panes up "which is focused" is
    a question the single `.active` class could never have been asked. */
-.tab.shown:not(.active) { border-color: var(--line); opacity: .92; }
+.tab.shown:not(.active) { border-color: var(--line); }
 .tab.shown:not(.active) .tname { color: var(--ink); }
 /* The focused pane in a split gets a visible edge — with two terminals side by side, nothing else
    on screen says where the next keystroke lands. */
@@ -1469,7 +1475,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 /* #28 — a restored tab that has not been opened yet. Dimmed and italic so it reads as "waiting",
    not as a live session; opening it resumes the real one in its place. No animation of any kind:
    a placeholder that moves would be a repaint loop waiting to happen, which is how AI-157 began. */
-.tab.restoring .tname { opacity: .6; font-style: italic; }
+.tab.restoring .tname { color: var(--faint); font-style: italic; }
 .pane.restorecard { display: flex; align-items: center; justify-content: center; }
 .restoremsg { color: var(--subtle); font-size: 12px; }
 
