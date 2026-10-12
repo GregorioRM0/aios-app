@@ -1,7 +1,7 @@
 import { usageChip, type ToolUsage } from '../core/toolUse';
 import { UsageReader } from '../core/usageReader';
 import { fsUsageIo } from './usageIo';
-import { latestSwitches, switchLine, type ModelSwitch } from '../core/modelSwitch';
+import { latestSwitches, switchParts, type ModelSwitch } from '../core/modelSwitch';
 import { parseProgramStatus, overlayProgramStatus, type ProgramStatus } from '../core/programStatus';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -342,7 +342,7 @@ export class PanelHost {
       hidden: aios.listRunningAgents().filter(aios.isOperatorSession)
         .filter((a) => !registry.some((r) => r.sessionId === a.sessionId))
         .map((a) => ({ name: a.name, id: a.sessionId, status: a.status, proj: projOf(a.cwd) })),
-      running: running.map((a) => ({ name: a.name, pid: a.pid, id: a.sessionId, key: sessionKey(a), status: a.status, proj: projOf(a.cwd), startedAt: a.startedAt, updatedAt: a.updatedAt, mem: mem[a.pid], waitingFor: a.waitingFor, statusUpdatedAt: a.statusUpdatedAt, modelSwitch: switchLine(switches.get(a.sessionId), a.startedAt), used: (() => { const u = this.usageFor(a.sessionId); return u ? { chip: usageChip(u), skills: u.skills, agents: u.agents } : undefined; })() })),
+      running: running.map((a) => ({ name: a.name, pid: a.pid, id: a.sessionId, key: sessionKey(a), status: a.status, proj: projOf(a.cwd), startedAt: a.startedAt, updatedAt: a.updatedAt, mem: mem[a.pid], waitingFor: a.waitingFor, statusUpdatedAt: a.statusUpdatedAt, modelSwitch: switchParts(switches.get(a.sessionId), a.startedAt), used: (() => { const u = this.usageFor(a.sessionId); return u ? { chip: usageChip(u), skills: u.skills, agents: u.agents } : undefined; })() })),
       quota: rl
         ? { has: true, fiveHour: rl.fiveHourPct, sevenDay: rl.sevenDayPct, fr: rl.fiveHourResetsAt, sr: rl.sevenDayResetsAt, showSwap: false, to: '' }
         : { has: false, fiveHour: 0, sevenDay: 0, showSwap: false, to: '' },

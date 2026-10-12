@@ -38,3 +38,10 @@ export function switchLine(s: ModelSwitch | undefined, startedAt: number): strin
   if (!s || (startedAt && s.at < startedAt)) return '';
   return `on ${modelName(s.to)}${s.reason ? ` — ${s.reason}` : ''}`;
 }
+
+/** Review nit: the same answer as data, so the renderer words it in the operator's language (main
+ *  used to build the English "on …" itself). `reason` is Claude's own text and stays as written. */
+export function switchParts(s: ModelSwitch | undefined, startedAt: number): { model: string; reason: string } | undefined {
+  if (!s || (startedAt && s.at < startedAt)) return undefined;
+  return { model: modelName(s.to), reason: s.reason };
+}

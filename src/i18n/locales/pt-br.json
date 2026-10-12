@@ -1117,6 +1117,7 @@
   "settings.advisorOff": "Desligado",
   "settings.advisorCannot": "{advisor} não pode assessorar o modelo acima: um assessor precisa ser pelo menos tão capaz quanto o modelo principal, então o Claude não o usaria, sem avisar.",
   "running.modelSwitched": "O modelo desta sessão mudou enquanto rodava: {what}. Ninguém o escolheu, então revise o trabalho dela.",
+  "running.switchedTo": "em {model}",
   "tab.report": "Reportar isto…",
   "report.alreadyOpen": "Já há um relatório aberto — termine esse primeiro.",
   "update.explain": "O que tem?",

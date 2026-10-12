@@ -343,7 +343,10 @@ test('AI-197: the latest model switch of THIS run shows on the session row, in a
   assert.equal(modelName('claude-haiku-4-5-20251001'), 'Haiku 4.5');
   assert.equal(modelName('claude-opus-5-5[1m]'), 'Opus 5.5 (1M)');
   const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
-  assert.match(app, /if \(a\.modelSwitch\) \{ const ms = el\('span', 'pswitch'/);
+  assert.match(app, /const what = t\('running\.switchedTo', \{ model: a\.modelSwitch\.model \}\)/, 'worded in the renderer, in the operator\'s language');
+  const { switchParts } = await import('../core/modelSwitch');
+  assert.deepEqual(switchParts(m.get('s1'), Date.parse('2026-10-11T19:00:00Z')), { model: 'Opus 4.8', reason: 'flagged content' });
+  for (const loc of ['en', 'es', 'pt-br']) assert.match(JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'))['running.switchedTo'], /\{model\}/);
 });
 
 test('AI-201: the demo builds a whole synthetic home — no real vault, registry, account or inbox can reach the screen', () => {
@@ -574,4 +577,15 @@ test('review nit: an advised Sonnet/Haiku worker gets canonical\'s consult instr
   }
   const bus = fs.readFileSync(path.join(ROOT, 'src', 'main', 'commandBus.ts'), 'utf8');
   assert.match(bus, /if \(needsConsultBlock\(model, advisorModelFor\(req\.advisor, req\.advisorRung\)\)\)/);
+});
+
+import { speakable as speakableText } from '../core/speakable';
+test('review nit: read-aloud keeps snake_case words, strips only emphasis, and stops when its pane closes', () => {
+  const out = speakableText('The _important_ part: update __session_insights__ and the run_id field.', 'the rest is on screen');
+  assert.match(out, /important part/, 'emphasis underscores are dropped');
+  assert.match(out, /session insights/, 'an inner underscore reads as a space, not "sessioninsights"');
+  assert.match(out, /run id/);
+  assert.doesNotMatch(out, /_/);
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  assert.match(app, /stopSpeaking\(id\);   \/\/ review nit: a closed pane's answer stops being read aloud/);
 });

@@ -2102,7 +2102,11 @@ function sessionRow(a) {
     u.title = t('running.usedTip', { names });
     r.appendChild(u);
   }
-  if (a.modelSwitch) { const ms = el('span', 'pswitch', '· ' + a.modelSwitch); ms.title = t('running.modelSwitched', { what: a.modelSwitch }); r.appendChild(ms); }
+  if (a.modelSwitch && a.modelSwitch.model) {
+    /* Worded here, in the operator's language; the reason is Claude's own text (review nit). */
+    const what = t('running.switchedTo', { model: a.modelSwitch.model }) + (a.modelSwitch.reason ? ' — ' + a.modelSwitch.reason : '');
+    const ms = el('span', 'pswitch', '· ' + what); ms.title = t('running.modelSwitched', { what }); r.appendChild(ms);
+  }
   const mem = fmtMem(a.mem);
   if (mem) r.appendChild(el('span', 'rmem', mem));
   // open: reveal the in-window pane, OR resume the session INTO the app (so external sessions actually load)
@@ -3908,6 +3912,7 @@ function closePane(id) {
   if (p.ro) { try { p.ro.disconnect(); } catch { /* already gone */ } }
   if (p.gl) { try { p.gl.dispose(); } catch { /* already gone */ } }
   if (p.kind === 'term' && !p.exited) window.glassShell.ptyKill(id);
+  stopSpeaking(id);   // review nit: a closed pane's answer stops being read aloud
   p.el.remove();
   p.tab.remove();
   panes.delete(id);
@@ -7328,7 +7333,9 @@ function openSettingsTab() {
     const modelSel = mkSelect(MODELS, cc.model, 'model');
     row(wrap, t('settings.model'), modelSel, t('settings.modelHint'));
     /* AI-194 — effort, Claude's second knob (`effortLevel`). "Default" deletes the key, so the
-       session keeps Claude's own default for whichever model it runs. */
+       session keeps Claude's own default for whichever model it runs. `max` is deliberately absent:
+       Claude Code's settings schema does not persist it (it exists for one session — the bus's
+       contract-4 `effort` honours it on a spawn). Writing it here would be a value Claude rejects. */
     const EFFORTS = [[t('settings.effortDefault'), ''], [t('effort.low'), 'low'], [t('effort.medium'), 'medium'], [t('effort.high'), 'high'], [t('effort.xhigh'), 'xhigh']];
     row(wrap, t('settings.effort'), mkSelect(EFFORTS, cc.effort || '', 'effort'), t('settings.effortHint'));
     /* AI-195 — the advisor. Measured: an advisor less capable than the main model is SILENTLY not

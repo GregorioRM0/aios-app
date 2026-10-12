@@ -15,7 +15,12 @@ export function speakable(text: string, restOnScreen: string): string {
   s = s.replace(/https?:\/\/\S+/g, '');                          // links
   s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');                 // markdown links → text
   s = s.replace(/^#{1,6}\s+/gm, '').replace(/^\s*[-*•]\s+/gm, '').replace(/^\s*>\s?/gm, '');
-  s = s.replace(/\*\*|__|\*|_/g, '');
+  /* Emphasis markers only (review nit): stripping EVERY underscore read `session_insights` as
+     "sessioninsights". Emphasis underscores sit at word edges; an inner one joins words, and reads
+     as a space. */
+  s = s.replace(/\*\*|\*/g, '');
+  s = s.replace(/([A-Za-z0-9])_+(?=[A-Za-z0-9])/g, '$1 ');   // between letters: a word joint → a space
+  s = s.replace(/_/g, '');                                    // what is left is emphasis or an edge
   const paras = s.split(/\n\s*\n/).map((p) => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
   if (!paras.length) return '';
   let first = paras[0];
