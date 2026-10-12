@@ -18,7 +18,7 @@ import {
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
   shouldReleaseForSibling, countDeliveries, verifyVerdict, isDeliverable, maxAttemptsFor,
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
-  queueTurn, stampAge, withQueuedAt, queuedAtOf, isQueuedDelivery, type QueuedSend,
+  queueTurn, stampAge, withQueuedAt, queuedAtOf, isQueuedDelivery, supersedes, type QueuedSend,
 } from '../core/sendQueue';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
 import { MY_SURFACE } from './surface';
@@ -634,7 +634,11 @@ async function runSend(
     /* AI-205 — one at a time, oldest first; a newer message from the same sender replaces an older
        one still waiting. Only before the first type: once typed, a message is in flight. */
     if (!firstTypedAt) {
-      const turn = queueTurn({ key: path.basename(heldPath), target: req.name, from: req.from, queuedAt }, heldSends());
+      /* Retired before its first type by the newer message that replaces it (below, on either
+         surface): it must not be delivered. */
+      if (!fs.existsSync(heldPath)) return;
+      const me = { key: path.basename(heldPath), target: req.name, from: req.from, queuedAt };
+      const turn = queueTurn(me, heldSends());
       if (turn.do === 'superseded') {
         archiveSuperseded(heldPath, turn.by);   // review nit: archived with what replaced it, never silently deleted
         log(`send → '${req.name}' SUPERSEDED by a newer message from '${req.from}' (${turn.by}) — the older one is not delivered`);
@@ -644,6 +648,13 @@ async function runSend(
         if (!fs.existsSync(heldPath)) return;
         await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
         continue;
+      }
+      /* Going out: retire every older message this one replaces NOW, rather than trusting each of
+         them to notice later (0.11.0 test 6.4 — the older resume checked after this send was
+         delivered and removed, found nothing newer, and went out too, after its own correction). */
+      for (const old of supersedes(me, heldSends())) {
+        archiveSuperseded(path.join(path.dirname(heldPath), old.key), me.key);
+        log(`retired ${old.key} — superseded by ${me.key}`);
       }
       deliverText = stampAge(rawDeliver, Date.now() - queuedAt, req.from);
       needle = safeNeedle(deliverText);
