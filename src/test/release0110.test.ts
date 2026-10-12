@@ -405,7 +405,7 @@ test('AI-200: Report this and What\'s in it? open the canonical agents with a br
 test('AI-205: the App waits for the next idle, in order, superseding, aged — and verifies from the first type', () => {
   const bus = fs.readFileSync(path.join(ROOT, 'src', 'main', 'commandBus.ts'), 'utf8');
   assert.match(bus, /decideSend\(target, Date\.now\(\) - queuedAt, TIMINGS\.QUEUE_CEILING_MS\)/, 'a live busy target is held to the ceiling, from its FIRST queue time');
-  assert.match(bus, /const me = \{ key: path\.basename\(heldPath\), target: req\.name, from: req\.from, queuedAt \};\s*const turn = queueTurn\(me, heldSends\(\)\);/);
+  assert.match(bus, /const me = \{ key: path\.basename\(heldPath\), target: sessionKey\(req\.name\), from: req\.from, queuedAt \};\s*const turn = queueTurn\(me, heldSends\(\)\);/);
   assert.match(bus, /for \(const old of supersedes\(me, heldSends\(\)\)\) \{\s*archiveSuperseded\(path\.join\(path\.dirname\(heldPath\), old\.key\), me\.key\);/, 'operator test 6.4: the correction retires what it replaces before typing');
   assert.match(bus, /deliverText = stampAge\(rawDeliver, Date\.now\(\) - queuedAt, req\.from\);\s*needle = safeNeedle\(deliverText\);/, 'needle comes from the stamped text');
   assert.match(bus, /heldMs: Date\.now\(\) - firstTypedAt,/, 'a message that queued for hours still gets its whole verification window');

@@ -12,6 +12,7 @@ import { needsConsultBlock, ADVISOR_CONSULT_BLOCK } from '../core/advisor';
 import { normalizeVerb } from '../core/busVerbs';
 import { ResumeIndex } from './resumeIndex';
 import { supersededName, supersededBody, SUPERSEDED_SUFFIX, SUPERSEDED_KEEP_MS } from '../core/supersede';
+import { resolveSessionName, sessionKey } from '../core/nameMatch';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
@@ -309,7 +310,11 @@ function emit(win: BrowserWindow | undefined, kind: string, payload: Record<stri
 
 /** Live session by sanitized name, from the authoritative registry. */
 function targetByName(name: string): SendTarget | undefined {
-  const hit = aios.listRunningAgents().find((a) => a.name === name);
+  /* Exact first, else the ONE live session whose name cleans to the same handle (core/nameMatch,
+     app#58's idea): `--name Market-desk` is reachable as `market-desk`. Ambiguous → none. */
+  const all = aios.listRunningAgents();
+  const real = resolveSessionName(name, all.map((a) => a.name));
+  const hit = real === undefined ? undefined : all.find((a) => a.name === real);
   if (!hit || !Number.isInteger(hit.pid) || hit.pid <= 1) return undefined;
   return {
     name: hit.name, pid: hit.pid,
@@ -408,7 +413,7 @@ function heldSends(): QueuedSend[] {
       /* A hold whose holder is DEAD is not in line (review should-fix 8): it would block its target
          until someone adopts it. The periodic adoption below picks it up. */
       if (c && !alive(c.pid)) continue;
-      out.push({ key: n, target: b.name, from: cleanFrom(b.from), queuedAt: queuedAtOf(b, c ? c.at : fs.statSync(path.join(dir, n)).mtimeMs) });
+      out.push({ key: n, target: sessionKey(b.name), from: cleanFrom(b.from), queuedAt: queuedAtOf(b, c ? c.at : fs.statSync(path.join(dir, n)).mtimeMs) });
     } catch { /* mid-write or gone */ }
   }
   return out;
@@ -637,7 +642,7 @@ async function runSend(
       /* Retired before its first type by the newer message that replaces it (below, on either
          surface): it must not be delivered. */
       if (!fs.existsSync(heldPath)) return;
-      const me = { key: path.basename(heldPath), target: req.name, from: req.from, queuedAt };
+      const me = { key: path.basename(heldPath), target: sessionKey(req.name), from: req.from, queuedAt };
       const turn = queueTurn(me, heldSends());
       if (turn.do === 'superseded') {
         archiveSuperseded(heldPath, turn.by);   // review nit: archived with what replaced it, never silently deleted
@@ -964,9 +969,18 @@ function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number 
 /** Set by initCommandBus so the parse-grace re-check can reach the same pipeline. */
 let recheck: (fsPath: string) => void = () => { /* until the bus starts */ };
 
+/* A request addressing a LIVE session uses its real registry name from here on, so every later step
+   (the pane lookup, the verdict, the log) agrees. A spawn creates the name, so it is left alone. */
+function withRealName(req: BusRequest): BusRequest {
+  if (req.action !== 'send' && req.action !== 'kill' && req.action !== 'resume') return req;
+  const real = resolveSessionName(req.name, aios.listRunningAgents().map((a) => a.name));
+  return real && real !== req.name ? { ...req, name: real } : req;
+}
+
 function consume(win: () => BrowserWindow | undefined, fsPath: string): void {
-  const held = claim(fsPath);
-  if (!held) return;
+  const held0 = claim(fsPath);
+  if (!held0) return;
+  const held = { ...held0, req: withRealName(held0.req) };
   if (held.req.action === 'send') void runSend(win, held.heldPath, held.req, held.at);
   else runImmediate(win, held.heldPath, held.req);
 }
@@ -1012,8 +1026,9 @@ function adoptHolds(win: () => BrowserWindow | undefined, dir: string): void {
     withQueuedAt(body, stamp ? stamp.at : Date.now());
     body._claim = { surface: MY_SURFACE, pid: process.pid, at: Date.now() };
     try { fs.writeFileSync(p, JSON.stringify(body, null, 2) + '\n'); } catch { /* keep going */ }
-    if (req.action === 'send') void runSend(win, p, req, Date.now());
-    else runImmediate(win, p, req);
+    const real = withRealName(req);
+    if (real.action === 'send') void runSend(win, p, real, Date.now());
+    else runImmediate(win, p, real);
   }
 }
 

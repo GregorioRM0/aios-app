@@ -71,7 +71,7 @@ test('AI-165: the panel, notifications and the palette use the operator list; th
      before it is read; what this guards is unchanged — the source is the OPERATOR list. */
   assert.match(host, /const registry = aios\.listOperatorSessions\(\);[\s\S]{0,300}const running = overlayProgramStatus\(registry, this\.programStatus\);\s*this\.attention\.tick/, 'panel rows + "needs you" notifications');
   assert.match(main, /running: aios\.listOperatorSessions\(\),/, 'the palette session list');
-  assert.match(bus, /aios\.listRunningAgents\(\)\.find\(\(a\) => a\.name === name\)/, 'send/kill still find background agents by name');
+  assert.match(bus, /const all = aios\.listRunningAgents\(\);\s*const real = resolveSessionName\(name, all\.map\(\(a\) => a\.name\)\);/, 'send/kill still find background agents by name (the full list, any case)');
 });
 
 /* What's New for someone who skipped a release (operator's question, 2026-09-23). */
