@@ -358,6 +358,9 @@ export class PanelHost {
     const switches = this.modelSwitches();
     this.post({
       type: 'running',
+      /* Review blocker 6: liveness ("(ended)") is judged against EVERY registered session,
+         never the filtered panel list — a session the panel hides is still alive in its tab. */
+      alive: aios.listRunningAgents().map((a) => ({ id: a.sessionId, name: a.name })),
       running: running.map((a) => ({ name: a.name, pid: a.pid, id: a.sessionId, key: sessionKey(a), status: a.status, proj: projOf(a.cwd), startedAt: a.startedAt, updatedAt: a.updatedAt, mem: mem[a.pid], waitingFor: a.waitingFor, statusUpdatedAt: a.statusUpdatedAt, modelSwitch: switchLine(switches.get(a.sessionId), a.startedAt), used: (() => { const u = this.usageFor(a.sessionId); return u ? { chip: usageChip(u), skills: u.skills, agents: u.agents } : undefined; })() })),
       quota: rl
         ? { has: true, fiveHour: rl.fiveHourPct, sevenDay: rl.sevenDayPct, fr: rl.fiveHourResetsAt, sr: rl.sevenDayResetsAt, showSwap: false, to: '' }

@@ -448,3 +448,51 @@ test('release gate (review blocker): every feed must be USABLE before publishing
     assert.ok(guard > 0 && guard < up, `${f}: the published-release guard runs before any upload`);
   }
 });
+
+/* Review blocker 6 — a named session in an App pane, in a folder that is neither the framework nor
+   a workspace, stayed "(ended)" every pulse: the renderer could only report the pane's session id
+   after the panel listed it, and the panel never listed it. Membership is now read from the
+   process tree in main, and the tab's liveness from the unfiltered registry. */
+test('blocker 6: a session descended from an App pty is the operator\'s, wherever it runs', async () => {
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},30000)'], { stdio: 'ignore' });
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-home-'));
+  const fw = path.join(home, 'aios');
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-elsewhere-'));
+  fs.mkdirSync(path.join(home, '.claude', 'sessions'), { recursive: true });
+  fs.mkdirSync(fw, { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'sessions', `${child.pid}.json`), JSON.stringify({
+    pid: child.pid, sessionId: 's-build', name: 'build', kind: 'interactive', entrypoint: 'cli', status: 'idle', cwd: elsewhere,
+  }));
+  const saved = { h: process.env.HOME, u: process.env.USERPROFILE, f: process.env.GLASS_FRAMEWORK_PATH };
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.GLASS_FRAMEWORK_PATH = fw;
+  try {
+    aios.setPaneSessionIds([]);   // the renderer has not reported anything — the race the review found
+    aios.setPtyPidSource(() => []);
+    assert.deepEqual(aios.listOperatorSessions().map((a) => a.name), [], 'control: not in a pane, not in a workspace → hidden');
+    aios.setPtyPidSource(() => [process.pid]);   // this test process plays the pty; the child is its descendant
+    assert.deepEqual(aios.listOperatorSessions().map((a) => a.name), ['build'], 'in a pane → listed, with no renderer report');
+  } finally {
+    aios.setPtyPidSource(() => []);
+    child.kill();
+    for (const [k, v] of [['HOME', saved.h], ['USERPROFILE', saved.u], ['GLASS_FRAMEWORK_PATH', saved.f]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(elsewhere, { recursive: true, force: true });
+  }
+});
+
+test('blocker 6: tree membership maps pty descendants to session ids (injected ps table)', () => {
+  aios.setPtyPidSource(() => [100]);
+  try {
+    const running = [{ pid: 300, sessionId: 's-a' }, { pid: 900, sessionId: 's-b' }] as never;
+    const ids = aios.paneSessionIdsFromTree(running, '100 1\n200 100\n300 200\n900 1\n');
+    assert.deepEqual([...ids], ['s-a'], 'the grandchild of the pty is in a pane; the unrelated session is not');
+  } finally { aios.setPtyPidSource(() => []); }
+});
+
+test('blocker 6: "(ended)" is judged against every registered session, not the filtered panel list', () => {
+  const host = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'panelHost.ts'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '..', '..', 'renderer', 'app.js'), 'utf8');
+  assert.match(host, /alive: aios\.listRunningAgents\(\)\.map/, 'the running post carries the unfiltered list');
+  assert.match(app, /const everyone = Array\.isArray\(m\.alive\) \? m\.alive : m\.running;/, 'the liveness pass reads it');
+  assert.match(app, /const byId = new Map\(everyone\./, 'ids come from the unfiltered list');
+});

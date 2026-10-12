@@ -221,7 +221,7 @@ test('AI-69: the CSS actually hides it, and blocks its pointer events', () => {
    this same seam (see AI-64), and the same lesson each time — a label is not an identity. */
 
 test('a rename must be followed by identity, not mistaken for a death', () => {
-  const pulse = /const liveNames = new Set\(m\.running[\s\S]*?renamePane\(pid, t\('tab\.endedSession'[\s\S]*?\n    \}/.exec(app);
+  const pulse = /const liveNames = new Set\(everyone[\s\S]*?renamePane\(pid, t\('tab\.endedSession'[\s\S]*?\n    \}/.exec(app);
   assert.ok(pulse, 'the ending-detection block must be findable');
   const block = pulse[0];
   assert.match(block, /byId\.get\(pane\.sessionId\)/,

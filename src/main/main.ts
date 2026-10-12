@@ -44,6 +44,7 @@ const rendererErrors: string[] = [];
 const SHOT = process.argv.find((a) => a.startsWith('--shot')); // --shot[=/path.png] : render + screenshot + exit (dev/QA)
 const EVAL = process.argv.find((a) => a.startsWith('--eval=')); // --eval=<js> : run JS in the renderer, print result, exit (dev/QA)
 const ptys = new Map<number, pty.IPty>();
+aios.setPtyPidSource(() => [...ptys.values()].map((p) => p.pid));   // review blocker 6: pane membership from the tree
 let nextId = 1;
 
 function createWindow(): BrowserWindow {

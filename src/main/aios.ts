@@ -439,8 +439,35 @@ export function isOperatorSession(a: { kind: string; entrypoint: string }): bool
   return a.kind === 'interactive' && !/^sdk-/i.test(a.entrypoint);
 }
 export function listOperatorSessions(): RunningAgent[] {
-  const scope = sessionScope();
-  return listRunningAgents().filter(isOperatorSession).filter((a) => inScope({ ...a, cwd: realOr(a.cwd || '') }, scope));
+  const all = listRunningAgents().filter(isOperatorSession);
+  const base = sessionScope();
+  /* Review blocker 6: pane membership is decided HERE, from the process tree, not from the
+     renderer's report. The renderer only learns a pane's session id after the panel has listed
+     it — and a session outside the framework/workspace folders was never listed, so it never
+     got an id, so it was never listed: every pulse declared it "(ended)". Main owns the ptys,
+     so "is this session a descendant of one of my panes?" has an exact answer without waiting. */
+  const ids = new Set(base.paneSessionIds);
+  for (const id of paneSessionIdsFromTree(all)) ids.add(id);
+  const scope = { ...base, paneSessionIds: ids };
+  return all.filter((a) => inScope({ ...a, cwd: realOr(a.cwd || '') }, scope));
+}
+
+/* The App's pty pids, registered by main.ts (which owns the `ptys` map). */
+let ptyPidSource: () => number[] = () => [];
+export function setPtyPidSource(fn: () => number[]): void { ptyPidSource = fn; }
+let treeCache: { at: number; key: string; ids: Set<string> } | undefined;
+/** Session ids whose process descends from one of this App's ptys. Memoized briefly: one `ps`. */
+export function paneSessionIdsFromTree(running: RunningAgent[], procTable?: string): Set<string> {
+  const ptyPids = ptyPidSource().filter((n) => Number.isInteger(n) && n > 0);
+  if (!ptyPids.length || !running.length) return new Set();
+  const key = `${ptyPids.join(',')}|${running.map((a) => a.pid).join(',')}`;
+  if (!procTable && treeCache && treeCache.key === key && Date.now() - treeCache.at < 1500) return treeCache.ids;
+  const map = sessionPidsUnder(ptyPids, running.map((a) => a.pid), procTable);
+  const byPid = new Map(running.map((a) => [a.pid, a.sessionId]));
+  const ids = new Set<string>();
+  for (const pid of Object.values(map)) { const id = byPid.get(pid); if (id) ids.add(id); }
+  if (!procTable) treeCache = { at: Date.now(), key, ids };
+  return ids;
 }
 
 /* AI-203 — the sessions open in this App's panes, reported by the renderer every pulse. */

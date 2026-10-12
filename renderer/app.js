@@ -1722,8 +1722,11 @@ function renderPulseRunning(m) {
        registry entry whose id we hold but whose NAME has changed is a rename to follow — the
        tab adopts it. Panes confirmed before this change carry no id; they fall back to the old
        name check rather than being declared immortal. */
-    const liveNames = new Set(m.running.map((a) => a.name));
-    const byId = new Map(m.running.filter((a) => a.id).map((a) => [a.id, a]));
+    /* Review blocker 6: judge liveness against `alive` — every registered session — not the
+       panel's filtered `running`, or a session the panel hides reads as dead in its own tab. */
+    const everyone = Array.isArray(m.alive) ? m.alive : m.running;
+    const liveNames = new Set(everyone.map((a) => a.name));
+    const byId = new Map(everyone.filter((a) => a.id).map((a) => [a.id, a]));
     for (const [pid, pane] of panes) {
       if (pane.kind !== 'term' || !pane.confirmedName) continue;
       if (pane.sessionId) {
@@ -3709,7 +3712,8 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
        they just set. Naming is cosmetic, so an operator's choice simply outranks the announcement;
        DELIVERABILITY below is untouched, because that needs proof and a label is not proof. */
     if (!panes.get(id)?.manualName) renamePane(id, nm);
-    const running = ((pulse.lastRunning || {}).running || []);
+    /* Review blocker 6: confirm against every registered session, not the panel's filtered list. */
+    const running = ((pulse.lastRunning || {}).alive || (pulse.lastRunning || {}).running || []);
     /* name-ok: the FIRST guess only. When the name turns out to be ambiguous the block below
        replaces it with the process tree's exact answer, which is the authority. */
     const hit = running.find((a) => a.name === nm);
