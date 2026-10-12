@@ -2286,15 +2286,59 @@ const MIN_PANE_PX = 320;      // must equal core's MIN_PANE_PX — ~30 columns M
 const PANE_EDGE_PX = 10;      // must equal `.pane`'s own horizontal inset — guarded there too
 const MIN_TERM_COLS = 60;     // must equal core's MIN_TERM_COLS — the terminal floor in COLUMNS (#24)
 const PANE_CHROME_PX = 45;    // must equal core's PANE_CHROME_PX — measured padding + border of a pane
-/* #24: in the terminal zone the floor follows the font — 30 columns at the live cell width, never
-   below MIN_PANE_PX. Mirrors core's minTermPanePx(); split.test.ts asserts the two agree. */
+/* #24: in the terminal zone the floor follows the font — 60 columns at the live cell width, never
+   below MIN_PANE_PX. Mirrors core's minTermPanePx(); split.test.ts asserts the two agree.
+   Review 16: the cell width is MEASURED from the terminal's own font with a canvas, not read from
+   xterm's private `_core` (which can change under us in any xterm release). measureText reports CSS
+   pixels, so the answer is the same at any display scale — a 2× Retina, Windows at 125/150 %. */
+const TERM_FONT_FAMILY = "'JetBrains Mono', 'SF Mono', Menlo, 'Apple Color Emoji', monospace";
+let cellCache = { size: 0, w: 0 };
+function termCellWidth() {
+  if (cellCache.size === TERMFONT && cellCache.w) return cellCache.w;
+  try {
+    const ctx = (termCellWidth.canvas ||= document.createElement('canvas')).getContext('2d');
+    ctx.font = `${TERMFONT}px ${TERM_FONT_FAMILY}`;
+    const w = ctx.measureText('0'.repeat(100)).width / 100;
+    if (Number.isFinite(w) && w > 0) cellCache = { size: TERMFONT, w };
+  } catch { /* no canvas — the px floor below still holds */ }
+  return cellCache.w;
+}
 function minPaneFor(z) {
   if (z !== 'term') return MIN_PANE_PX;
-  let cell;
-  for (const [, p] of panes) { const c = p.kind === 'term' && p.term && p.term._core?._renderService?.dimensions?.css?.cell?.width; if (c) { cell = c; break; } }
+  const cell = termCellWidth();
   if (!cell || !Number.isFinite(cell) || cell <= 0) return MIN_PANE_PX;
   return Math.max(MIN_PANE_PX, Math.ceil(MIN_TERM_COLS * cell + PANE_CHROME_PX));
 }
+/* Review 16: the floor was only checked when a pane was ADDED. Shrinking the window or zooming the
+   terminal font could leave every split pane below it. Re-checked on both: first try an even split;
+   if even that cannot fit, drop the pane furthest from the focused one, as adding does. */
+function enforceSplitFloor() {
+  for (const z of ['term', 'main']) {
+    const zoneEl = document.getElementById(z === 'term' ? 'termzone' : 'work');
+    const zoneW = zoneEl ? zoneEl.getBoundingClientRect().width : 0;
+    if (!zoneW) continue;
+    let changed = false;
+    for (;;) {
+      const vis = zones[z].visible;
+      if (vis.length < 2) break;
+      const usable = zoneW - SPLIT_GAP_PX * (vis.length - 1);
+      const floor = minPaneFor(z);
+      const fr = zones[z].frac.length === vis.length ? zones[z].frac : vis.map(() => 1 / vis.length);
+      if (fr.every((f) => f * usable >= floor)) break;
+      if (usable / vis.length >= floor) { zones[z].frac = vis.map(() => 1 / vis.length); changed = true; break; }
+      const keep = Math.max(0, vis.indexOf(active[z]));
+      const drop = keep === 0 ? vis.length - 1 : 0;
+      zones[z].visible = vis.filter((_, i) => i !== drop);
+      zones[z].frac = zones[z].visible.map(() => 1 / zones[z].visible.length);
+      changed = true;
+    }
+    if (changed) { setVisible(z); saveLayout(); }
+  }
+}
+/* A web font that finishes loading after the first measurement would leave the fallback's width cached. */
+try { document.fonts?.addEventListener('loadingdone', () => { cellCache = { size: 0, w: 0 }; }); } catch { /* old engine */ }
+let floorTimer = 0;
+window.addEventListener('resize', () => { clearTimeout(floorTimer); floorTimer = setTimeout(enforceSplitFloor, 150); });
 const zones = { main: { visible: [], frac: [] }, term: { visible: [], frac: [] } };
 const zoneSplit = (z) => zones[z].visible.length > 1;
 const active = { main: null, term: null };
@@ -2903,7 +2947,7 @@ function splitWithPane(z, next) {
   /* ROOM IS MEASURED, not counted. A count cap wastes a large monitor and ruins a laptop, and the
      operator reported the old two-pane cap AS the bug: with three tabs it evicted a pane by a
      policy that looked arbitrary. So the question is whether one more pane would still leave every
-     pane usable — ~40 columns — in THIS zone, at its current width. Mirrors core's fitsAnother();
+     pane usable — 320px in the editor zone, 60 columns in the terminal zone — at its current width. Mirrors core's fitsAnother();
      both sides are read by split.test.ts. */
   const zoneEl = document.getElementById(z === 'term' ? 'termzone' : 'work');
   const zoneW = zoneEl ? zoneEl.getBoundingClientRect().width : 0;
@@ -3538,7 +3582,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
     // Apple Color Emoji last: the statusline is full of emoji (📁 🌿 ⚡ 👤) and none of the
     // mono faces carry them, so without a fallback they render as a substitute glyph of the
     // wrong advance width and everything after them shifts.
-    fontFamily: "'JetBrains Mono', 'SF Mono', Menlo, 'Apple Color Emoji', monospace",
+    fontFamily: TERM_FONT_FAMILY,
     fontSize: TERMFONT,
     lineHeight: 1.0,          // xterm's native density — 1.35 then 1.1 still read as leaded
     cursorBlink: true,
@@ -4322,6 +4366,7 @@ function setTermFont(v) {
   TERMFONT = next;
   if (changed) {
     for (const q of liveTerms()) { try { q.term.options.fontSize = next; } catch { /* disposed */ } }
+    enforceSplitFloor();   // review 16: a bigger font raises the floor — a split may no longer fit
     fitTerms();   // new cell size → new cols/rows, and the pty is told
     // One write when the keys stop, not one per keypress.
     clearTimeout(termFontSaveTimer);

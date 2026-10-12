@@ -440,3 +440,11 @@ test('#24: a terminal pane\'s floor is measured in COLUMNS at the live font, and
   assert.match(app, /return Math\.max\(MIN_PANE_PX, Math\.ceil\(MIN_TERM_COLS \* cell \+ PANE_CHROME_PX\)\);/);
   assert.equal((app.match(/\/ nextCount >= minPaneFor\(z\);/g) || []).length, 2, 'both room checks use the per-zone floor');
 });
+
+test('review 16: the floor is measured from the font (no private xterm internals) and re-checked on resize and zoom', () => {
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  assert.doesNotMatch(app.replace(/\/\*[\s\S]*?\*\//g, ''), /_core/, 'no xterm private API');
+  assert.match(app, /ctx\.measureText\('0'\.repeat\(100\)\)\.width \/ 100/, 'cell width from the terminal font itself');
+  assert.match(app, /window\.addEventListener\('resize', \(\) => \{ clearTimeout\(floorTimer\); floorTimer = setTimeout\(enforceSplitFloor, 150\); \}\);/, 'window shrink');
+  assert.match(app, /enforceSplitFloor\(\);   \/\/ review 16: a bigger font raises the floor/, 'font zoom');
+});
