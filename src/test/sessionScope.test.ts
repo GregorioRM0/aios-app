@@ -32,3 +32,11 @@ test('bus names come from the provenance log, recent ones only', () => {
   const log = [JSON.stringify({ at: now - 60, to: 'Worker-A' }), JSON.stringify({ at: now - 20 * 86400, to: 'old' }), '{torn'].join('\n');
   assert.deepEqual([...busNamesFrom(log, now)], ['worker-a']);
 });
+
+import { primaryNamesIn } from '../main/aios';
+test('review 13: primaries are found by the table, not only by the heading above it', () => {
+  const table = '| Name | Role | Greeting style |\n|------|------|----------------|\n| `ana` | primary | warm |\n| `ops` | coordinator | brief |\n';
+  assert.deepEqual([...primaryNamesIn(`## Identity\n\n> note\n\n${table}\n## Settings\n`)], ['ana', 'ops'], 'the usual shape');
+  assert.deepEqual([...primaryNamesIn(`## Who I am\n\n${table}\n## Settings\n`)], ['ana', 'ops'], 'heading renamed: still found by its header row');
+  assert.deepEqual([...primaryNamesIn('## Identity\n\nnothing here\n## Settings\n')], [], 'genuinely absent');
+});

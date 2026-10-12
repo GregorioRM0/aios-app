@@ -116,7 +116,12 @@ export function parseRequest(raw: string): BusRequest | null {
     model: whitelistModel(j.model),
     tier: whitelistTier(j.tier),
     surface: isSurface(j.surface) ? j.surface : undefined,
-    releases: typeof j.releases === 'number' && j.releases >= 0 ? j.releases : 0,
+    /* `_releases` is the fulfillers' bookkeeping name (Glass and the inbox README use it; underscore
+       = never hand-written). Older Apps wrote `releases`, so both are read and the larger wins —
+       the count only ever bounds a ping-pong, so over-counting is the safe side. */
+    releases: Math.max(
+      typeof j._releases === 'number' && j._releases >= 0 ? j._releases : 0,
+      typeof j.releases === 'number' && j.releases >= 0 ? j.releases : 0),
     /* resume only, and deliberately NOT a boolean: `"fallback":"spawn"` says WHAT to fall back
        to, so a future second fallback does not need a second field — and an unrecognised value
        means no fallback rather than a guessed one. */

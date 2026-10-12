@@ -25,3 +25,30 @@ export function canAdvise(advisor: string, main: string): boolean | undefined {
   if (a === undefined || m === undefined) return undefined;
   return a >= m;
 }
+
+/**
+ * Review nit — the consult instruction. Canonical's `spawn --advisor` appends it for a Sonnet- or
+ * Haiku-class worker (MODEL-ROUTING § The advisor): measured by Anthropic, those workers called an
+ * Opus advisor on none of 198 questions without it, while the tool's ~1,000-token definition still
+ * went out every request. Opus and Fable call it well unprompted and the instruction LOWERED their
+ * pass rates, so they never get it — nor does an unset model (Claude's default is not ranked here).
+ * The text is canonical's wrapper block, verbatim, so both launch paths brief a worker identically.
+ */
+export function needsConsultBlock(workerModel: string | undefined, advisorModel: string | undefined): boolean {
+  if (!advisorModel || !workerModel) return false;
+  const r = familyRank(workerModel);
+  return r === 1 || r === 2;
+}
+export const ADVISOR_CONSULT_BLOCK = `
+# You have an advisor
+
+This worker runs with an advisor: a stronger model you can consult through the \`advisor\`
+tool. It sees everything you have done so far and returns short advice. It only helps if
+you call it, and workers on your model rarely do unprompted, so:
+
+- Call it once BEFORE substantive work, with your plan.
+- Call it once BEFORE you declare the task done. Save your work first (write the file,
+  commit if the task says to), so nothing is lost if the call is slow.
+- Call it when you are stuck, or about to choose between two approaches.
+- Ask it to keep its guidance under 80 words.
+`;

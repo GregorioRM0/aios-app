@@ -8,8 +8,10 @@ import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileIns
 import { recordTyped } from './busSent';
 import { settingsToFile } from './advisorFile';
 import { contract4LaunchArgs, cleanFrom, advisorModelFor } from '../core/contract4';
+import { needsConsultBlock, ADVISOR_CONSULT_BLOCK } from '../core/advisor';
 import { normalizeVerb } from '../core/busVerbs';
 import { ResumeIndex } from './resumeIndex';
+import { supersededName, supersededBody, SUPERSEDED_SUFFIX, SUPERSEDED_KEEP_MS } from '../core/supersede';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
@@ -532,7 +534,23 @@ function markUndelivered(fromPath: string, req: BusRequest | null, reason: strin
   log(`UNDELIVERED ${path.basename(dest)} — ${reason}${req ? ` (${req.action} '${req.name}')` : ''}`);
 }
 
-/** Hand a claim back for a sibling surface/window to try, bounded by `releases`. */
+/* Review nit: a superseded message used to be deleted, which reads exactly like a delivery to the
+   sender. It is archived with what replaced it, out of the live inbox, and pruned after a week. */
+function archiveSuperseded(heldPath: string, by: string): void {
+  try {
+    const dir = path.join(path.dirname(heldPath), '_archive');
+    fs.mkdirSync(dir, { recursive: true });
+    const body = JSON.parse(fs.readFileSync(heldPath, 'utf8')) as Record<string, unknown>;
+    fs.writeFileSync(path.join(dir, supersededName(path.basename(heldPath))), JSON.stringify(supersededBody(body, by, MY_SURFACE, Date.now()), null, 2) + '\n');
+    fs.unlinkSync(heldPath);
+    for (const n of fs.readdirSync(dir)) {
+      if (!n.endsWith(SUPERSEDED_SUFFIX)) continue;
+      try { if (Date.now() - fs.statSync(path.join(dir, n)).mtimeMs > SUPERSEDED_KEEP_MS) fs.unlinkSync(path.join(dir, n)); } catch { /* gone */ }
+    }
+  } catch { try { fs.unlinkSync(heldPath); } catch { /* already gone */ } }
+}
+
+/** Hand a claim back for a sibling surface/window to try, bounded by `_releases`. */
 function releaseForSibling(heldPath: string, req: BusRequest, reason: string): boolean {
   if (!shouldReleaseForSibling(req.releases ?? 0, MAX_RELEASES)) return false;
   const releases = (req.releases ?? 0) + 1;
@@ -541,7 +559,8 @@ function releaseForSibling(heldPath: string, req: BusRequest, reason: string): b
     const body0 = JSON.parse(fs.readFileSync(heldPath, 'utf8')) as Record<string, unknown>;
     const body = withTried(body0, fulfillerId(MY_SURFACE, process.pid));   // so I never re-claim my own release
     delete body._claim;                     // an unclaimed file is what a sibling can take
-    body.releases = releases;
+    body._releases = releases;   // the shared bookkeeping name (review nit: was `releases`, Glass reads `_releases`)
+    delete body.releases;
     fs.writeFileSync(back, JSON.stringify(body, null, 2) + '\n');
     fs.unlinkSync(heldPath);
     log(`released ${path.basename(back)} for a sibling (${reason}); release ${releases}/${MAX_RELEASES}; tried=[${triedBy(body).join(',')}]`);
@@ -617,7 +636,7 @@ async function runSend(
     if (!firstTypedAt) {
       const turn = queueTurn({ key: path.basename(heldPath), target: req.name, from: req.from, queuedAt }, heldSends());
       if (turn.do === 'superseded') {
-        try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+        archiveSuperseded(heldPath, turn.by);   // review nit: archived with what replaced it, never silently deleted
         log(`send → '${req.name}' SUPERSEDED by a newer message from '${req.from}' (${turn.by}) — the older one is not delivered`);
         return;
       }
@@ -736,6 +755,20 @@ async function runSend(
  */
 function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
     let taskFile: string | undefined;
+    /* The worker's model is decided first: the consult instruction depends on it, and appending it
+       can turn a short inline task into a multi-line one that must spill to a file.
+       An explicit `model` wins over `tier`, matching the `spawn` wrapper
+       (`[ -n "$model" ] && spawn_model="$model"`) — so a caller pinning an id is never
+       second-guessed, and only a bare `tier` is resolved. */
+    let model = req.model;
+    if (!model && req.tier) {
+      const r = resolveTier(req.tier);
+      if ('error' in r) { markUndelivered(heldPath, req, r.error); return; }
+      model = r.model;                    // may be undefined — that is `judgment`
+    }
+    if (needsConsultBlock(model, advisorModelFor(req.advisor, req.advisorRung))) {
+      req = { ...req, task: (req.task || 'Start session') + '\n' + ADVISOR_CONSULT_BLOCK };   // canonical's block, verbatim
+    }
     /* On Windows the pane's shell is PowerShell, but buildSpawnCmd (shared pure core, POSIX
        quoting) can only quote the inline prompt the POSIX way — which mangles an apostrophe in
        PowerShell and corrupts the worker's first prompt. So route EVERY task through a temp file
@@ -747,15 +780,6 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
     }
     // No task → a bootstrap prompt, so the worker runs its Session Start Ritual on turn
     // one instead of sitting idle (mirrors the `spawn` wrapper).
-    /* An explicit `model` wins over `tier`, matching the `spawn` wrapper
-       (`[ -n "$model" ] && spawn_model="$model"`) — so a caller pinning an id is never
-       second-guessed, and only a bare `tier` is resolved. */
-    let model = req.model;
-    if (!model && req.tier) {
-      const r = resolveTier(req.tier);
-      if ('error' in r) { markUndelivered(heldPath, req, r.error); return; }
-      model = r.model;                    // may be undefined — that is `judgment`
-    }
     const c4 = contract4Args(req);
     if ('error' in c4) { markUndelivered(heldPath, req, c4.error); return; }
     const cmd = buildSpawnCmd(aios.shellSettings().claudeCmd, req.name, {

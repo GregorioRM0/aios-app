@@ -284,7 +284,8 @@ test('the ceiling is WIDTH, not count — measured against the zone in front of 
      and setVisible were always N-general — and the two-cap was itself the reported bug, because
      the replace-at-capacity rule evicted panes by a policy that looked arbitrary with three tabs.
      A count cap is the wrong instrument in both directions: it wastes a 34" monitor and ruins a
-     laptop. So the gate is whether every pane stays usable at ~40 columns. */
+     laptop. So the gate is whether every pane stays usable: 320px in the editor zone, and in the
+     terminal zone 60 columns at the live cell width (minTermPanePx, #24). */
   assert.equal(fitsAnother(1, 1400), true, 'two panes fit a normal window');
   assert.equal(fitsAnother(2, 1400), true, 'and three fit a wide one');
   assert.equal(fitsAnother(2, 800), false, 'but not a narrow one — 3 x 320 does not fit 800');

@@ -483,20 +483,34 @@ export function setPaneSessionIds(ids: unknown): void {
 }
 /** Every name in USER.md's Identity table (a primary session), lowercased. */
 export function primaryNames(): Set<string> {
-  const out = new Set<string>();
   const root = frameworkRoot();
-  if (!root) return out;
-  try {
-    let inSection = false;
-    for (const line of fs.readFileSync(path.join(root, 'USER.md'), 'utf8').split(/\r?\n/)) {
-      if (/^##\s+Identity/.test(line)) { inSection = true; continue; }
-      if (inSection && /^##\s/.test(line)) break;
-      if (inSection && line.startsWith('|')) {
-        const raw = (line.split('|')[1] ?? '').replace(/`/g, '').trim();
-        if (raw && raw !== 'Name' && !/^[ :-]+$/.test(raw)) out.add(raw.toLowerCase());
-      }
-    }
-  } catch { /* no USER.md */ }
+  if (!root) return new Set();
+  let text = '';
+  try { text = fs.readFileSync(path.join(root, 'USER.md'), 'utf8'); } catch { return new Set(); }   // no USER.md
+  const out = primaryNamesIn(text);
+  /* Review should-fix 13: this used to key ONLY on the `## Identity` heading, so renaming it emptied
+     the set silently and every primary session vanished from the panel. The table is now also found
+     by its header row; when neither is there it is said once, rather than read as "no primaries". */
+  if (!out.size && !warnedNoIdentity) { warnedNoIdentity = true; console.log('[scope] USER.md has no Identity table (Name | Role | Greeting style) — primary sessions are not recognised by name'); }
+  return out;
+}
+let warnedNoIdentity = false;
+/** Pure: names from the Identity table, found under `## Identity` OR by its header row anywhere. */
+export function primaryNamesIn(text: string): Set<string> {
+  const out = new Set<string>();
+  const lines = String(text ?? '').split(/\r?\n/);
+  const cells = (l: string) => l.split('|').slice(1, -1).map((c) => c.replace(/`/g, '').trim());
+  const isHeader = (l: string) => { const c = cells(l).map((x) => x.toLowerCase()); return c[0] === 'name' && c.includes('role'); };
+  let start = lines.findIndex((l) => /^##\s+Identity/.test(l));
+  if (start === -1) start = lines.findIndex((l) => l.startsWith('|') && isHeader(l)) - 1;
+  if (start < -1) return out;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^##\s/.test(line)) break;
+    if (!line.startsWith('|')) { if (out.size) break; continue; }   // the table ended
+    const raw = cells(line)[0] ?? '';
+    if (raw && raw.toLowerCase() !== 'name' && !/^[ :-]+$/.test(raw)) out.add(raw.toLowerCase());
+  }
   return out;
 }
 const realOr = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };

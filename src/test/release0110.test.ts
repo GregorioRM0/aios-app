@@ -12,6 +12,10 @@ test('AI-193: there is one renderer, and no stale twin at the repo root for a gr
   /* An 8,071-line copy of renderer/app.js sat at the repo root, referenced by nothing and never
      packaged. A grep-driven fix could land in it and pass review while the App stayed unchanged. */
   assert.ok(!fs.existsSync(path.join(ROOT, 'app.js')), 'repo-root app.js is back — the renderer is renderer/app.js');
+  /* Review nit: commandBus.js and attention.js were stale compiled twins at the root too. No .js
+     belongs at the repo root — sources are TypeScript under src/, the renderer is renderer/. */
+  const stray = fs.readdirSync(ROOT).filter((f) => /\.(c|m)?js$/.test(f));
+  assert.deepEqual(stray, [], `stale JavaScript at the repo root: ${stray.join(', ')}`);
   assert.match(fs.readFileSync(path.join(ROOT, 'renderer', 'index.html'), 'utf8'), /<script src="app\.js"><\/script>/,
     'index.html loads app.js relative to renderer/');
 });
@@ -526,4 +530,30 @@ test('CLAUDE_CONFIG_DIR: the App reads the registry where Claude Code writes it'
   } finally { if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = saved; }
   const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'aios.ts'), 'utf8');
   assert.match(src, /const dir = path\.join\(claudeConfigDir\(\), 'sessions'\);/, 'the session registry');
+});
+
+import { parseRequest as parseReq } from '../core/commandBus';
+test('review nit: the sibling-release counter is `_releases` on both surfaces, and an older App\'s `releases` still counts', () => {
+  assert.equal(parseReq(JSON.stringify({ action: 'send', name: 'w', prompt: 'x', _releases: 2 }))?.releases, 2);
+  assert.equal(parseReq(JSON.stringify({ action: 'send', name: 'w', prompt: 'x', releases: 1 }))?.releases, 1, 'written by an older App');
+  assert.equal(parseReq(JSON.stringify({ action: 'send', name: 'w', prompt: 'x', releases: 1, _releases: 0 }))?.releases, 1, 'the larger wins');
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'main', 'commandBus.ts'), 'utf8');
+  assert.match(src, /body\._releases = releases;/);
+  assert.doesNotMatch(src, /body\.releases = /, 'the App no longer writes the old name');
+});
+
+import { needsConsultBlock, ADVISOR_CONSULT_BLOCK } from '../core/advisor';
+test('review nit: an advised Sonnet/Haiku worker gets canonical\'s consult instruction; Opus, Fable and unset do not', () => {
+  assert.equal(needsConsultBlock('claude-sonnet-5-5', 'claude-opus-5-5'), true);
+  assert.equal(needsConsultBlock('claude-haiku-5-5', 'claude-opus-5-5'), true);
+  assert.equal(needsConsultBlock('claude-opus-5-5', 'claude-fable-5-1'), false, 'the instruction lowered Opus/Fable pass rates');
+  assert.equal(needsConsultBlock(undefined, 'claude-opus-5-5'), false, 'judgment = Claude\'s default, unranked');
+  assert.equal(needsConsultBlock('claude-sonnet-5-5', undefined), false, 'no advisor, nothing to consult');
+  const wrapper = path.join(os.homedir(), 'aios', 'hooks', 'claude-identity', 'install-wrappers.sh');
+  if (fs.existsSync(wrapper)) {   // the canonical text, verbatim, when a framework is present
+    const m = /cat <<'ADVISOR'\n([\s\S]*?)ADVISOR\n/.exec(fs.readFileSync(wrapper, 'utf8'));
+    if (m) assert.equal(ADVISOR_CONSULT_BLOCK, m[1], 'byte-identical to canonical\'s spawn --advisor block');
+  }
+  const bus = fs.readFileSync(path.join(ROOT, 'src', 'main', 'commandBus.ts'), 'utf8');
+  assert.match(bus, /if \(needsConsultBlock\(model, advisorModelFor\(req\.advisor, req\.advisorRung\)\)\)/);
 });
