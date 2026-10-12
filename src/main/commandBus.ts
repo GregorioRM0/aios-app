@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as aios from './aios';
 import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, type BusRequest } from '../core/commandBus';
 import { recordTyped } from './busSent';
+import { settingsToFile } from './advisorFile';
 import { contract4LaunchArgs, cleanFrom, advisorModelFor } from '../core/contract4';
 import { normalizeVerb } from '../core/busVerbs';
 import { ResumeIndex } from './resumeIndex';
@@ -15,7 +16,7 @@ import {
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
   shouldReleaseForSibling, countDeliveries, verifyVerdict, isDeliverable, maxAttemptsFor,
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
-  queueTurn, stampAge, type QueuedSend,
+  queueTurn, stampAge, withQueuedAt, queuedAtOf, type QueuedSend,
 } from '../core/sendQueue';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
 import { MY_SURFACE } from './surface';
@@ -402,7 +403,10 @@ function heldSends(): QueuedSend[] {
       const b = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')) as Record<string, unknown>;
       if (normalizeVerb(b.action) !== 'send' || typeof b.name !== 'string') continue;
       const c = parseClaim(b._claim);
-      out.push({ key: n, target: b.name, from: cleanFrom(b.from), queuedAt: c ? c.at : fs.statSync(path.join(dir, n)).mtimeMs });
+      /* A hold whose holder is DEAD is not in line (review should-fix 8): it would block its target
+         until someone adopts it. The periodic adoption below picks it up. */
+      if (c && !alive(c.pid)) continue;
+      out.push({ key: n, target: b.name, from: cleanFrom(b.from), queuedAt: queuedAtOf(b, c ? c.at : fs.statSync(path.join(dir, n)).mtimeMs) });
     } catch { /* mid-write or gone */ }
   }
   return out;
@@ -583,6 +587,10 @@ async function runSend(
   /* AI-205: the delivered text is fixed at the FIRST type — a message that queued gets its age
      stamped on, so the needle and baseline are taken from that text, then. */
   const rawDeliver = deliverText;
+  /* AI-205: when this request FIRST queued (not when this surface claimed it) — the queue order,
+     the age stamp and the 24 h ceiling all read it, so an adopted hold keeps its place. */
+  let queuedAt = claimedAt;
+  try { queuedAt = queuedAtOf(JSON.parse(fs.readFileSync(heldPath, 'utf8')), claimedAt); } catch { /* keep the claim time */ }
   let firstTypedAt = 0;
   let attempts = 0;   // how many times we have actually TYPED into the target
   /* Captured ONCE, before the first type, and reused by every attempt in this runSend.
@@ -597,7 +605,7 @@ async function runSend(
     const target = targetByName(req.name);
     /* AI-205: a live but busy target is waited on until its next idle (QUEUE_CEILING_MS), not
        30 min; the never-type-into-busy rule is unchanged. */
-    const decision = decideSend(target, Date.now() - claimedAt, TIMINGS.QUEUE_CEILING_MS);
+    const decision = decideSend(target, Date.now() - queuedAt, TIMINGS.QUEUE_CEILING_MS);
     if (decision.do === 'undeliverable') { markUndelivered(heldPath, req, decision.reason); return; }
     if (decision.do === 'hold') {
       if (!fs.existsSync(heldPath)) return;   // adopted or cleaned up elsewhere
@@ -607,7 +615,7 @@ async function runSend(
     /* AI-205 — one at a time, oldest first; a newer message from the same sender replaces an older
        one still waiting. Only before the first type: once typed, a message is in flight. */
     if (!firstTypedAt) {
-      const turn = queueTurn({ key: path.basename(heldPath), target: req.name, from: req.from, queuedAt: claimedAt }, heldSends());
+      const turn = queueTurn({ key: path.basename(heldPath), target: req.name, from: req.from, queuedAt }, heldSends());
       if (turn.do === 'superseded') {
         try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         log(`send → '${req.name}' SUPERSEDED by a newer message from '${req.from}' (${turn.by}) — the older one is not delivered`);
@@ -618,7 +626,7 @@ async function runSend(
         await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
         continue;
       }
-      deliverText = stampAge(rawDeliver, Date.now() - claimedAt, req.from);
+      deliverText = stampAge(rawDeliver, Date.now() - queuedAt, req.from);
       needle = safeNeedle(deliverText);
     }
     // idle → deliver, then prove it in the target's own transcript
@@ -815,7 +823,7 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
 function contract4Args(req: BusRequest): { args: string[] } | { error: string } {
   /* A rung names a FIXED advisor model from the contract's own table (judgment = claude-opus-5-5),
      never hooks/resolve-tier, which answers judgment with '' ("inherit the default"). */
-  return { args: contract4LaunchArgs({ effort: req.effort, advisorModel: advisorModelFor(req.advisor, req.advisorRung) }) };
+  return { args: settingsToFile(contract4LaunchArgs({ effort: req.effort, advisorModel: advisorModelFor(req.advisor, req.advisorRung) })) };
 }
 
 function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
@@ -911,6 +919,7 @@ function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number 
   try {
     const body = JSON.parse(raw) as Record<string, unknown>;
     body._claim = { surface: MY_SURFACE, pid: process.pid, at };
+    withQueuedAt(body, at);   // AI-205: when it FIRST queued — kept through adoption and release
     fs.writeFileSync(fsPath, JSON.stringify(body, null, 2) + '\n');
     fs.renameSync(fsPath, heldPath);   // atomic: exactly one surface can win
   } catch { return undefined; }        // lost the race, or it vanished — either is fine
@@ -963,6 +972,9 @@ function adoptHolds(win: () => BrowserWindow | undefined, dir: string): void {
     const req = parseRequest(JSON.stringify(body));
     if (!req) { markUndelivered(p, null, 'unparseable held request'); continue; }
     log(`adopting ${f} (${stamp ? `holder pid ${stamp.pid} gone or hold stale` : 'unstamped, contract-1 era'})`);
+    /* Re-claim, but NEVER move when it queued: ordering, the age stamp and the ceiling read
+       _queuedAt, and a restamped time let a stale message overtake its own correction. */
+    withQueuedAt(body, stamp ? stamp.at : Date.now());
     body._claim = { surface: MY_SURFACE, pid: process.pid, at: Date.now() };
     try { fs.writeFileSync(p, JSON.stringify(body, null, 2) + '\n'); } catch { /* keep going */ }
     if (req.action === 'send') void runSend(win, p, req, Date.now());
@@ -1054,5 +1066,8 @@ export function initCommandBus(getWin: () => BrowserWindow | undefined, appVersi
     }
   } catch { /* empty/absent inbox */ }
   adoptHolds(getWin, dir);
+  /* Periodically too, not only at startup (review should-fix 8): a hold left by a surface that died
+     would otherwise block its target for the whole 24 h ceiling. canAdoptHold never takes a live one. */
+  setInterval(() => adoptHolds(getWin, dir), 5 * 60 * 1000);
   log(`watching ${dir} (contract ${INBOX_CONTRACT}, surface '${MY_SURFACE}')`);
 }

@@ -107,6 +107,15 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
 
     { "action": "kill", "name": "designer" }
 
+**Contract 4 — optional fields** (verbs unchanged; a contract-3 request behaves exactly as before):
+
+- \`from\` (send, resume) — the registry name of the session that wrote the request. A claim, never an identity: it is recorded with the delivery so the receiver can see who sent it, and an unusable value is ignored.
+- \`effort\` (spawn, resume) — \`low\` · \`medium\` · \`high\` · \`xhigh\` · \`max\` → \`claude --effort <value>\`. Any other value is dead-lettered naming the field.
+- \`advisor\` (spawn, resume) — a rung (\`frontier\` Fable 5.1 · \`judgment\` Opus 5.5 · \`scale\` Sonnet 5.5 · \`fast\` Haiku 5.5) or a model id. Passed as a settings file; the advisor must be at least as capable as the worker's model or Claude silently does not use it.
+
+      { "name": "researcher", "task": "…", "tier": "scale", "effort": "high", "advisor": "judgment" }
+      { "action": "send", "name": "researcher", "from": "buddai", "prompt": "…" }
+
 **resume** (contract 3) — reopen a session you already had, as the SAME someone:
 
     { "action": "resume", "name": "designer", "prompt": "pick up the hero work" }
