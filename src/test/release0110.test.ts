@@ -427,7 +427,7 @@ test('Operator decisions: the 0.10.1 brand coral on buttons and coral text; spli
     const i = css.indexOf('\n' + sel) + 1; assert.ok(i > 0, sel);
     assert.match(css.slice(i, css.indexOf('}', i)), /background: var\(--accent-fill\)/, `${sel} uses the fill token`);
   }
-  assert.doesNotMatch(css, /\.updpill:hover \{[^}]*brightness/, 'the pill never brightens on hover');
+  assert.match(css, /#dragacts \.updpill:hover \{ filter: brightness\(1\.06\); transform: translateY\(-1px\); background: var\(--accent\); color: #fff; \}/, 'the 0.10.1 pill hover');
   const { MIN_TERM_COLS } = await import('../core/split');
   assert.equal(MIN_TERM_COLS, 60);
 });

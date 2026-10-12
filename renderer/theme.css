@@ -333,7 +333,7 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
    on the new Reveal in Finder button; the PNG button had the same offset). Centre it on the text. */
 .vbtn svg { vertical-align: -2px; margin-right: 1px; }
 .vbtn.primary { background: var(--accent-fill); color: #fff; border-color: var(--accent-fill); font-weight: 600; padding: 9px 18px; font-size: 13px; }
-.vbtn.primary:hover { background: var(--accent-fill-hover); border-color: var(--accent-fill-hover); color: #fff; }
+.vbtn.primary:hover { background: var(--accent-fill-hover); color: #fff; }
 .vbody { flex: 1; overflow-y: auto; min-height: 0; user-select: text; }
 .vbody.fill { overflow: hidden; display: flex; }
 .vbody.fill .htmlview { flex: 1; height: auto; }
@@ -1296,7 +1296,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
   -webkit-app-region: no-drag;
   transition: filter .18s ease, transform .18s ease;
 }
-#dragacts .updpill:hover { transform: translateY(-1px); background: var(--accent-fill-hover); color: #fff; }   /* darker, never brighter: brightness() dropped white below AA */
+#dragacts .updpill:hover { filter: brightness(1.06); transform: translateY(-1px); background: var(--accent); color: #fff; }   /* the 0.10.1 hover, by operator decision (brand coral) */
 #dragacts .updpill[hidden] { display: none; }
 /* AI-200 — "What's in it?" beside the pill. Same specificity trap as the pill: `#dragacts button`
    forces every title-bar control into a 26×26 box, so this needs the id + class selector and
