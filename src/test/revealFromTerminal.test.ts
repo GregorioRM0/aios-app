@@ -35,9 +35,9 @@ test('⌘⇧-click (Ctrl+Shift) on a terminal path reveals it in the OS; plain �
 });
 
 test('the hover tip names both gestures, so the second one is discoverable', () => {
-  const hover = slice("hover: (ev) => showPathTip(", 200, 'the path-link hover tip');
-  assert.match(hover, /t\('term\.cmdClickOpen'\)/);
-  assert.match(hover, /t\('term\.cmdShiftClickReveal'\)/);
+  const hover = slice("hover: (ev) => showPathTip(", 300, 'the path-link hover tip');
+  assert.match(hover, /t\(IS_WIN \? 'term\.cmdClickOpenWin' : 'term\.cmdClickOpen'\)/);
+  assert.match(hover, /t\(IS_WIN \? 'term\.cmdShiftClickRevealWin' : 'term\.cmdShiftClickReveal'\)/);
 });
 
 test('the viewer header carries a "Reveal in Finder" button for EVERY file, not one extension', () => {
@@ -54,15 +54,30 @@ test('the viewer header carries a "Reveal in Finder" button for EVERY file, not 
   assert.ok(htmlGate >= 0 && htmlGateEnd > htmlGate, 'the HTML-only block moved?');
   const btn = body.indexOf("window.glassShell.revealInOS(file.path)", htmlGateEnd);
   assert.ok(btn >= 0, 'the reveal button sits OUTSIDE the HTML-only block, after it');
-  assert.ok(body.slice(btn - 400, btn).includes("t('ctx.reveal')"),
+  assert.ok(body.slice(btn - 400, btn).includes("t(IS_WIN ? 'ctx.revealWin' : 'ctx.reveal')"),
     'reuses the explorer\'s own label — one string, one meaning, across the app');
 });
 
 test('every locale carries the strings the two sites read', () => {
   for (const loc of ['en', 'es', 'pt-br']) {
     const j = JSON.parse(fs.readFileSync(`src/i18n/locales/${loc}.json`, 'utf8')) as Record<string, string>;
-    for (const k of ['term.cmdShiftClickReveal', 'viewer.revealTitle', 'ctx.reveal']) {
+    for (const k of ['term.cmdClickOpen', 'term.cmdShiftClickReveal', 'viewer.revealTitle', 'ctx.reveal',
+                     'term.cmdClickOpenWin', 'term.cmdShiftClickRevealWin', 'ctx.revealWin']) {
       assert.ok(typeof j[k] === 'string' && j[k].length > 0, `${loc} is missing ${k}`);
     }
+  }
+});
+
+test('on Windows the strings name the keys and the folder the operator actually has', () => {
+  /* Operator-reported on Windows: the hover said "⌘-click to open · ⌘⇧-click to reveal in
+     Finder", but there is no ⌘ key and no Finder there. The gesture already worked (the handler
+     accepts ctrlKey); only the words were wrong, so a working feature read as a missing one. */
+  for (const loc of ['en', 'es', 'pt-br']) {
+    const j = JSON.parse(fs.readFileSync(`src/i18n/locales/${loc}.json`, 'utf8')) as Record<string, string>;
+    for (const k of ['term.cmdClickOpenWin', 'term.cmdShiftClickRevealWin', 'ctx.revealWin']) {
+      assert.doesNotMatch(j[k], /⌘|⇧|Finder/, `${loc} ${k} must not mention macOS keys or Finder`);
+    }
+    assert.match(j['term.cmdClickOpenWin'], /^Ctrl\+/, `${loc} open gesture is Ctrl+click`);
+    assert.match(j['term.cmdShiftClickRevealWin'], /^Ctrl\+(Shift|Mayús)\+/, `${loc} reveal gesture is Ctrl+Shift+click`);
   }
 });

@@ -318,7 +318,7 @@ test('"Open outside AIOS" hands a file to the desktop, through a door as narrow 
 
   /* Placed directly under Reveal in Finder, which is the whole point of the request. */
   const menu = app2.slice(app2.indexOf('function ctxMenu()'), app2.indexOf('function attachCtx'));
-  const iReveal = menu.indexOf("t('ctx.reveal')");
+  const iReveal = menu.indexOf("t(IS_WIN ? 'ctx.revealWin' : 'ctx.reveal')");
   const iBrowser = menu.indexOf("t('ctx.openOutside')");
   assert.ok(iReveal >= 0 && iBrowser > iReveal, 'the new row sits directly beneath Reveal in Finder');
   assert.ok(menu.indexOf("t('ctx.copyPath')") > iBrowser, 'and above the rest of the menu');

@@ -2534,7 +2534,7 @@ function attachPathLinks(term, startCwd, paneId) {
               : { start: at(m.index), end: at(m.index + best.text.length - 1) },
             text: best.text,
             decorations: { pointerCursor: true, underline: true },
-            hover: (ev) => showPathTip(ev.clientX, ev.clientY, abs + '  ·  ' + t('term.cmdClickOpen') + '  ·  ' + t('term.cmdShiftClickReveal')),
+            hover: (ev) => showPathTip(ev.clientX, ev.clientY, abs + '  ·  ' + t(IS_WIN ? 'term.cmdClickOpenWin' : 'term.cmdClickOpen') + '  ·  ' + t(IS_WIN ? 'term.cmdShiftClickRevealWin' : 'term.cmdShiftClickReveal')),
             leave: () => hidePathTip(),
             activate: (ev) => {
               hidePathTip();
@@ -4652,7 +4652,7 @@ async function openViewer(p) {
      explorer → right-click → Reveal. Same label as that menu item: one string, one meaning.
      Not gated on extension, on purpose: the files that motivated it are exactly the ones whose
      preview is a dead end (images, PDFs — the non-editable kinds). */
-  const rev = document.createElement('button'); rev.className = 'vbtn'; rev.innerHTML = icon('folder', 13) + ' ' + t('ctx.reveal'); rev.title = t('viewer.revealTitle');
+  const rev = document.createElement('button'); rev.className = 'vbtn'; rev.innerHTML = icon('folder', 13) + ' ' + t(IS_WIN ? 'ctx.revealWin' : 'ctx.reveal'); rev.title = t('viewer.revealTitle');
   rev.addEventListener('click', () => { void window.glassShell.revealInOS(file.path); });
   head.appendChild(rev);
 
@@ -5008,7 +5008,9 @@ function ctxMenu() {
   if (ctxEl) return ctxEl;
   ctxEl = el('div', 'xctx'); ctxEl.hidden = true;
   const item = (label, fn) => { const b = el('button', '', label); b.addEventListener('click', () => { fn(ctxTarget); ctxEl.hidden = true; }); ctxEl.appendChild(b); return b; };
-  item(t('ctx.reveal'), (target) => window.glassShell.revealInOS(target.path));
+  /* Windows has no ⌘ and no Finder: the gesture is Ctrl and the folder opens in Explorer, so the
+     label names what the operator will actually see. Same pattern as term.doneOkWin. */
+  item(t(IS_WIN ? 'ctx.revealWin' : 'ctx.reveal'), (target) => window.glassShell.revealInOS(target.path));
   /* Sits directly under "Reveal in Finder" because it is the same gesture pointed somewhere else:
      hand this file to the desktop rather than to a pane. The contrast that makes it worth having
      is with our OWN panes — clicking an .html opens an in-app browser pane, and sometimes what
