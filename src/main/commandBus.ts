@@ -385,7 +385,7 @@ function writePayload(name: string, prompt: string): string {
  * never waits on a history read.
  */
 const resumeIndex = new ResumeIndex(
-  path.join(os.homedir(), '.claude', 'projects'),
+  path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects'),   // review 18: honour CLAUDE_CONFIG_DIR
   path.join(os.homedir(), '.aios', 'resume-index.json'),
 );
 function resumeIdFor(name: string, excludeSessionId?: string): Promise<string | undefined> {

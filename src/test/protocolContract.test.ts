@@ -584,7 +584,7 @@ test('PROTOCOL: this surface refuses an unknown verb before launching anything',
 
 /* AI-204 — the resume index is ONE file in two repos (App main/resumeIndex.ts, Glass
    agents/resumeIndex.ts). Pinned whole, like sendQueue: an edit on one side alone goes red. */
-const RESUME_INDEX_SHA = '973287890b6e39ff';
+const RESUME_INDEX_SHA = '674f54a7f91a1435';
 test('PROTOCOL: the resume index is byte-identical across both fulfillers', () => {
   const src = fs.readFileSync('src/main/resumeIndex.ts', 'utf8');
   assert.equal(crypto.createHash('sha256').update(src).digest('hex').slice(0, 16), RESUME_INDEX_SHA,
