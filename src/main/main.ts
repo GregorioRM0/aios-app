@@ -1669,6 +1669,24 @@ app.whenReady().then(() => {
         if (clobber !== '') console.error(`shell-smoke: I18N WILL CLOBBER CHILDREN — these carry data-i18n AND element children, so the next locale pass deletes them: ${clobber}`);
         if (chromeOk) console.log('shell-smoke: chrome — every JS-mounted control present, no i18n node can clobber children');
       } catch (e) { console.error('shell-smoke: chrome gate error', e); }
+      /* THE UPDATE PILL MUST RENDER AS A PILL (0.11.0 review blocker). A rule pasted into its CSS
+         comment once ended the comment early and the browser dropped the pill rule: it fell back
+         to the title bar's 26×26 button box. A user whose pill is broken can never receive the
+         update that fixes it, so the packaged app proves it: shown, wider than the forced box,
+         rounded, filled with the button coral, and the topmost element at its own centre. */
+      let pillOk = false;
+      try {
+        const pill = await win.webContents.executeJavaScript(`(() => {
+          showUpdatePill('0.0.0-smoke', 'ready');
+          const p = document.getElementById('updPill'); const r = p.getBoundingClientRect(); const cs = getComputedStyle(p);
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === p;
+          const res = { w: Math.round(r.width), h: Math.round(r.height), radius: cs.borderRadius, bg: cs.backgroundColor, hit };
+          hideUpdatePill();
+          return res;
+        })()`).catch(() => null);
+        pillOk = !!pill && pill.w > 40 && pill.h >= 20 && pill.radius === '999px' && pill.bg !== 'rgba(0, 0, 0, 0)' && pill.hit;
+        console.log(`shell-smoke: update pill — ${JSON.stringify(pill)} ${pillOk ? 'renders as a clickable pill' : 'BROKEN'}`);
+      } catch (e) { console.error('shell-smoke: pill gate error', e); }
       /* gate 10: THE SHORTCUT MAP MUST NOT LEAK RAW TOKENS. `CommandOrControlQ` reached the
          screen because the unit sweep read accelerator strings out of menu.ts SOURCE — and role
          items (Quit, the whole Edit section) have no accelerator in source. They only exist on the
@@ -1706,10 +1724,10 @@ app.whenReady().then(() => {
         for (const e of [...new Set(rendererErrors)].slice(0, 5)) console.error('  · ' + e);
       }
       const clean = rendererErrors.length === 0;
-      const ok = loaded && ptyOk && stateOk && !!rendererOk && panelOk && themeOk && setupOk && chromeOk && mapOk && animOk && rowOk && rebuildOk && headOk && restoreOk && idleOk && clean;
+      const ok = loaded && ptyOk && stateOk && !!rendererOk && panelOk && themeOk && setupOk && chromeOk && pillOk && mapOk && animOk && rowOk && rebuildOk && headOk && restoreOk && idleOk && clean;
       console.log(ok
-        ? 'shell-smoke: window + pty + state + workbench + panel + theme + setup + chrome + shortcuts + animations + row-actions + settings-rebuild + header + restore + idle + no-renderer-errors OK ✓'
-        : `shell-smoke: FAIL (loaded=${loaded}, pty=${ptyOk}, state=${stateOk}, workbench=${rendererOk}, panel=${panelOk}, theme=${themeOk}, setup=${setupOk}, chrome=${chromeOk}, shortcutMap=${mapOk}, animations=${animOk}, rowActions=${rowOk}, settingsRebuild=${rebuildOk}, header=${headOk}, restore=${restoreOk}, idle=${idleOk}, rendererClean=${clean})`);
+        ? 'shell-smoke: window + pty + state + workbench + panel + theme + setup + chrome + update-pill + shortcuts + animations + row-actions + settings-rebuild + header + restore + idle + no-renderer-errors OK ✓'
+        : `shell-smoke: FAIL (loaded=${loaded}, pty=${ptyOk}, state=${stateOk}, workbench=${rendererOk}, panel=${panelOk}, theme=${themeOk}, setup=${setupOk}, chrome=${chromeOk}, pill=${pillOk}, shortcutMap=${mapOk}, animations=${animOk}, rowActions=${rowOk}, settingsRebuild=${rebuildOk}, header=${headOk}, restore=${restoreOk}, idle=${idleOk}, rendererClean=${clean})`);
       return ok;
     };
     void Promise.race([

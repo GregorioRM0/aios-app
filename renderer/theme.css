@@ -1263,9 +1263,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 .xterm-viewport::-webkit-scrollbar-corner { background: transparent; }
 
 /* ── app update pill (title bar, rightmost) ──
-   Selector is `#dragacts .updexplain { background: transparent; border: 1px solid var(--line-strong); color: var(--ink); border-radius: 999px; font-size: 11px; padding: 2px 9px; margin-right: 6px; cursor: pointer; -webkit-app-region: no-drag; }   /* AI-200 */
-.updexplain:hover { border-color: var(--accent); }
-.updpill` (1 id + 1 class), NOT a bare `.updpill`: the shared rule
+   Selector is `#dragacts .updpill` (1 id + 1 class), NOT a bare `.updpill`: the shared rule
    `#dragacts button` forces every title-bar control into a 26×26 box with zero padding, and
    a one-class selector loses to it — so the pill rendered as cramped text sitting on top of
    the buttons rather than as a pill. Each override below undoes one of those forced values.
@@ -1293,6 +1291,31 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 }
 #dragacts .updpill:hover { transform: translateY(-1px); background: var(--accent-fill-hover); color: #fff; }   /* darker, never brighter: brightness() dropped white below AA */
 #dragacts .updpill[hidden] { display: none; }
+/* AI-200 — "What's in it?" beside the pill. Same specificity trap as the pill: `#dragacts button`
+   forces every title-bar control into a 26×26 box, so this needs the id + class selector and
+   undoes the same forced values. Outlined, not filled: the pill is the action, this is a question.
+   (It once sat INSIDE the comment above, ended it early and took the pill rule down with it —
+   theme.test guards that the pill selector parses.) */
+#dragacts .updexplain {
+  width: auto;
+  height: 24px;
+  padding: 0 10px;
+  margin-left: 8px;
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+#dragacts .updexplain:hover { border-color: var(--accent); }
+#dragacts .updexplain[hidden] { display: none; }
 /* AI-83 — the DOWNLOADING state. Same pill, visibly not-yet-actionable: muted rather than
    coral, and no hover lift, because a control that looks pressable while it is not is worse
    than one that says nothing. It reads as progress, not as an invitation. `disabled` carries
