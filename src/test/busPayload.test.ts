@@ -49,7 +49,7 @@ test('payload files age out — they hold arbitrary prompt text', () => {
 });
 
 /* ── THE NEGATIVE CONTROL ──────────────────────────────────────────────────────
-   Chuy's requirement, and the important one: prove the check can DETECT truncation.
+   The operator's requirement, and the important one: prove the check can DETECT truncation.
    Both halves of a round trip are exercised — a whole message must pass the assertion, and a
    deliberately truncated one must FAIL it. If the second half ever stops failing, the first
    half has stopped meaning anything and this suite is decoration. */

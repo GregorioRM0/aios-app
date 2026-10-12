@@ -5,7 +5,7 @@ import { inScope, within, busNamesFrom, type SessionScope } from '../core/sessio
 
 const base: SessionScope = {
   paneSessionIds: new Set(['pane-1']), primaries: new Set(['buddai']), busNames: new Set(['deck-amplify']),
-  roots: ['/Users/x/obsidian', '/Users/x/code/sovra'], caseInsensitive: true,
+  roots: ['/Users/x/aios', '/Users/x/code/acme'], caseInsensitive: true,
 };
 
 test('the measured incident: probes in ~/code with their own names are NOT the operator\'s', () => {
@@ -18,13 +18,13 @@ test('each of the four ways a session is the operator\'s', () => {
   assert.ok(inScope({ sessionId: 'pane-1', name: 'osc-live', cwd: '/tmp' }, base), 'open in an App pane, wherever it runs');
   assert.ok(inScope({ sessionId: 's', name: 'Buddai', cwd: '/elsewhere' }, base), 'a USER.md primary (case aside)');
   assert.ok(inScope({ sessionId: 's', name: 'deck-amplify', cwd: '/elsewhere' }, base), 'a session the inbox delivered to');
-  assert.ok(inScope({ sessionId: 's', name: '', cwd: '/Users/x/obsidian/vault' }, base), 'inside the framework');
-  assert.ok(inScope({ sessionId: 's', name: 'w', cwd: '/users/X/code/sovra' }, base), 'inside a workspace folder, case-insensitive on macOS');
+  assert.ok(inScope({ sessionId: 's', name: '', cwd: '/Users/x/aios/vault' }, base), 'inside the framework');
+  assert.ok(inScope({ sessionId: 's', name: 'w', cwd: '/users/X/code/acme' }, base), 'inside a workspace folder, case-insensitive on macOS');
 });
 
 test('a sibling folder is not "inside" by prefix', () => {
-  assert.equal(within('/Users/x/obsidian-old', '/Users/x/obsidian', false), false);
-  assert.equal(within('/Users/x/obsidian', '/Users/x/obsidian/', false), true);
+  assert.equal(within('/Users/x/aios-old', '/Users/x/aios', false), false);
+  assert.equal(within('/Users/x/aios', '/Users/x/aios/', false), true);
 });
 
 test('bus names come from the provenance log, recent ones only', () => {

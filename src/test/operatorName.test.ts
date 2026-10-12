@@ -64,12 +64,12 @@ test('accents and ñ survive — the range must cover the locales that ship', ()
 /* ── precedence: structured beats prose, explicit beats inferred ─────────────── */
 
 test('FIELD CASE 2: lowercase link aliases must NOT beat a properly-cased prose name', () => {
-  /* The real vault that caught this, verbatim. In Obsidian `aliases:` exists so LINKS resolve,
+  /* The shape of the real vault that caught this. In Obsidian `aliases:` exists so LINKS resolve,
      so lowercase slugs are the norm there — they are not display names. Preferring them greeted
-     the operator as "chuy" off his own link aliases while his prose said the properly-cased
+     the operator in lowercase off their own link aliases while his prose said the properly-cased
      answer. Structured-beats-prose was the wrong instinct for this particular field. */
-  about('---\naliases:\n  - chuy\n  - chuycepeda\n---\n\nMy name is Jesús “Chuy” Cepeda.\n');
-  assert.equal(aios.operatorName(), 'Chuy',
+  about('---\naliases:\n  - mari\n  - mariaruiz\n---\n\nMy name is María “Mari” Ruiz.\n');
+  assert.equal(aios.operatorName(), 'Mari',
     'the quoted nickname is the display name; the aliases are slugs');
 });
 
@@ -148,7 +148,7 @@ test('INVARIANT: every reading path is still present, and none can be dropped qu
    it fires only when there is no internal casing worth preserving. */
 
 test('a slug or a shout becomes a name', () => {
-  for (const [given, want] of [['chuy', 'Chuy'], ['CHUY', 'Chuy'], ['ignacio', 'Ignacio']]) {
+  for (const [given, want] of [['mari', 'Mari'], ['MARI', 'Mari'], ['ignacio', 'Ignacio']]) {
     about(`---\naliases:\n  - ${given}\n---\n\nno parseable prose\n`);
     assert.equal(aios.operatorName(), want, `${given} should display as ${want}`);
   }
@@ -178,9 +178,9 @@ test('DELIBERATE CASING IS NEVER REWRITTEN — the bound that keeps this from be
   }
 });
 
-test('the real vault still resolves to Chuy — normalisation must not disturb a good answer', () => {
-  about('---\naliases:\n  - chuy\n  - chuycepeda\n---\n\nMy name is Jesús “Chuy” Cepeda.\n');
-  assert.equal(aios.operatorName(), 'Chuy');
+test('a real-vault shape still resolves to its nickname — normalisation must not disturb a good answer', () => {
+  about('---\naliases:\n  - mari\n  - mariaruiz\n---\n\nMy name is María “Mari” Ruiz.\n');
+  assert.equal(aios.operatorName(), 'Mari');
 });
 
 /* ── AI-112 — THE GREETING SAID `{{first-Name}}` TO TWO REAL PEOPLE ────────────

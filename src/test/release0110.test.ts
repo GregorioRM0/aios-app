@@ -81,7 +81,22 @@ test('#50: the gh probe passes on the marker, so a Mac whose token lives in Keyc
   assert.equal(probe(), 'NOGH', 'control: no gh, no token');
   fs.mkdirSync(path.join(home, '.aios'), { recursive: true });
   fs.writeFileSync(path.join(home, '.aios', 'github-pat-verified'), '2026-10-11T00:00:00Z\n');
-  assert.equal(probe(), 'PATOK');
+  assert.equal(probe(), 'PATMARK', 'the marker branch defers its verdict to patMarkerValid');
+}));
+
+test('review 19: the #50 marker expires — with the token, and at most 90 days after its check', withHome(async () => {
+  const day = 24 * 60 * 60 * 1000;
+  assert.equal(aios.patMarkerValid(), false, 'no marker');
+  const t0 = Date.now();
+  assert.equal(await aios.verifyGitHubPat('ghp_x', async () => ({ status: 200, expires: new Date(t0 + 10 * day).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC') })), true);
+  assert.equal(aios.patMarkerValid(t0 + 9 * day), true, 'before the token expires');
+  assert.equal(aios.patMarkerValid(t0 + 11 * day), false, 'after GitHub says the token expires');
+  assert.equal(await aios.verifyGitHubPat('ghp_y', async () => ({ status: 200 })), true);
+  assert.equal(aios.patMarkerValid(t0 + 89 * day), true, 'a non-expiring token');
+  assert.equal(aios.patMarkerValid(t0 + 91 * day), false, '…is re-verified after 90 days (revocation is otherwise invisible)');
+  fs.writeFileSync(aios.githubPatMarker(), new Date(t0).toISOString() + '\n');
+  assert.equal(aios.patMarkerValid(t0 + day), true, 'the older plain-timestamp marker still reads');
+  assert.equal(aios.patMarkerValid(t0 + 91 * day), false);
 }));
 
 test('#50: the token lane tells a refused token apart from a stored one, in every locale', () => {
@@ -163,7 +178,7 @@ test('AI-199: an unnamed session\'s topic labels its tab — never over a manual
   for (const t of ['✳ Claude Code', '◐ Claude Code', 'Claude Code', 'Qué es un respaldo']) f(1, t);   // the measured sequence
   assert.equal(label(term), 'Qué es un respaldo');
   assert.equal(term.name, 'terminal', 'the identity the bus correlates on is untouched');
-  f(1, 'chuy@mac: ~/code');
+  f(1, 'ana@mac: ~/code');
   assert.equal(label(term), 'terminal', 'back to a shell → back to its own name');
 
   const manual = mk('build', true); const f2 = run(new Map([[1, manual]]), slug) as (id: number, t: string) => void;
@@ -324,7 +339,8 @@ test('AI-201: the demo builds a whole synthetic home — no real vault, registry
   const all = files.map((f) => fs.readFileSync(f, 'utf8')).join('\n');
   assert.match(all, /My name is Ana Ruiz/);
   assert.ok(fs.existsSync(path.join(out, '.claude.json')) && fs.existsSync(path.join(out, '.claude', 'settings.json')), 'Claude\'s own stores are synthetic too');
-  assert.doesNotMatch(all, /chuy|sovra|buddai/i, 'nothing from a real operator');
+  assert.doesNotMatch(all, new RegExp(`/Users/${os.userInfo().username}|${os.userInfo().username}@`, 'i'), 'nothing from the machine that built it');
+  assert.doesNotMatch(all, /\/Users\/(?!ana\b)/, 'no real home path')
   const src = fs.readFileSync(path.join(ROOT, 'scripts', 'demo.mjs'), 'utf8');
   assert.match(src, /env: \{ \.\.\.process\.env, HOME, USERPROFILE: HOME, AIOS_BUS_DISABLED: '1', GLASS_FRAMEWORK_PATH: path\.join\(HOME, 'aios'\) \}/, 'HOME (both spellings), bus off, framework inside the fake home');
   assert.match(src, /'--use-mock-keychain'/, 'a fake HOME without a mock keychain pops "Keychain Not Found" on the presenter\'s screen');
@@ -359,7 +375,7 @@ test('AI-205: the App waits for the next idle, in order, superseding, aged — a
   assert.match(readme, /\*\*In order, latest wins\.\*\*/);
 });
 
-test('Chuy\'s decisions: coral BUTTONS pass AA under white (fill darkened, hover darker); split floor is 60 columns', async () => {
+test('Operator decisions: coral BUTTONS pass AA under white (fill darkened, hover darker); split floor is 60 columns', async () => {
   const css = fs.readFileSync(path.join(ROOT, 'renderer', 'theme.css'), 'utf8');
   const tok = (n: string) => new RegExp(`--${n}:\\s*(#[0-9a-f]{6})`, 'i').exec(css)![1];
   const lum = (h: string) => { const v = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)); return 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]; };

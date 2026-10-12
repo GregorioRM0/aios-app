@@ -50,9 +50,9 @@ function offered(line: string, next: string): string[] {
 /* ── THE FIELD CASE ─────────────────────────────────────────────────────────── */
 
 // Reported 2026-07-27: the one path that refused to link. Spaces AND a hard break.
-const WHOLE = '/Users/chuycepeda/obsidian/vault/03 - export/chuycepeda/gifts/espacios-io-reposicionamiento';
-const HEAD  = '- HTML with spaces — /Users/chuycepeda/obsidian/vault/03 - ';
-const TAIL  = 'export/chuycepeda/gifts/espacios-io-reposicionamiento';
+const WHOLE = '/Users/ana/aios/vault/03 - export/clients/gifts/casa-norte-rebrand';
+const HEAD  = '- HTML with spaces — /Users/ana/aios/vault/03 - ';
+const TAIL  = 'export/clients/gifts/casa-norte-rebrand';
 
 test('FIELD CASE: a path with spaces broken by a hard newline is offered whole', () => {
   assert.ok(offered(HEAD, TAIL).includes(WHOLE),
@@ -67,21 +67,21 @@ test('NEGATIVE CONTROL: joining only the bare match would NOT produce it', () =>
   const oldBehaviour = [tail.value + ' ' + TAIL, tail.value + TAIL];
   assert.ok(!oldBehaviour.includes(WHOLE),
     'the pre-fix join must MISS this path — otherwise there was never a bug to fix');
-  assert.equal(tail.value, '/Users/chuycepeda/obsidian/vault/03',
+  assert.equal(tail.value, '/Users/ana/aios/vault/03',
     'and the reason is that the bare match stops at the first space');
 });
 
 /* ── THE CASES THAT ALREADY WORKED must keep working ────────────────────────── */
 
 test('a break with no spaces still joins, with and without a space', () => {
-  const got = offered('see /Users/chuycepeda/obsidian/vault/00 - notes/', 'projects/infra-aios-app.md');
+  const got = offered('see /Users/ana/aios/vault/00 - notes/', 'projects/infra-aios-app.md');
   assert.ok(got.some((c) => c.endsWith('notes/projects/infra-aios-app.md')),
     'the no-space join must survive — this is the case that already worked in the field');
 });
 
 test('a path with spaces and NO break is unaffected', () => {
-  const got = offered('open /Users/chuycepeda/obsidian/vault/03 - export/deck.html now', '');
-  assert.ok(got.includes('/Users/chuycepeda/obsidian/vault/03 - export/deck.html'),
+  const got = offered('open /Users/ana/aios/vault/03 - export/deck.html now', '');
+  assert.ok(got.includes('/Users/ana/aios/vault/03 - export/deck.html'),
     'space-extension alone must not regress');
 });
 
@@ -100,10 +100,10 @@ test('when two candidates both reach the line end, BOTH join', () => {
   /* The tie is the common case, not an edge one: space-extension stretches an earlier path to
      the same end. Choosing one would need a tie-break, and the wrong choice means the real
      path never joins — the exact class of silent miss this ticket started as. */
-  const hits = pathCandidates('see /tmp/a.md and /Users/chuycepeda/obsidian/vault/03 -');
+  const hits = pathCandidates('see /tmp/a.md and /Users/ana/aios/vault/03 -');
   const joined = joinAcrossBreak(hits, 'export/deck.html', 9) as any[];
   assert.ok(joined.length >= 2, 'both line-ending candidates must be offered');
-  assert.ok(joined.some((h) => h.joined.has('/Users/chuycepeda/obsidian/vault/03 - export/deck.html')),
+  assert.ok(joined.some((h) => h.joined.has('/Users/ana/aios/vault/03 - export/deck.html')),
     'including the absolute one, which a tie-break could have skipped');
 });
 
@@ -113,10 +113,10 @@ test('spansTo applies to ACTUALLY-joined strings, not merely longer ones', () =>
   /* The predicate was `best.text.length > m.length`, which is also true of a plain
      space-extension. On any line that HAS a successor, an extended-but-unjoined path would
      underline into the next row — a link whose highlight points somewhere it does not go. */
-  const hits = pathCandidates('/Users/chuycepeda/obsidian/vault/03 - export/deck.html');
+  const hits = pathCandidates('/Users/ana/aios/vault/03 - export/deck.html');
   joinAcrossBreak(hits, 'next-line.md', 9);
   const tail: any = hits[0];   // the absolute form, whose extension reaches the line end
-  const extendedOnly = '/Users/chuycepeda/obsidian/vault/03 - export/deck.html';
+  const extendedOnly = '/Users/ana/aios/vault/03 - export/deck.html';
   assert.ok(tail.alts.includes(extendedOnly), 'the extension is still offered');
   assert.ok(!tail.joined.has(extendedOnly),
     'but it did NOT cross a line, so it must not claim the next row');
@@ -131,11 +131,11 @@ test('INVARIANT: the provider delegates the join instead of re-inlining it', () 
 });
 
 test('a break AFTER a space-containing segment joins the ABSOLUTE form, not the relative echo', () => {
-  /* `…/03 - export/chuycepeda/gifts/` ⏎ `espacios-io-…` — space-extension emits a second,
-     relative candidate (`export/chuycepeda/gifts/`) that is the ARRAY tail but starts mid-path.
+  /* `…/03 - export/clients/gifts/` ⏎ `casa-norte-…` — space-extension emits a second,
+     relative candidate (`export/clients/gifts/`) that is the ARRAY tail but starts mid-path.
      Joining that one offers a string resolvable only by accident against the cwd. */
-  const got = offered('open /Users/chuycepeda/obsidian/vault/03 - export/chuycepeda/gifts/',
-                      'espacios-io-reposicionamiento');
+  const got = offered('open /Users/ana/aios/vault/03 - export/clients/gifts/',
+                      'casa-norte-rebrand');
   assert.ok(got.includes(WHOLE), 'the absolute path must be offered whole');
 });
 
@@ -143,8 +143,8 @@ test('a break immediately after a dot still resolves — the punctuation trim mu
   /* `…-notas.` ⏎ `html`. Trailing-punctuation stripping is right for prose (`see /tmp/a.md.`)
      and wrong here: it shortened the absolute candidate below the line end, which handed
      eligibility to the relative echo of itself, whose join resolves only by accident. */
-  const got = offered('- see /Users/chuycepeda/obsidian/vault/03 - export/notes.', 'html');
-  assert.ok(got.includes('/Users/chuycepeda/obsidian/vault/03 - export/notes.html'),
+  const got = offered('- see /Users/ana/aios/vault/03 - export/notes.', 'html');
+  assert.ok(got.includes('/Users/ana/aios/vault/03 - export/notes.html'),
     'the dot must survive into the join');
 });
 
@@ -160,7 +160,7 @@ test('SWEEP: a spaced path breaking at any realistic column still resolves', (t)
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-paths-'));
   const dir = path.join(root, '03 - export', 'gifts');
   fs.mkdirSync(dir, { recursive: true });
-  const real = path.join(dir, 'espacios-io-reposicionamiento-notas.html');
+  const real = path.join(dir, 'casa-norte-rebrand-notas.html');
   fs.writeFileSync(real, 'x');
   t.after(() => { try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* gone */ } });
 

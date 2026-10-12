@@ -131,8 +131,8 @@ function stripWrapping(v: string): string {
 }
 
 /* DISPLAY FORM. A name reaches us from three places and only one of them is reliably cased:
-   `aliases:` carries link slugs (`chuy`), prose carries display names (`Chuy`), and a shouty
-   line can carry `CHUY`. Greeting somebody by their slug reads as a bug even when the string is
+   `aliases:` carries link slugs (`mari`), prose carries display names (`Mari`), and a shouty
+   line can carry `MARI`. Greeting somebody by their slug reads as a bug even when the string is
    genuinely theirs, so the value is normalised before it is ever shown.
    ONLY when there is no internal casing worth keeping — an all-lowercase or all-uppercase
    string. `McDonald`, `O'Brien` and `van Gogh` already carry deliberate casing and are returned
@@ -159,10 +159,10 @@ export function operatorName(): string {
 
   /* CANDIDATES, best-signal first. The order was `aliases:` first, on the reasoning that it is
      structured and language-agnostic — sound in theory, wrong in practice, and one operator's
-     real vault proved it within the hour: his `aliases:` are `chuy` / `chuycepeda`, because in
-     Obsidian that field exists to make LINKS resolve, so lowercase slugs are the norm there. The
-     app greeted him in lowercase off his own link aliases while his prose said
-     `My name is Jesús "Chuy" Cepeda.`
+     real vault proved it within the hour: its `aliases:` were lowercase slugs, because in Obsidian
+     that field exists to make LINKS resolve, so lowercase slugs are the norm there. The app
+     greeted the operator in lowercase off their own link aliases while their prose said
+     `My name is María "Mari" Ruiz.` (names changed)
      So: an explicit quoted nickname is the strongest "call me this", the identity phrase is next,
      and `aliases:` stays as the language-agnostic NET for a vault whose prose we cannot parse. */
   const cands: string[] = [];
@@ -1748,7 +1748,9 @@ export const GH_PROBE_POSIX =
   /* #50: on macOS a stored token lives in Keychain (osxkeychain), which this probe must not read —
      a `git credential fill` on the 5-second poll raised an endless loop of Keychain modals. The
      token lane verifies the token ONCE, on the operator's own click, and leaves this marker. */
-  'elif [ -f "$HOME/.aios/github-pat-verified" ]; then echo PATOK; ' +
+  /* PATMARK, not PATOK: whether the marker still counts (the token's own expiry, a 90-day re-verify
+     cap) is decided in Node by patMarkerValid — dates do not parse portably in sh. */
+  'elif [ -f "$HOME/.aios/github-pat-verified" ]; then echo PATMARK; ' +
   'elif gh_runs; then echo NOAUTH; else echo NOGH; fi';
 
 /**
@@ -2128,6 +2130,10 @@ function doctorChecks(): DoctorCheck[] {
         // to install a tool they already have.
         if (out?.includes('AUTHED')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghOk'), canRepair: false };
         if (out?.includes('PATOK')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghPat'), canRepair: false };
+        /* Review should-fix 19: the marker used to pass forever — a token that expired or was revoked
+           still read "connected". It passes only while patMarkerValid says so; after that the row
+           asks to connect again, the same path as a signed-out gh. */
+        if (out?.includes('PATMARK')) return patMarkerValid() ? { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghPat'), canRepair: false } : ghNoAuth(loginCmd);
         if (out?.includes('NOAUTH')) return ghNoAuth(loginCmd);
         /* gh genuinely absent. This branch used to ask one question — can Homebrew write? — and
            had nothing to offer when the answer was no. A Mac with no Homebrew was then told its
@@ -2348,29 +2354,53 @@ export const githubPatMarker = (): string => path.join(os.homedir(), '.aios', 'g
  * worked. Without this, a Mac's token (stored in Keychain) could never pass the gh check, because
  * the check reads only ~/.git-credentials. One request, the token never logged or written by us.
  */
-export function verifyGitHubPat(pat: string, get: (token: string) => Promise<number> = githubUserStatus): Promise<boolean> {
+export function verifyGitHubPat(pat: string, get: (token: string) => Promise<number | { status: number; expires?: string }> = githubUserStatus): Promise<boolean> {
   const token = (pat || '').trim();
   if (!token) return Promise.resolve(false);
-  return get(token).then((status) => {
+  return get(token).then((r) => {
+    const status = typeof r === 'number' ? r : r.status;
     if (status !== 200) return false;
+    /* Review should-fix 19: record WHEN it stops being true. GitHub states a token's expiry in the
+       `github-authentication-token-expiration` header; a token with none still gets re-verified
+       after PAT_REVERIFY_MS, which is what catches a revoked one. */
+    const exp = typeof r === 'number' ? undefined : r.expires;
+    const expiresAt = exp && Number.isFinite(Date.parse(exp.replace(' UTC', 'Z').replace(' ', 'T'))) ? new Date(Date.parse(exp.replace(' UTC', 'Z').replace(' ', 'T'))).toISOString() : null;
     try {
       fs.mkdirSync(path.dirname(githubPatMarker()), { recursive: true });
-      fs.writeFileSync(githubPatMarker(), new Date().toISOString() + '\n');
+      fs.writeFileSync(githubPatMarker(), JSON.stringify({ verifiedAt: new Date().toISOString(), expiresAt }) + '\n');
     } catch { return false; }
     return true;
   }, () => false);
 }
 
-function githubUserStatus(token: string): Promise<number> {
+/** A verified token is trusted this long before the row asks to connect again (revocation is invisible otherwise). */
+export const PAT_REVERIFY_MS = 90 * 24 * 60 * 60 * 1000;
+/** Does the #50 marker still count? Before the token's own expiry AND within PAT_REVERIFY_MS of its check.
+ *  Reads the older plain-timestamp marker too (no expiry known → only the re-verify cap applies). */
+export function patMarkerValid(now = Date.now()): boolean {
+  let raw = '';
+  try { raw = fs.readFileSync(githubPatMarker(), 'utf8').trim(); } catch { return false; }
+  let verifiedAt = NaN, expiresAt = NaN;
+  try { const j = JSON.parse(raw) as { verifiedAt?: string; expiresAt?: string | null }; verifiedAt = Date.parse(String(j.verifiedAt)); if (j.expiresAt) expiresAt = Date.parse(j.expiresAt); }
+  catch { verifiedAt = Date.parse(raw); }
+  if (!Number.isFinite(verifiedAt) || now - verifiedAt > PAT_REVERIFY_MS) return false;
+  return !(Number.isFinite(expiresAt) && now >= expiresAt);
+}
+
+function githubUserStatus(token: string): Promise<{ status: number; expires?: string }> {
   return new Promise((resolve) => {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const https = require('https') as typeof import('https');
     const req = https.get('https://api.github.com/user', {
       headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'aios-app', Accept: 'application/vnd.github+json' },
       timeout: 8000,
-    }, (res) => { res.resume(); resolve(res.statusCode || 0); });
-    req.on('timeout', () => { req.destroy(); resolve(0); });
-    req.on('error', () => resolve(0));
+    }, (res) => {
+      res.resume();
+      const h = res.headers['github-authentication-token-expiration'];
+      resolve({ status: res.statusCode || 0, expires: typeof h === 'string' ? h : undefined });
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ status: 0 }); });
+    req.on('error', () => resolve({ status: 0 }));
   });
 }
 
