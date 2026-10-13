@@ -7831,7 +7831,6 @@ function openSetupTab() {
               + 'Do not create repositories, push, or change anything else. When `gh auth status` passes, tell me to go back to the setup screen and click Re-check.', cwd || undefined, 'default');
           }, { title: t('onboarding.githubHelpHint') });
           if (s.state === 'active') mkBtn(acts, t('onboarding.skipGithub'), async () => { await window.glassShell.onboardingSkip('github').catch(() => {}); void paint(); }, { title: t('onboarding.skipGithubHint') });
-          if (s.skipped) acts.appendChild(el('div', 'step-note', t('onboarding.githubSkipped')));
           break;
         }
         case 'firstrun': {
@@ -7938,7 +7937,7 @@ function openSetupTab() {
       const box = el('div', 'step ' + s.state + (fresh ? ' just-done' : ''));
       box.dataset.stepId = s.id;      // so a repaint can put back what the operator had open
       const hd = el('div', 'step-head');
-      hd.appendChild(el('span', 'step-ix', s.done ? '✓' : String(i + 1)));
+      hd.appendChild(el('span', 'step-ix', s.skipped ? '–' : s.done ? '✓' : String(i + 1)));   // skipped is not done: no tick
       /* Title = the ACTION, tag = what this actually is in words the operator already has.
          "Log in to Claude" tells them what to do; "your AI subscription" tells them what it IS.
          The tag sits on the head so it survives collapse — a done step still explains itself, which
@@ -7948,7 +7947,10 @@ function openSetupTab() {
       const tag = t('onboarding.tag.' + s.id);
       if (tag && tag !== 'onboarding.tag.' + s.id) nameWrap.appendChild(el('div', 'step-tag', tag));
       hd.appendChild(nameWrap);
-      const summary = s.done ? (s.checks.find((c) => s.required.includes(c.id)) || {}).message || '' : '';
+      /* A SKIPPED step says so — its check still reads "not authenticated", and that beside a tick read
+         as broken (found in the 0.11.0 pre-flight). The note is in the HEAD because a passed step
+         shows no actions, so a note among them was never seen. */
+      const summary = s.skipped ? t('onboarding.githubSkipped') : s.done ? (s.checks.find((c) => s.required.includes(c.id)) || {}).message || '' : '';
       if (summary) hd.appendChild(el('div', 'step-msg', summary));
       box.appendChild(hd);
       if (s.done) { hd.title = t('setup.recheck'); hd.addEventListener('click', () => void paint()); } // re-verify, never re-do
