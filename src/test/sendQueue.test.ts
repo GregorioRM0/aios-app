@@ -21,11 +21,11 @@ import {
 const target = (over: Partial<SendTarget> = {}): SendTarget =>
   ({ name: 'designer', pid: 4242, status: 'idle', sessionId: 'sess-1', ...over });
 
-test('this build declares contract 3 and the app surface', () => {
-  /* 3 since AI-149: the `resume` verb, and the rule that an unrecognised action is refused
-     rather than degraded to spawn. Bumped in BOTH repos in one push — a surface claiming a
-     contract it does not implement is how a reading agent gets lied to. */
-  assert.equal(INBOX_CONTRACT, 3);
+test('this build declares contract 4 and the app surface', () => {
+  /* 3 since AI-149 (`resume`, unknown verbs refused); 4 since 0.11.0: `from`, `effort`, `advisor`
+     and the AI-205 queue — stamped only once BOTH surfaces honour every field. Bumped in both
+     repos in one push: a surface claiming a contract it does not implement lies to a reading agent. */
+  assert.equal(INBOX_CONTRACT, 4);
   assert.equal(MY_SURFACE, 'app');
 });
 
@@ -149,16 +149,17 @@ test('delivery is verified by counting USER TURNS, not substring hits', () => {
      that legitimately moved (the baseline hoist on 08-12, the `sinceMs` bound on 08-14), which is
      how a guard trains people to update it without reading it. What must hold: main hands the
      transcript to the core counter, and every such call BOUNDS it by the claim. */
-  const counterCalls = src.match(/countUserTurnsContaining\(readTranscript\(sessionId\)[^)]*\)/g) ?? [];
+  /* AI-170: the counter is countDeliveries (user turns, or a built-in slash command's local_command record). */
+  const counterCalls = src.match(/countDeliveries\(readTranscript\(sessionId\)[^)]*\)/g) ?? [];
   assert.ok(counterCalls.length >= 3, `main must delegate counting to core (found ${counterCalls.length} calls)`);
   for (const call of counterCalls) {
     assert.match(call, /, needle, claimedAt\)$/,
       `every count must be bounded by the CLAIM, not unbounded and not by a per-attempt clock — got: ${call}`);
   }
-  assert.doesNotMatch(src, /countUserTurnsContaining\(readTranscript\(sessionId\), needle, emittedAt\)/,
+  assert.doesNotMatch(src, /countDeliveries\(readTranscript\(sessionId\), deliverText, needle, emittedAt\)/,
     'emittedAt moves on every retry; a moving bound resets the count mid-flight — the moving-baseline bug again');
   assert.doesNotMatch(src, /countInTranscript/, 'the substring counter is retired');
-  assert.match(src, /\.claude', 'projects'/);
+  assert.match(src, /claudeConfigDir\(\), 'projects'/);   // honours CLAUDE_CONFIG_DIR
 });
 
 test('a mid-write request is re-checked, not condemned', () => {
@@ -250,7 +251,7 @@ test('the main side reads the transcript but delegates the RULE to core', () => 
      core owns the counting rule and the verdict. Where the baseline is captured is asserted in
      busPayload.test.ts, next to the reason. */
   const src = fs.readFileSync('src/main/commandBus.ts', 'utf8');
-  assert.match(src, /countUserTurnsContaining\(readTranscript\(sessionId\), needle, claimedAt\)/,
+  assert.match(src, /countDeliveries\(readTranscript\(sessionId\), deliverText, needle, claimedAt\)/,
     'main reads the transcript and hands it to the core counter, bounded by the claim');
   assert.match(src, /const verdict = verifyVerdict\(before, now\);/,
     'the verdict rule stays in core — main must not re-derive it');
@@ -344,4 +345,38 @@ test('KNOWN LIMIT: an invocation inside our own hold window is still indistingui
   const someoneElse = cmdTurn('/config', '2026-08-14T18:00:03.000Z');
   assert.equal(countUserTurnsContaining(someoneElse, '/config', claimedAt), 1,
     'still counted — documented, bounded to the hold window, and the reason release was removed');
+});
+
+import { isQueuedDelivery, queueTurn as queueTurn11 } from '../core/sendQueue';
+test('should-fix 11: a resume to a LIVE session is a queued delivery — it waits its turn and is waited on', () => {
+  assert.equal(isQueuedDelivery('send', { name: 'w' }), true);
+  assert.equal(isQueuedDelivery('resume', { name: 'w', prompt: 'carry on' }), true, 'a resume with a prompt delivers like a send');
+  assert.equal(isQueuedDelivery('resume', { name: 'w' }), false, 'a resume with nothing to say types nothing');
+  assert.equal(isQueuedDelivery('resume', { name: 'w', prompt: '   ' }), false);
+  assert.equal(isQueuedDelivery('spawn', { name: 'w', task: 'x' }), false);
+  assert.equal(isQueuedDelivery('send', {}), false, 'no target, no line');
+  // An older resume-with-prompt to w is ahead of a newer send to w from someone else.
+  const held = [{ key: 'r.json.holding', target: 'w', from: 'buddai', queuedAt: 1000 }, { key: 's.json.holding', target: 'w', from: 'canonical', queuedAt: 2000 }];
+  assert.equal(queueTurn11(held[1], held).do, 'wait', 'the send waits behind the resume');
+  assert.equal(queueTurn11(held[0], held).do, 'go', 'the resume goes first');
+});
+
+import { supersedes as supersedes64, queueTurn as queueTurn64 } from '../core/sendQueue';
+test('operator test 6.4: a correction retires the older message itself, whatever order the checks run in', () => {
+  // The run that failed: an older RESUME (prompt) and a newer SEND, same sender, same busy target.
+  const older = { key: 'q-resume.json.holding', target: 'stamp-target', from: 'bus-tester', queuedAt: 1000 };
+  const newer = { key: 'q-send.json.holding', target: 'stamp-target', from: 'bus-tester', queuedAt: 21000 };
+  const inbox = new Set([older.key, newer.key]);
+  const held = () => [older, newer].filter((h) => inbox.has(h.key));
+  // The target goes idle and the NEWER checks first (the order that broke it).
+  assert.equal(queueTurn64(newer, held()).do, 'go', 'the correction goes');
+  for (const o of supersedes64(newer, held())) inbox.delete(o.key);   // retired before it types
+  assert.equal(inbox.has(older.key), false, 'the older message is gone before the correction is typed');
+  inbox.delete(newer.key);                                            // delivered, verified, removed
+  // The older one's own check now runs: its file is gone, so it is never delivered (both surfaces
+  // test existence before their first type). Before the fix it saw no newer message and went out.
+  assert.equal(inbox.has(older.key), false);
+  assert.deepEqual(supersedes64({ ...newer, from: undefined }, [older, newer]), [], 'without a sender nothing is superseded');
+  assert.deepEqual(supersedes64(newer, [{ ...older, from: 'someone-else' }]), [], 'another sender\'s message is never retired');
+  assert.deepEqual(supersedes64(older, [older, newer]), [], 'an older message never retires a newer one');
 });

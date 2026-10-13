@@ -61,7 +61,7 @@ test('a cleared scope removes its badge instead of showing a stale count', () =>
 });
 
 test('the badge reuses the dirty-folder gold, and keeps the sort control rightmost', () => {
-  assert.match(css, /\.xsectgit \{[^}]*color: var\(--st-warn\)/);
+  assert.match(css, /\.xsectgit \{[^}]*color: var\(--st-warn-ink\)/);
   assert.match(css, /\.xsectgit \{[^}]*tabular-nums/, 'digits must not jitter as the count grows');
   assert.match(app, /if \(sort\) head\.insertBefore\(badge, sort\); else head\.appendChild\(badge\);/);
 });
@@ -318,7 +318,7 @@ test('"Open outside AIOS" hands a file to the desktop, through a door as narrow 
 
   /* Placed directly under Reveal in Finder, which is the whole point of the request. */
   const menu = app2.slice(app2.indexOf('function ctxMenu()'), app2.indexOf('function attachCtx'));
-  const iReveal = menu.indexOf("t('ctx.reveal')");
+  const iReveal = menu.indexOf("t(IS_WIN ? 'ctx.revealWin' : 'ctx.reveal')");
   const iBrowser = menu.indexOf("t('ctx.openOutside')");
   assert.ok(iReveal >= 0 && iBrowser > iReveal, 'the new row sits directly beneath Reveal in Finder');
   assert.ok(menu.indexOf("t('ctx.copyPath')") > iBrowser, 'and above the rest of the menu');

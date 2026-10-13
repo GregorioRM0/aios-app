@@ -27,6 +27,7 @@ type FakeEl = {
   addEventListener: (ev: string, fn: () => unknown) => void;
   handlers: Record<string, Array<() => unknown>>;
   appendChild: (c: FakeEl) => void;
+  insertBefore: (c: FakeEl, ref: FakeEl) => void;
 };
 
 function harness() {
@@ -37,6 +38,7 @@ function harness() {
       classList: { toggle: (c, on) => { if (on) el.classes.add(c); else el.classes.delete(c); } },
       addEventListener: (ev, fn) => { (el.handlers[ev] ||= []).push(fn); },
       appendChild: () => { /* container semantics are not what this tests */ },
+      insertBefore: () => { /* AI-200's "What's in it?" sits before the pill — order is not what this tests */ },
     };
     return el;
   };
@@ -53,8 +55,13 @@ function harness() {
   };
   /* showUpdatePill looks the pill up by id on every call, so the harness has to remember the
      element it created — that is exactly the create-once-then-reuse path being tested. */
+  /* Elements are found by the id they were GIVEN, as in a real DOM: since AI-200 showUpdatePill
+     creates two buttons (the pill and "What's in it?"), "the last element created is the pill"
+     stopped being true. */
+  const created: FakeEl[] = [];
   const origCreate = document.createElement;
-  document.createElement = () => { const el = origCreate(); byId['updPill'] = el; return el; };
+  document.createElement = () => { const el = origCreate(); created.push(el); return el; };
+  document.getElementById = (id: string) => byId[id] ?? created.find((e) => e.id === id) ?? null;
 
   const t = (key: string, vars?: Record<string, string>) =>
     `${key}${vars ? '|' + JSON.stringify(vars) : ''}`;
@@ -64,7 +71,7 @@ function harness() {
   const fn = new Function('document', 't', 'window', `${m![0]} return showUpdatePill;`)(
     document, t, { confirm: () => false, glassShell: { updaterInstall: async () => {} } },
   ) as (v?: string, s?: string, p?: number | null) => void;
-  return { fn, pill: () => byId['updPill'] };
+  return { fn, pill: () => document.getElementById('updPill') as FakeEl };
 }
 
 test('AVAILABLE shows the pill immediately, reading as a download in progress', () => {

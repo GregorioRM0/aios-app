@@ -118,7 +118,7 @@ test('every registry key is surfaced in Settings, and every Settings row is in t
   for (const id of Object.keys(CLAUDE_KEYS)) {
     if (CLAUDE_KEYS[id].notSurfaced) {
       assert.ok(CLAUDE_KEYS[id].notSurfaced!.length > 30, `${id} needs a real reason, not a shrug`);
-      assert.ok(!CLAUDE_KEYS[id].seedOnInstall, `${id} is not shown, so it must not be written either`);
+      if (CLAUDE_KEYS[id].seedOnInstall) assert.ok((CLAUDE_KEYS[id].seededHidden ?? '').length > 30, `${id} is not shown, so it must not be written either — unless it states why (seededHidden)`);
       continue;
     }
     assert.match(app, new RegExp(`'${id}'`), `${id} has no Settings row and no notSurfaced reason`);
@@ -358,8 +358,15 @@ test('seeding NEVER overwrites, and is marked so it cannot repeat', () => {
   assert.ok(fn, 'seedClaudeDefaults must exist');
   assert.match(fn[0], /if \(isSet\(id, settings, user, project, local\)\) continue;/,
     'an existing value belongs to the operator and must never be overwritten — checked across all four stores');
-  assert.match(fn[0], /if \(raw\.claudeDefaultsSeeded\) return \{ seeded: \[\], already: true \}/,
+  assert.match(fn[0], /if \(raw\.claudeDefaultsSeeded\) \{/,
     're-seeding every launch would undo the operator\'s own choices — worse than the bug it fixes');
+  /* The one late key (Claude's diff panel, default off by operator decision) is seeded ONCE, under its
+     own marker, only when nothing is on disk — so a `/diff` choice is never overwritten — and the
+     marker is set only once the value really landed (a fresh machine has no ~/.claude.json yet). */
+  assert.match(fn[0], /if \(!raw\.claudeDefaultsSeededDiffPanel && seedDiffPanelOnce\(\)\)/);
+  const once = /function seedDiffPanelOnce\(\): boolean \{[\s\S]*?\n\}/.exec(src);
+  assert.ok(once);
+  assert.match(once![0], /if \(!isSet\('diffPanel', \.\.\.claudeStores\(\)\)\) return false;   \/\/ not written yet/);
   assert.match(fn[0], /setShellSetting\('claudeDefaultsSeeded', true\)/,
     'the marker belongs in OUR settings, never as a foreign key in Claude\'s schema');
 });

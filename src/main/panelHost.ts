@@ -1,5 +1,11 @@
+import { usageChip, type ToolUsage } from '../core/toolUse';
+import { UsageReader } from '../core/usageReader';
+import { fsUsageIo } from './usageIo';
+import { latestSwitches, switchParts, type ModelSwitch } from '../core/modelSwitch';
+import { parseProgramStatus, overlayProgramStatus, type ProgramStatus } from '../core/programStatus';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { BrowserWindow, WebContents, nativeImage } from 'electron';
 import * as aios from './aios';
 import { t } from '../i18n';
@@ -84,6 +90,8 @@ export class PanelHost {
           this.scheduleRefresh();
           const now = Date.now();
           if (now - this.bootAt < 10000 || now - this.lastReveal < 8000) return;
+          // read per event, not cached: the Settings toggle applies without a restart
+          if (!aios.shellSettings().autoOpenExports) return;
           const newest = aios.recentOutputs(1)[0];
           if (newest && now - newest.mtime < 6000 && /\.(html?|pdf|png|jpe?g|md)$/i.test(newest.name)) {
             this.lastReveal = now;
@@ -277,8 +285,40 @@ export class PanelHost {
     ]).catch(() => null);
   }
 
+  /** AI-196 — the latest OSC 7501 status per session id, as reported by the renderer. */
+  private readonly programStatus = new Map<string, ProgramStatus>();
+
+  setProgramStatus(sessionId: string, data: string, at: number): void {
+    const id = String(sessionId || '').trim();
+    if (!id) return;
+    const s = parseProgramStatus(data, Number(at) || Date.now());
+    if (s === null || s === 'query') return;
+    if (s === 'clear') this.programStatus.delete(id); else this.programStatus.set(id, s);
+    this.postRunning();   // the point of the signal is that it is immediate — don't wait for the 2s poll
+  }
+
+  /** AI-197 — the model-switch log, re-read only when it changed. */
+  private switchCache: { mtimeMs: number; size: number; map: Map<string, ModelSwitch> } = { mtimeMs: -1, size: -1, map: new Map() };
+  private modelSwitches(): Map<string, ModelSwitch> {
+    const p = process.env.AIOS_MODEL_SWITCH_LOG || path.join(os.homedir(), '.aios', 'model-switch.jsonl');
+    try {
+      const st = fs.statSync(p);
+      if (st.mtimeMs !== this.switchCache.mtimeMs || st.size !== this.switchCache.size) {
+        this.switchCache = { mtimeMs: st.mtimeMs, size: st.size, map: latestSwitches(fs.readFileSync(p, 'utf8')) };
+      }
+    } catch { this.switchCache = { mtimeMs: -1, size: -1, map: new Map() }; }
+    return this.switchCache.map;
+  }
+
+  /** AI-171 — what each session used. The shared reader (core/usageReader) reads ASYNC, bounded per
+   *  tick, prunes ended sessions and byte-splits at newlines (review should-fix 17). */
+  private usage = new UsageReader(fsUsageIo);
+  private usageFor(sessionId: string): ToolUsage | undefined { return this.usage.get(sessionId); }
+
   postRunning(): void {
-    const running = aios.listOperatorSessions();   // AI-165: never a daemon spare
+    const registry = aios.listOperatorSessions();   // AI-165: never a daemon spare
+    for (const id of this.programStatus.keys()) if (!registry.some((a) => a.sessionId === id)) this.programStatus.delete(id);
+    const running = overlayProgramStatus(registry, this.programStatus);
     this.attention.tick(running, aios.shellSettings().attention);
     const rl = aios.rateLimit();
     const fwReal = aios.frameworkRoot() ?? '';
@@ -289,9 +329,20 @@ export class PanelHost {
       return fwReal && real === fwReal ? '' : path.basename(real);
     };
     const mem = aios.shellSettings().showMemory ? aios.sessionMemoryMB(running.map((a) => a.pid)) : {};
+    const switches = this.modelSwitches();
+    this.usage.prune(running.map((a) => a.sessionId));   // the cache follows the running list
     this.post({
       type: 'running',
-      running: running.map((a) => ({ name: a.name, pid: a.pid, id: a.sessionId, key: sessionKey(a), status: a.status, proj: projOf(a.cwd), startedAt: a.startedAt, updatedAt: a.updatedAt, mem: mem[a.pid], waitingFor: a.waitingFor, statusUpdatedAt: a.statusUpdatedAt })),
+      /* Review blocker 6: liveness ("(ended)") is judged against EVERY registered session,
+         never the filtered panel list — a session the panel hides is still alive in its tab. */
+      alive: aios.listRunningAgents().map((a) => ({ id: a.sessionId, name: a.name })),
+      /* Review 13: what AI-203's scope HID, so a false negative is visible ("N hidden · show all")
+         instead of silently missing. Interactive sessions only — headless/daemon runs (AI-165) are
+         never the operator's and never listed, even here. These rows never notify. */
+      hidden: aios.listRunningAgents().filter(aios.isOperatorSession)
+        .filter((a) => !registry.some((r) => r.sessionId === a.sessionId))
+        .map((a) => ({ name: a.name, id: a.sessionId, status: a.status, proj: projOf(a.cwd) })),
+      running: running.map((a) => ({ name: a.name, pid: a.pid, id: a.sessionId, key: sessionKey(a), status: a.status, proj: projOf(a.cwd), startedAt: a.startedAt, updatedAt: a.updatedAt, mem: mem[a.pid], waitingFor: a.waitingFor, statusUpdatedAt: a.statusUpdatedAt, modelSwitch: switchParts(switches.get(a.sessionId), a.startedAt), used: (() => { const u = this.usageFor(a.sessionId); return u ? { chip: usageChip(u), skills: u.skills, agents: u.agents } : undefined; })() })),
       quota: rl
         ? { has: true, fiveHour: rl.fiveHourPct, sevenDay: rl.sevenDayPct, fr: rl.fiveHourResetsAt, sr: rl.sevenDayResetsAt, showSwap: false, to: '' }
         : { has: false, fiveHour: 0, sevenDay: 0, showSwap: false, to: '' },
@@ -322,7 +373,7 @@ export class PanelHost {
          armed, and a header that says "retrying…" must be true — the rule for which unknowns are
          retried lives here, and a second copy in the renderer is how the two would drift. */
       const retrying = state === 'unknown' && aios.frameworkCheckable(framework);
-      this.post({ type: 'updateStatus', state, framework, retrying });
+      this.post({ type: 'updateStatus', state, framework, retrying, branch: state === 'testing' ? aios.testingBranch() : '' });
       /* A FAILED CHECK RETRIES ITSELF. Operator-reported 2026-09-22: Wi-Fi off showed "offline",
          Wi-Fi back on showed "can't check" — and it stayed that way until the App was restarted.
          The reconnect DID trigger a check, at the one moment it is least likely to succeed: the

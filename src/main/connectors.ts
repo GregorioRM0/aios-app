@@ -15,7 +15,7 @@
  * `mcps/google-workspace-mcp/README.md:32`.
  */
 import { execFile, execFileSync } from 'child_process';
-import { claudeLocation as aiosClaudeLocation , gitBin } from './aios';
+import { claudeLocation as aiosClaudeLocation , gitBin, claudeJsonDefault } from './aios';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -66,7 +66,7 @@ export interface ForeignRow {
  */
 export interface UnmanifestedRow { id: string; }
 
-const claudeJsonPath = (): string => process.env.GLASS_CLAUDE_JSON || path.join(os.homedir(), '.claude.json');
+const claudeJsonPath = (): string => process.env.GLASS_CLAUDE_JSON || claudeJsonDefault();
 
 function readJson(p: string): unknown {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return {}; }

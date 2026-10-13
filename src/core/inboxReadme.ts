@@ -107,6 +107,15 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
 
     { "action": "kill", "name": "designer" }
 
+**Contract 4 — optional fields** (verbs unchanged; a contract-3 request behaves exactly as before):
+
+- \`from\` (send, resume) — the registry name of the session that wrote the request. A claim, never an identity: it is recorded with the delivery so the receiver can see who sent it, and an unusable value is ignored.
+- \`effort\` (spawn, resume) — \`low\` · \`medium\` · \`high\` · \`xhigh\` · \`max\` → \`claude --effort <value>\`. Any other value is dead-lettered naming the field.
+- \`advisor\` (spawn, resume) — a rung (\`frontier\` Fable 5.1 · \`judgment\` Opus 5.5 · \`scale\` Sonnet 5.5 · \`fast\` Haiku 5.5) or a model id. Passed as a settings file; the advisor must be at least as capable as the worker's model or Claude silently does not use it.
+
+      { "name": "researcher", "task": "…", "tier": "scale", "effort": "high", "advisor": "judgment" }
+      { "action": "send", "name": "researcher", "from": "buddai", "prompt": "…" }
+
 **resume** (contract 3) — reopen a session you already had, as the SAME someone:
 
     { "action": "resume", "name": "designer", "prompt": "pick up the hero work" }
@@ -119,8 +128,9 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
   kind this verb is for. A session that renamed itself resolves by its **latest** name.
 - **Already running?** It is revealed and your \`prompt\` is delivered into it, exactly as
   \`send\` would. Resuming a live session would give one identity two processes.
-- **Nothing to resume?** A dead letter naming the session — never a silent spawn. Only the newest
-  sessions are scanned, so a very old name reports the miss rather than being found slowly.
+- **Any age.** A name is found however old its session is: an index of every transcript, not a
+  count of the newest ones. If a session was renamed, its latest name is the one that counts.
+- **Nothing to resume?** A dead letter naming the session — never a silent spawn.
   Add \`"fallback": "spawn"\` to opt into starting a fresh one instead:
 
       { "action": "resume", "name": "designer", "prompt": "…", "fallback": "spawn" }
@@ -184,7 +194,8 @@ A spawned worker messages its coordinator back the same way — \`send\` to the 
 - A long or multi-line \`task\` is handed off via a temp file rather than typed, so quoting can't mangle it.
 - **A \`prompt\` over 1024 bytes is delivered as a POINTER, not as text** — the fulfiller writes it to \`~/.aios/bus-payloads/\` and types one line naming that file. Measured, because it was assumed once and the assumption was wrong: a ~2.6KB send arrived **cut at byte 2043**, mid-sentence, with no error anywhere, and the lost tail carried a *"do NOT push"* instruction. There is no single ceiling to promise — the App's pty is 1024 in canonical mode and unbounded in raw, while Glass's limit lives inside the VS Code host — so 1024 selects the *mechanism* rather than promising what survives. **Nothing is ever truncated:** if the payload can't be written the send is refused, loudly. Payload files are owner-only and age out after 24 h.
 - **If you RECEIVE a pointer**, the file it names IS the message — read it and follow what is inside; the line you were sent is not the instruction.
-- A **busy** target is never delivered into: text sent mid-turn is dropped, not queued. So a \`send\` to a working session WAITS (you will see \`.holding\` on disk) and lands when it goes idle. If it stays busy ~10 minutes the request is marked \`.undelivered\` rather than forced through.
+- A **busy** target is never delivered into: text sent mid-turn is dropped, not queued. So a \`send\` to a working session WAITS (you will see \`.holding\` on disk) and lands at its **next idle, however long that takes** (up to 24 h; it dead-letters at once only if the session is gone). A message that waited is typed with its age: \`[queued 47 min ago by <from>]\`.
+- **In order, latest wins.** Several \`send\`s to one session are delivered oldest first. A newer \`send\` from the **same \`from\`** replaces an older one still waiting, so a coordinator re-briefing a busy worker gets the latest brief read, not every draft. Without \`from\`, nothing is superseded. The replaced message is not deleted: it moves to \`_archive/<name>.json.superseded\`, naming what replaced it (kept 7 days) — a vanished file means *picked up*, never *dropped*.
 - The file disappearing now means delivery was **verified** in the target's transcript — but to check what a session actually DID with it, read that transcript: \`~/.claude/projects/*/<sessionId>.jsonl\` (\`sessionId\` comes from its registry file). When verifying, COUNT occurrences rather than checking presence: exactly one is the pass condition.
 - Requests dropped while the App was closed are drained on its next start — the inbox is durable, not live-only.
 - If **both** the App and Glass are running they watch the same directory and race per request; whichever picks it up first acts, so the session may open in either surface. Single-surface is the normal case.

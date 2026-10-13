@@ -51,6 +51,9 @@ export interface ClaudeKeySpec {
      by accident; a deliberate omission still has to say what it is, in code, or the next reader
      will "restore" the row and reintroduce whatever made it unsurfaceable. */
   notSurfaced?: string;
+  /** An unsurfaced key that is STILL seeded must say why it is safe to write something the operator does
+   *  not see in Settings. Narrow by design: today only the diff panel, by operator decision. */
+  seededHidden?: string;
 }
 
 export const CLAUDE_KEYS: Record<string, ClaudeKeySpec> = {
@@ -58,6 +61,12 @@ export const CLAUDE_KEYS: Record<string, ClaudeKeySpec> = {
   /* model + outputStyle are NOT seeded: for these, absent genuinely means "not pinned", and
      writing a value would take a decision away from the operator rather than make one for them. */
   model: { path: 'model', store: 'settings', kind: 'enum', seed: '' },
+  /* AI-194 — Claude Code's persisted effort (`effortLevel`, low · medium · high · xhigh). Not
+     seeded: absent means "the model's default", and the default is Claude's to choose. */
+  effort: { path: 'effortLevel', store: 'settings', kind: 'enum', seed: '' },
+  /* AI-195 — the advisor (`advisorModel`: fable · opus · sonnet, or an id). Not seeded: no rung
+     has a default advisor, and absent means none. */
+  advisor: { path: 'advisorModel', store: 'settings', kind: 'enum', seed: '' },
   mode: { path: 'permissions.defaultMode', store: 'settings', kind: 'enum', seed: 'default', seedOnInstall: true },
   /* SEEDED TRUE, deliberately. Publishing App-launched sessions to the operator's account is the
      product default (it is what `spawn` has always done), and seeding makes the toggle honest by
@@ -82,6 +91,14 @@ export const CLAUDE_KEYS: Record<string, ClaudeKeySpec> = {
   /* store CONFIRMED 2026-07-31: found in ~/.claude.json on a real machine, so the inference above
      was correct and `storeUncertain` is retired rather than carried as permanent doubt. */
   copyOnSelect: { path: 'copyOnSelect', store: 'user', kind: 'bool', seed: true, seedOnInstall: true },   // Claude default TRUE (`?? !0`)
+  /* Claude Code 2.1.296's diff panel. Unset, Claude OPENS it by itself beside the conversation when
+     the terminal is ≥144 columns in a git repo — an App pane usually is, so /aios:update put 191
+     changed files beside the transcript (operator test). Operator decision: off by default, a toggle
+     to bring it back. `diffSidebarOpen` is one of Claude's global-config keys (~/.claude.json);
+     `/diff` writes the same key, so a choice made either way is respected. */
+  diffPanel: { path: 'diffSidebarOpen', store: 'user', kind: 'bool', seed: false, seedOnInstall: true,
+    notSurfaced: 'A Settings toggle read as broken in operator testing: turning it ON does not open the panel (only /diff does); it only governs whether Claude opens it by itself.',
+    seededHidden: 'Default off is the operator decision (no surprise panel after /aios:update). Written once, only when nothing is on disk; /diff writes this same key, so the operator stays in control from inside any session.' },
   /* Three more that a non-technical operator actually reaches for — all confirmed present
      in ~/.claude/settings.json on a real machine, so no inference here.
      NOTE on agentPushNotif: the audit of 2026-07-31 found it present in BOTH stores. `readStore()`

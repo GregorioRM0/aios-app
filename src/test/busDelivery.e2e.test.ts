@@ -61,7 +61,7 @@ test('E2E: a message well over the inline limit arrives whole', { skip }, async 
 });
 
 test('E2E NEGATIVE CONTROL: the same assertion FAILS on a deliberately truncated delivery', { skip }, async () => {
-  /* Chuy's requirement. The test above is worthless unless it can fail, and a silent bug needs
+  /* The operator's requirement. The test above is worthless unless it can fail, and a silent bug needs
      a test proven able to detect silence. So: truncate on purpose, at exactly the byte the real
      incident was cut at, and assert the check REJECTS it. If this test ever stops failing to
      detect the cut, the test above has gone blind and the suite is decoration. */

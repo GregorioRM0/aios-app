@@ -57,10 +57,10 @@ test('window focus re-checks — the App has no view-visibility event to lean on
 });
 
 test('update-available is coral on both dot and word, and survives :hover', () => {
-  assert.match(css, /\.pstatus\.updavail \{ color: var\(--accent\); \}/, 'word takes the accent, not a warning gold');
+  assert.match(css, /\.pstatus\.updavail \{ color: var\(--accent-ink\); \}/, 'word takes the accent, not a warning gold');
   assert.match(css, /\.pstatus\.updavail \.pdot \{ background: var\(--accent\); \}/, 'dot too — Glass .status.upd .dot');
   // .pstatus:hover sets color:var(--ink); without this the accent washes out on hover
-  assert.match(css, /\.pstatus\.updavail:hover \{ color: var\(--accent\); \}/);
+  assert.match(css, /\.pstatus\.updavail:hover \{ color: var\(--accent-ink\); \}/);
   assert.match(css, /\.pstatus\.updavail:hover \.pupdtext \{ text-decoration: underline; \}/);
 });
 
@@ -96,7 +96,7 @@ test('a placeholder hash means "cannot tell", never "you are behind"', () => {
   const src = fs.readFileSync('src/main/aios.ts', 'utf8');
   const fn = src.slice(src.indexOf('export function checkForUpdates()'));
   const iGuard = fn.indexOf("if (!frameworkCheckable(status)) return Promise.resolve('unknown')");
-  const iCompare = fn.indexOf('remote.startsWith(status.hash)');
+  const iCompare = fn.indexOf('freshness({ hash: status.hash');   // the comparison moved into core/freshness (TESTING)
   assert.ok(iGuard > 0 && iCompare > iGuard, 'validate the hash before comparing against it');
 });
 

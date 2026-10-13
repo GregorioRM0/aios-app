@@ -813,7 +813,7 @@ test('the trash is findable but not prominent, and theme-aware', () => {
   assert.ok(i > 0, '.phtrash is missing — the icon would inherit button chrome');
   const rule = css.slice(i, css.indexOf('}', i));
   assert.doesNotMatch(rule, /#[0-9a-f]{3,6}/i, 'a pinned colour breaks one of the two themes');
-  assert.match(css.slice(i, i + 400), /\.phtrash:hover[^}]*var\(--st-error\)/,
+  assert.match(css.slice(i, i + 400), /\.phtrash:hover[^}]*var\(--st-error-ink\)/,
     'destructive intent should be visible on hover');
 });
 

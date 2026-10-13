@@ -18,12 +18,16 @@ function withRegistry(entries: object[], fn: () => void) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-home-'));
   const dir = path.join(home, '.claude', 'sessions');
   fs.mkdirSync(dir, { recursive: true });
-  entries.forEach((e, i) => fs.writeFileSync(path.join(dir, `${i + 1}.json`), JSON.stringify(e)));
+  /* AI-203: a session is listed only when it is the operator's — here, by running inside the
+     framework. These tests are about kind/entrypoint, so every entry gets that cwd. */
+  const fw = path.join(home, 'aios');
+  fs.mkdirSync(fw, { recursive: true });
+  entries.forEach((e, i) => fs.writeFileSync(path.join(dir, `${i + 1}.json`), JSON.stringify({ cwd: fw, ...e })));
   // Both: os.homedir() reads HOME on macOS/Linux and USERPROFILE on Windows (CI caught the Windows half).
-  const saved = { h: process.env.HOME, u: process.env.USERPROFILE };
-  process.env.HOME = home; process.env.USERPROFILE = home;
-  const restore = (k: 'HOME' | 'USERPROFILE', v: string | undefined) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
-  try { fn(); } finally { restore('HOME', saved.h); restore('USERPROFILE', saved.u); fs.rmSync(home, { recursive: true, force: true }); }
+  const saved = { h: process.env.HOME, u: process.env.USERPROFILE, f: process.env.GLASS_FRAMEWORK_PATH };
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.GLASS_FRAMEWORK_PATH = fw;
+  const restore = (k: 'HOME' | 'USERPROFILE' | 'GLASS_FRAMEWORK_PATH', v: string | undefined) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+  try { fn(); } finally { restore('HOME', saved.h); restore('USERPROFILE', saved.u); restore('GLASS_FRAMEWORK_PATH', saved.f); fs.rmSync(home, { recursive: true, force: true }); }
 }
 // Two live pids so the dedupe-by-pid step keeps both; a third for the legacy entry.
 const LIVE = [process.pid, process.ppid];
@@ -63,9 +67,11 @@ test('AI-165: the panel, notifications and the palette use the operator list; th
   const host = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'panelHost.ts'), 'utf8');
   const main = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'main.ts'), 'utf8');
   const bus = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'commandBus.ts'), 'utf8');
-  assert.match(host, /const running = aios\.listOperatorSessions\(\);[^\n]*\n\s*this\.attention\.tick/, 'panel rows + "needs you" notifications');
+  /* 0.11.0 (AI-196): the operator list is now overlaid with each session's own OSC 7501 status
+     before it is read; what this guards is unchanged — the source is the OPERATOR list. */
+  assert.match(host, /const registry = aios\.listOperatorSessions\(\);[\s\S]{0,300}const running = overlayProgramStatus\(registry, this\.programStatus\);\s*this\.attention\.tick/, 'panel rows + "needs you" notifications');
   assert.match(main, /running: aios\.listOperatorSessions\(\),/, 'the palette session list');
-  assert.match(bus, /aios\.listRunningAgents\(\)\.find\(\(a\) => a\.name === name\)/, 'send/kill still find background agents by name');
+  assert.match(bus, /const all = aios\.listRunningAgents\(\);\s*const real = resolveSessionName\(name, all\.map\(\(a\) => a\.name\)\);/, 'send/kill still find background agents by name (the full list, any case)');
 });
 
 /* What's New for someone who skipped a release (operator's question, 2026-09-23). */
@@ -99,7 +105,7 @@ test('⌘+/− changes the terminal text when a terminal is focused, the editor 
 test('#23: a waiting row shows what it is waiting for; at rest the hover buttons take no space', () => {
   assert.match(app, /if \(s\.cls === 'input' && a\.waitingFor\) \{/);
   const host = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main', 'panelHost.ts'), 'utf8');
-  assert.match(host, /mem: mem\[a\.pid\], waitingFor: a\.waitingFor, statusUpdatedAt: a\.statusUpdatedAt \}/, 'main sends it to the renderer');
+  assert.match(host, /mem: mem\[a\.pid\], waitingFor: a\.waitingFor, statusUpdatedAt: a\.statusUpdatedAt[,}]/, 'main sends it to the renderer');
   const css = fs.readFileSync('renderer/theme.css', 'utf8');
   assert.match(css, /\.prow2:not\(:hover\):not\(:focus-within\) \.runact:not\(\.has\) \{ display: none; \}/);
   assert.match(css, /body\.light \.zsplit \.pane\.termcard\.panefocus \{ border-color: var\(--accent\);/, '#24 (2c) light-theme focus border');
@@ -109,4 +115,14 @@ test('a drop anywhere clears every drop highlight (no coral ring left on the oth
   assert.match(app, /function clearAllDropHighlights\(\) \{\s*for \(const el of document\.querySelectorAll\('\.dropok, \.panedrop'\)\)/);
   assert.match(app, /document\.addEventListener\('drop', \(\) => setTimeout\(clearAllDropHighlights, 0\), true\);/, 'capture phase, after the target handled it');
   assert.match(app, /document\.addEventListener\('dragend', clearAllDropHighlights, true\);/);
+});
+
+test('AI-203: a session the operator never opened — a probe in another folder — is not listed', () => {
+  withRegistry([
+    { pid: LIVE[0], sessionId: 's-1', name: 'buddai', kind: 'interactive', entrypoint: 'cli', status: 'idle' },
+    { pid: LIVE[1], sessionId: 's-2', name: 'osc-live', kind: 'interactive', entrypoint: 'cli', status: 'waiting', cwd: '/Users/x/code' },
+  ], () => {
+    assert.deepEqual(aios.listOperatorSessions().map((a) => a.name), ['buddai'], 'the probe that raised "osc-live needs you" is gone');
+    assert.equal(aios.listRunningAgents().length, 2, 'the bus still sees it — hiding is a display rule, not a delivery rule');
+  });
 });

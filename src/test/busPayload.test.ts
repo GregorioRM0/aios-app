@@ -49,7 +49,7 @@ test('payload files age out — they hold arbitrary prompt text', () => {
 });
 
 /* ── THE NEGATIVE CONTROL ──────────────────────────────────────────────────────
-   Chuy's requirement, and the important one: prove the check can DETECT truncation.
+   The operator's requirement, and the important one: prove the check can DETECT truncation.
    Both halves of a round trip are exercised — a whole message must pass the assertion, and a
    deliberately truncated one must FAIL it. If the second half ever stops failing, the first
    half has stopped meaning anything and this suite is decoration. */
@@ -152,9 +152,9 @@ test('INVARIANT: the verification baseline is captured ONCE, not per attempt', (
      because the failure is invisible in any single-attempt test. */
   const bus = fs.readFileSync('src/main/commandBus.ts', 'utf8');
   assert.match(bus, /let baseline: number \| undefined;/, 'the baseline must be declared OUTSIDE the delivery loop');
-  assert.match(bus, /if \(baseline === undefined\) baseline = countUserTurnsContaining\(/,
+  assert.match(bus, /if \(baseline === undefined\) baseline = countDeliveries\(/,
     'it must be captured only on the first pass');
-  assert.doesNotMatch(bus, /const before = countUserTurnsContaining\(/,
+  assert.doesNotMatch(bus, /const before = countDeliveries\(/,
     're-reading the baseline per attempt is the bug — derive `before` from the captured baseline');
 });
 

@@ -1,6 +1,12 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, session } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, session, nativeTheme } from 'electron';
 import { markQuitting, isQuitting, closeShouldHide } from './quitState';
 import { installWebPermissionPolicy } from './webPermissions';
+import { withDefaultLocale } from './termLocale';
+import { resolvedTheme, WINDOW_BG } from '../core/theme';
+import { plainText } from '../core/plainText';
+import { speakable, lastAnswer, guessLang } from '../core/speakable';
+import { answerPlain } from '../core/answerPlain';
+import { t } from '../i18n';
 import { shellArgs } from './shellArgs';
 import * as path from 'path';
 import * as os from 'os';
@@ -17,6 +23,7 @@ import { taskFileInstruction, needsTaskFile } from '../core/commandBus';
 import { needsSpill } from '../core/ptyLine';
 import { initAutoUpdater } from './updater';
 import * as aios from './aios';
+import { redactSecrets } from './redact';
 import * as connectors from './connectors';
 import * as fs from 'fs';
 
@@ -39,16 +46,20 @@ const rendererErrors: string[] = [];
 const SHOT = process.argv.find((a) => a.startsWith('--shot')); // --shot[=/path.png] : render + screenshot + exit (dev/QA)
 const EVAL = process.argv.find((a) => a.startsWith('--eval=')); // --eval=<js> : run JS in the renderer, print result, exit (dev/QA)
 const ptys = new Map<number, pty.IPty>();
+aios.setPtyPidSource(() => [...ptys.values()].map((p) => p.pid));   // review blocker 6: pane membership from the tree
 let nextId = 1;
 
 function createWindow(): BrowserWindow {
+  /* Resolved BEFORE the window exists, so neither the pre-paint background nor the first frame
+     is dark on a light machine (the body class used to land only after an IPC round-trip). */
+  const firstTheme = resolvedTheme(aios.shellSettings().theme, nativeTheme.shouldUseDarkColors);
   const win = new BrowserWindow({
     width: 1360,
     height: 860,
     minWidth: 880,
     minHeight: 560,
     show: !SMOKE,
-    backgroundColor: '#0b0b0d',
+    backgroundColor: WINDOW_BG[firstTheme],
     title: 'AIOS',
     // Frameless-with-inset-controls is a macOS affordance: 'hiddenInset' insets the traffic
     // lights into the content, and trafficLightPosition moves them. Neither concept exists
@@ -65,7 +76,7 @@ function createWindow(): BrowserWindow {
       webviewTag: true, // in-app browser panes (the Manual + operator-opened URLs) — #14
     },
   });
-  void win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
+  void win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'), { query: { theme: firstTheme } });
   return win;
 }
 
@@ -81,7 +92,7 @@ function createWindow(): BrowserWindow {
 //  • AIOS_GLASS_TERM — mark the terminal so the shell `spawn` wrapper boots a worker IN-PLACE
 //    here (not osascript a detached window) if `spawn` is ever run from inside a pane.
 function termEnv(cmd?: string, name?: string): Record<string, string> {
-  const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+  const env: Record<string, string> = withDefaultLocale({ ...(process.env as Record<string, string>) }, process.platform);
   delete env.CLAUDE_CODE_CHILD_SESSION;
   env.CLAUDE_CODE_FORCE_SESSION_PERSIST = '1';
   env.AIOS_GLASS_TERM = '1';
@@ -321,8 +332,8 @@ function setupClaudeConfigWatch(win: BrowserWindow): void {
      fact, and the third was easy to forget precisely because the first two were already right. */
   const framework = aios.frameworkRoot();
   const watched = [
-    path.join(os.homedir(), '.claude', 'settings.json'),
-    path.join(os.homedir(), '.claude.json'),
+    path.join(aios.claudeConfigDir(), 'settings.json'),
+    aios.claudeJsonDefault(),
     ...(framework ? [path.join(framework, '.claude', 'settings.json'), path.join(framework, '.claude', 'settings.local.json')] : []),
   ];
   lastClaudeCfg = JSON.stringify(aios.claudeConfig());   // baseline, so the first real change is the first event
@@ -464,7 +475,7 @@ function sessionNameFromTranscript(file: string, mtime: number): string {
    The id becomes part of a PATH, so anything that is not id-shaped is refused before it is joined. */
 ipcMain.handle('sessions:locate', (_e, ids: unknown) => {
   const want = (Array.isArray(ids) ? ids : []).map(String).filter((id) => /^[0-9a-f][0-9a-f-]{7,63}$/i.test(id));
-  const dir = path.join(os.homedir(), '.claude', 'projects');
+  const dir = path.join(aios.claudeConfigDir(), 'projects');
   let projs: string[] = [];
   try { projs = fs.readdirSync(dir); } catch { /* no transcripts at all */ }
   const live = new Set(aios.listRunningAgents().map((a: { sessionId?: string }) => a.sessionId).filter(Boolean));
@@ -477,7 +488,7 @@ ipcMain.handle('sessions:locate', (_e, ids: unknown) => {
 });
 
 ipcMain.handle('sessions:resumable', () => {
-  const dir = path.join(os.homedir(), '.claude', 'projects');
+  const dir = path.join(aios.claudeConfigDir(), 'projects');
   let files: Array<{ file: string; at: number }> = [];
   try {
     for (const proj of fs.readdirSync(dir)) {
@@ -696,7 +707,92 @@ ipcMain.handle('shell:zoom', (_e, factor: number) => {
   if (w && !w.isDestroyed()) w.webContents.setZoomFactor(f);
   return f;
 });
+/* AI-196 — a session's own OSC 7501 status, relayed by the renderer, merged in panelHost. */
+/* AI-169 — a session's final answer, reduced to what is worth hearing (core/speakable). */
+ipcMain.handle('session:speakable', (_e, sessionId: string) => {
+  const sid = String(sessionId || '');
+  if (!/^[A-Za-z0-9-]{8,}$/.test(sid)) return { text: '', lang: '' };
+  try {
+    const base = path.join(aios.claudeConfigDir(), 'projects');
+    for (const d of fs.readdirSync(base)) {
+      const f = path.join(base, d, `${sid}.jsonl`);
+      if (!fs.existsSync(f)) continue;
+      const size = fs.statSync(f).size;
+      const len = Math.min(size, 512 * 1024);
+      const fd = fs.openSync(f, 'r');
+      const buf = Buffer.alloc(len);
+      try { fs.readSync(fd, buf, 0, len, size - len); } finally { fs.closeSync(fd); }
+      const answer = lastAnswer(buf.toString('utf8'));
+      const lang = guessLang(answer);
+      /* "The rest is on screen" in the ANSWER's language, so one voice says the whole thing. */
+      const rest = lang === 'es' ? 'El resto está en pantalla.' : lang === 'pt' ? 'O resto está na tela.' : lang === 'en' ? 'The rest is on screen.' : t('readAloud.rest');
+      return { text: speakable(answer, rest), lang: lang ?? '' };
+    }
+  } catch { /* unreadable — say nothing */ }
+  return { text: '', lang: '' };
+});
+/* AI-192, revised — "Copy last answer": the session's final answer from its transcript, as plain text,
+   straight to the clipboard. Returns its length (0 = no answer yet). */
+ipcMain.handle('session:copyLastAnswer', (_e, sessionId: string) => {
+  const sid = String(sessionId || '');
+  if (!/^[A-Za-z0-9-]{8,}$/.test(sid)) return 0;
+  try {
+    const base = path.join(aios.claudeConfigDir(), 'projects');
+    for (const d of fs.readdirSync(base)) {
+      const f = path.join(base, d, `${sid}.jsonl`);
+      if (!fs.existsSync(f)) continue;
+      const size = fs.statSync(f).size;
+      const len = Math.min(size, 2 * 1024 * 1024);
+      const fd = fs.openSync(f, 'r');
+      const buf = Buffer.alloc(len);
+      try { fs.readSync(fd, buf, 0, len, size - len); } finally { fs.closeSync(fd); }
+      const text = answerPlain(lastAnswer(buf.toString('utf8')));
+      if (text) clipboard.writeText(text);
+      return text.length;
+    }
+  } catch { /* unreadable */ }
+  return 0;
+});
+/* app#59 — is this session id already running (any surface, any terminal)? Asked by tab restore
+   before it starts `claude --resume <id>`, so one transcript never gets two live processes. */
+ipcMain.handle('session:isLive', (_e, sessionId: string) => {
+  const sid = String(sessionId || '');
+  return !!sid && aios.listRunningAgents().some((a) => a.sessionId === sid);
+});
+ipcMain.on('panes:sessions', (_e, ids: unknown) => aios.setPaneSessionIds(ids));   // AI-203
+ipcMain.on('pty:programStatus', (_e, m: { sessionId?: string; data?: string; at?: number }) => {
+  host?.setProgramStatus(String(m?.sessionId ?? ''), String(m?.data ?? ''), Number(m?.at) || Date.now());
+});
+/* AI-200 — "Report this": the tab's recent lines go to a LOCAL temp file for aios-feedback to read.
+   Never sent anywhere by the App; the agent scrubs and asks before anything leaves the machine. */
+ipcMain.handle('feedback:snapshot', (_e, name: string, text: string) => {
+  sweepReportSnapshots();
+  try {
+    const slug = String(name || 'terminal').replace(/[^a-z0-9-]+/gi, '-').slice(0, 40) || 'terminal';
+    const f = path.join(os.tmpdir(), `aios-report-${slug}-${Date.now()}.txt`);
+    /* Review should-fix 12: written ALREADY REDACTED — token shapes, keys, credentials in URLs. The
+       agent still scrubs; the App no longer depends on it. */
+    fs.writeFileSync(f, redactSecrets(String(text ?? '').slice(0, 200_000)), { mode: 0o600 });
+    return f;
+  } catch { return ''; }
+});
+/* Snapshots are read once, by the session the report opened. Any older than a day is an orphan
+   (a report abandoned, or one dropped because the feedback pane already existed) — remove it. */
+function sweepReportSnapshots(maxAgeMs = 24 * 60 * 60 * 1000): void {
+  try {
+    const dir = os.tmpdir();
+    for (const n of fs.readdirSync(dir)) {
+      if (!/^aios-report-.*\.txt$/.test(n)) continue;
+      const f = path.join(dir, n);
+      try { if (Date.now() - fs.statSync(f).mtimeMs > maxAgeMs) fs.unlinkSync(f); } catch { /* gone */ }
+    }
+  } catch { /* tmp unreadable */ }
+}
+app.whenReady().then(() => sweepReportSnapshots()).catch(() => undefined);
 ipcMain.handle('shell:copyText', (_e, t: string) => { clipboard.writeText(String(t)); return true; });
+/* AI-192 — ⇧⌘C / right-click "Copy as plain text": the selection without Claude's TUI scaffolding
+   (bullets, quote bars, indents, the footer) and with terminal wraps rejoined into paragraphs. */
+ipcMain.handle('shell:copyPlainText', (_e, t: string, cols: number) => { clipboard.writeText(plainText(String(t), Number(cols) || 80)); return true; });
 ipcMain.handle('fs:read', (_e, relOrAbs: string) => {
   const abs = resolveIn(relOrAbs);
   if (!abs) return null;
@@ -882,8 +978,15 @@ ipcMain.handle('starter:apply', (_e, id: string) => {
 });
 // the Onboarding flow: one doctor battery → the gated stepper (done/active/locked)
 ipcMain.handle('onboarding:state', () => aios.onboardingState());
+ipcMain.handle('onboarding:skip', (_e, id: string) => { aios.skipOnboardingStep(String(id ?? '')); return aios.onboardingState(); });
 // PAT lane: store a GitHub token via `git credential approve` (never echoed)
-ipcMain.handle('onboarding:storePat', (_e, pat: string) => aios.storeGitHubPat(String(pat ?? '')));
+/* #50: stored → verified once with GitHub → the gh step can pass on macOS, where the token lives
+   in Keychain and the poll may not read it. 'unverified' = stored, but GitHub refused it. */
+ipcMain.handle('onboarding:storePat', async (_e, pat: string): Promise<'verified' | 'unverified' | 'failed'> => {
+  const p = String(pat ?? '');
+  if (!aios.storeGitHubPat(p)) return 'failed';
+  return (await aios.verifyGitHubPat(p)) ? 'verified' : 'unverified';
+});
 // doctor: headless repair + re-run-the-same-check proof (see aios.repairCheck)
 ipcMain.handle('doctor:repair', (_e, id: string) => aios.repairCheck(String(id)));
 ipcMain.handle('doctor:health', () => aios.computeHealth());
@@ -936,6 +1039,8 @@ ipcMain.handle('tab:menu', async (e, items: { label: string; value: string }[]) 
 ipcMain.handle('shell:appVersion', () => app.getVersion());
 ipcMain.handle('caffeinate:state', () => caffeine.state());
 ipcMain.handle('caffeinate:toggle', () => caffeine.toggle());
+ipcMain.handle('caffeinate:lid', (_e, on: unknown, prompt: unknown) => caffeine.lidEnable(on === true, String(prompt ?? '')));
+ipcMain.handle('caffeinate:lidRemove', (_e, prompt: unknown) => caffeine.lidRemove(String(prompt ?? '')));
 ipcMain.handle('claude:config', () => aios.claudeConfig());
 ipcMain.handle('claude:outputStyles', () => aios.outputStyleOptions());
 ipcMain.handle('claude:modelOptions', () => aios.modelOptions());
@@ -1023,11 +1128,11 @@ ipcMain.handle('shell:frameworkPath', () => aios.frameworkPathSetting());
 ipcMain.handle('shell:setFrameworkPath', (_e, v: string) => { aios.setFrameworkPath(String(v ?? '')); return aios.frameworkPathSetting(); });
 ipcMain.handle('claude:setKeys', () => aios.claudeConfigSetKeys());
 ipcMain.handle('claude:stores', () => aios.claudeConfigStores());
-ipcMain.handle('claude:set', (_e, key: 'model' | 'mode' | 'remoteControl' | 'autoUpdates', value: unknown) => {
+ipcMain.handle('claude:set', (_e, key: 'model' | 'effort' | 'advisor' | 'mode' | 'remoteControl' | 'autoUpdates', value: unknown) => {
   aios.setClaudeConfig(key, value);
   return aios.claudeConfig();
 });
-ipcMain.handle('shell:setSetting', (_e, key: 'claudeCmd' | 'showHints' | 'showNudges' | 'showMemory' | 'theme' | 'termFontSize' | 'showHidden' | 'fileIcons' | 'autoReveal' | 'showWeekNumbers' | 'killBehavior' | 'terminalMode' | 'openNotesIn' | 'appFontSize' | 'hiddenCards' | 'ignorePaths' | 'locale' | 'caffeinate' | 'attention' | 'busFocus', value: unknown) => {
+ipcMain.handle('shell:setSetting', (_e, key: 'claudeCmd' | 'showHints' | 'showNudges' | 'showMemory' | 'theme' | 'termFontSize' | 'showHidden' | 'fileIcons' | 'autoReveal' | 'autoOpenExports' | 'showWeekNumbers' | 'killBehavior' | 'terminalMode' | 'openNotesIn' | 'appFontSize' | 'hiddenCards' | 'ignorePaths' | 'locale' | 'caffeinate' | 'attention' | 'busFocus' | 'lidAsked', value: unknown) => {
   aios.setShellSetting(key, value);
   /* AI-132: changing the RULE retires any override — otherwise you switch manual→auto and watch
      auto not follow sessions, with nothing on screen explaining why. Applies immediately rather
@@ -1612,6 +1717,24 @@ app.whenReady().then(() => {
         if (clobber !== '') console.error(`shell-smoke: I18N WILL CLOBBER CHILDREN — these carry data-i18n AND element children, so the next locale pass deletes them: ${clobber}`);
         if (chromeOk) console.log('shell-smoke: chrome — every JS-mounted control present, no i18n node can clobber children');
       } catch (e) { console.error('shell-smoke: chrome gate error', e); }
+      /* THE UPDATE PILL MUST RENDER AS A PILL (0.11.0 review blocker). A rule pasted into its CSS
+         comment once ended the comment early and the browser dropped the pill rule: it fell back
+         to the title bar's 26×26 button box. A user whose pill is broken can never receive the
+         update that fixes it, so the packaged app proves it: shown, wider than the forced box,
+         rounded, filled with the button coral, and the topmost element at its own centre. */
+      let pillOk = false;
+      try {
+        const pill = await win.webContents.executeJavaScript(`(() => {
+          showUpdatePill('0.0.0-smoke', 'ready');
+          const p = document.getElementById('updPill'); const r = p.getBoundingClientRect(); const cs = getComputedStyle(p);
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === p;
+          const res = { w: Math.round(r.width), h: Math.round(r.height), radius: cs.borderRadius, bg: cs.backgroundColor, hit };
+          hideUpdatePill();
+          return res;
+        })()`).catch(() => null);
+        pillOk = !!pill && pill.w > 40 && pill.h >= 20 && pill.radius === '999px' && pill.bg !== 'rgba(0, 0, 0, 0)' && pill.hit;
+        console.log(`shell-smoke: update pill — ${JSON.stringify(pill)} ${pillOk ? 'renders as a clickable pill' : 'BROKEN'}`);
+      } catch (e) { console.error('shell-smoke: pill gate error', e); }
       /* gate 10: THE SHORTCUT MAP MUST NOT LEAK RAW TOKENS. `CommandOrControlQ` reached the
          screen because the unit sweep read accelerator strings out of menu.ts SOURCE — and role
          items (Quit, the whole Edit section) have no accelerator in source. They only exist on the
@@ -1649,10 +1772,10 @@ app.whenReady().then(() => {
         for (const e of [...new Set(rendererErrors)].slice(0, 5)) console.error('  · ' + e);
       }
       const clean = rendererErrors.length === 0;
-      const ok = loaded && ptyOk && stateOk && !!rendererOk && panelOk && themeOk && setupOk && chromeOk && mapOk && animOk && rowOk && rebuildOk && headOk && restoreOk && idleOk && clean;
+      const ok = loaded && ptyOk && stateOk && !!rendererOk && panelOk && themeOk && setupOk && chromeOk && pillOk && mapOk && animOk && rowOk && rebuildOk && headOk && restoreOk && idleOk && clean;
       console.log(ok
-        ? 'shell-smoke: window + pty + state + workbench + panel + theme + setup + chrome + shortcuts + animations + row-actions + settings-rebuild + header + restore + idle + no-renderer-errors OK ✓'
-        : `shell-smoke: FAIL (loaded=${loaded}, pty=${ptyOk}, state=${stateOk}, workbench=${rendererOk}, panel=${panelOk}, theme=${themeOk}, setup=${setupOk}, chrome=${chromeOk}, shortcutMap=${mapOk}, animations=${animOk}, rowActions=${rowOk}, settingsRebuild=${rebuildOk}, header=${headOk}, restore=${restoreOk}, idle=${idleOk}, rendererClean=${clean})`);
+        ? 'shell-smoke: window + pty + state + workbench + panel + theme + setup + chrome + update-pill + shortcuts + animations + row-actions + settings-rebuild + header + restore + idle + no-renderer-errors OK ✓'
+        : `shell-smoke: FAIL (loaded=${loaded}, pty=${ptyOk}, state=${stateOk}, workbench=${rendererOk}, panel=${panelOk}, theme=${themeOk}, setup=${setupOk}, chrome=${chromeOk}, pill=${pillOk}, shortcutMap=${mapOk}, animations=${animOk}, rowActions=${rowOk}, settingsRebuild=${rebuildOk}, header=${headOk}, restore=${restoreOk}, idle=${idleOk}, rendererClean=${clean})`);
       return ok;
     };
     void Promise.race([

@@ -71,14 +71,28 @@ test('deriveOnboarding: a missing required check can never read as done', () => 
 });
 
 test('there are exactly four steps, in the order an operator can follow', () => {
-  /* Seven boxes asked seven decisions of someone with no basis for making them. "Starter pack"
-     was the proof: the operator read it, clicked it, and still could not say what it did — and if
-     the person who commissioned the feature cannot explain it at the moment of use, a newcomer
-     cannot either. Four steps, each one thing, the last one a conversation. */
+  /* Seven boxes asked seven decisions of someone with no basis for making them. Four steps, each one
+     thing. Operator decision (0.11.0 test): GitHub before the setup session — backed up from day one,
+     with Claude already there to help — and skippable, so it can never block (#51's case). */
   assert.deepEqual(ONBOARDING_STEPS.map((x) => x.id), ['prereqs', 'login', 'github', 'firstrun']);
+  assert.equal(ONBOARDING_STEPS.find((x) => x.id === 'github')!.skippable, true);
   for (const dead of ['vault', 'wiring', 'starter', 'identity']) {
     assert.ok(!ONBOARDING_STEPS.some((x) => x.id === dead), `${dead} is no longer a step`);
   }
+});
+
+test('GitHub never stands between the operator and the setup session — "Skip for now" passes it', () => {
+  /* #51: a Mac with no Homebrew stalled on GitHub for half an hour and never reached "Set up my
+     AIOS". GitHub is offered first now, so skipping must unlock the conversation. */
+  const before = deriveOnboarding(battery(['git', 'claude', 'account'], ['gh', 'personalized']));
+  assert.equal(before.steps[before.current].id, 'github', 'offered right after Claude is signed in');
+  const skipped = deriveOnboarding(battery(['git', 'claude', 'account'], ['gh', 'personalized']), new Set(['github']));
+  assert.equal(skipped.steps[skipped.current].id, 'firstrun', 'skipping it makes the setup session the live step');
+  assert.equal(skipped.steps.find((x) => x.id === 'github')!.skipped, true);
+  const noSkipPrereqs = deriveOnboarding(battery([], ['git', 'claude', 'account', 'gh', 'personalized']), new Set(['prereqs', 'login']));
+  assert.equal(noSkipPrereqs.steps[noSkipPrereqs.current].id, 'prereqs', 'only a skippable step can be skipped');
+  const connected = deriveOnboarding(battery(['git', 'claude', 'account', 'gh'], ['personalized']), new Set(['github']));
+  assert.equal(connected.steps.find((x) => x.id === 'github')!.skipped, false, 'connected later: done by its check, no longer "skipped"');
 });
 
 test('deriveOnboarding: an earlier regression pulls the active step back (idempotent re-verify)', () => {

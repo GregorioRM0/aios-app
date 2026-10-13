@@ -99,7 +99,7 @@ jobs:
           # Wait for the thing the next step actually reads.
           for i in $(seq 1 60); do
             if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx 'latest-mac.yml'; then
-              echo "release $RELEASE_TAG is published AND latest-mac.yml is attached"; exit 0
+              echo "release $RELEASE_TAG exists (draft or public) AND latest-mac.yml is attached"; exit 0
             fi
             echo "waiting for $RELEASE_TAG's mac manifest to land… ($i/60)"; sleep 30
           done
@@ -121,6 +121,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Never touch files on a release that is already PUBLIC (0.11.0 review blocker): users'
+          # updaters read it, and overwriting a live feed is how a working update breaks.
+          if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ]; then
+            echo "::error::$RELEASE_TAG is already published — refusing to upload or overwrite files on a live release"; exit 1
+          fi
           ls -la dist/*.exe dist/*.exe.blockmap dist/latest.yml
           gh release upload "$RELEASE_TAG" \
             dist/*.exe dist/*.exe.blockmap dist/latest.yml --clobber
@@ -144,3 +149,12 @@ jobs:
             exit 1
           fi
           echo "✓ the mac feed is byte-identical; no mac client sees anything from this run"
+
+      # ALL OR NOTHING (operator's decision, 0.11.0). The Release is a DRAFT until every platform's
+      # feed is attached; this lane publishes it only if it completes the set. A missing feed just
+      # leaves the draft a draft — electron-updater ignores drafts, so nobody sees half a release.
+      - name: Publish only when all three platforms are attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: node scripts/release-gate.mjs --tag "$RELEASE_TAG"

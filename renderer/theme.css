@@ -21,6 +21,24 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --line-strong: rgba(255,255,255,.13);
   --ink: #ececee;
   --subtle: #93939c;
+  /* #24 contrast pass (0.11.0) — FAINT is the quietest legible text: week numbers, explorer
+     prefixes, empty-list notes, a row's memory figure. They used to be --subtle at opacity
+     .5-.65, which measured 2.4-3.3:1. This value clears 4.5:1 on every dark surface (worst:
+     --surface-2 at 4.74) and still sits well below --subtle (5.7-6.6). */
+  --faint: #85858e;
+  /* Operator decision (0.11.0, after testing it): the coral stays the 0.10.1 brand coral everywhere.
+     A darker #d63a2a fill was tried because white on #ff5d4d MEASURES 3.03:1 — a computed finding,
+     not a reported one (the human readability report, #24, was about dimmed grey text, fixed
+     separately). Seen in light, the darker coral read as off-brand, so the brand wins. The tokens
+     stay, so a future change is one line. */
+  --accent-fill: var(--accent);
+  --accent-fill-hover: var(--accent-soft);
+  /* INK variants: the same hues where they are used as TEXT. Dark theme is the reference and
+     needs nothing (coral 6.5:1, the status colours higher), so here they are aliases. */
+  --accent-ink: var(--accent);
+  --st-ok-ink: var(--st-ok); --st-busy-ink: var(--st-busy); --st-input-ink: var(--st-input);
+  --st-warn-ink: var(--st-warn);
+  --st-error-ink: #eb5458;   /* the error red as text: 4.43:1 on --surface-2 → 4.9; the fill keeps --st-error */
   --accent: #ff5d4d;
   --accent-soft: #ff7a6c;
   /* ── status vocabulary — single-hue tokens. NEVER coral: coral = action/identity only ── */
@@ -30,6 +48,7 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --st-input: #6cb0ff;   /* waiting on the operator (blue) */
   --st-warn:  #e8b75a;   /* attention soon (soft gold) */
   --st-error: #e5484d;   /* failure — a REAL red, deliberately distinct from coral */
+  --st-testing: #b58cf0; /* framework on a branch ahead of main — violet: not "fine" (green), not "update" (coral/amber), not "needs you" (blue) */
   --ok: var(--st-ok);    /* legacy alias — prefer --st-ok */
   --edge: inset 0 1px 0 rgba(255,255,255,.05);
   --depth: 0 10px 26px -16px rgba(0,0,0,.6);
@@ -49,7 +68,7 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
 .status-fill { --sc: var(--st-idle); background: var(--sc); color: var(--bg);
                border: 1px solid color-mix(in srgb, var(--sc) 55%, transparent); }
 .st-idle { --sc: var(--st-idle); } .st-ok { --sc: var(--st-ok); } .st-busy { --sc: var(--st-busy); }
-.st-input { --sc: var(--st-input); } .st-warn { --sc: var(--st-warn); } .st-error { --sc: var(--st-error); }
+.st-input { --sc: var(--st-input); } .st-warn { --sc: var(--st-warn); } .st-error { --sc: var(--st-error); } .st-testing { --sc: var(--st-testing); }
 
 html, body { height: 100%; margin: 0; background: var(--bg); font-family: var(--font); user-select: none; }
 * { scrollbar-width: thin; scrollbar-color: var(--surface-2) transparent; }
@@ -84,7 +103,7 @@ html, body { height: 100%; margin: 0; background: var(--bg); font-family: var(--
 #app.ide > #panel  { order: 5; }
 /* the layout menu's position diagram */
 .lglyph { flex: 0 0 auto; display: inline-flex; margin-right: 8px; color: var(--subtle); }
-.lmenu button.on .lglyph, .lmenu button:hover .lglyph { color: var(--accent); }
+.lmenu button.on .lglyph, .lmenu button:hover .lglyph { color: var(--accent-ink); }
 
 /* ── panel header + toolbar (#18 — the rail's controls, now in the panel; Glass parity) ── */
 #phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 0 10px; }
@@ -104,13 +123,14 @@ html, body { height: 100%; margin: 0; background: var(--bg); font-family: var(--
 .pstatus .pupdtext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pstatus .pdot.st-ok { background: var(--st-ok); }
 .pstatus .pdot.st-warn { background: var(--st-warn); }
+.pstatus .pdot.st-testing { background: var(--st-testing); }   /* framework ahead of main: violet */
 /* "update available" is CORAL — dot and word — matching the Glass extension's
    .status.upd exactly (its dot + text both take var(--accent), underlined on
    hover). Gold read as a generic warning and diverged from Glass. The two rules
    below re-assert coral over .pstatus:hover, which sets color:var(--ink) and
    would otherwise wash the accent out on the very interaction that invites it. */
-.pstatus.updavail { color: var(--accent); }
-.pstatus.updavail:hover { color: var(--accent); }
+.pstatus.updavail { color: var(--accent-ink); }
+.pstatus.updavail:hover { color: var(--accent-ink); }
 .pstatus.updavail .pdot { background: var(--accent); }
 .pstatus.updavail:hover .pupdtext { text-decoration: underline; }
 /* #38 shortcuts sheet */
@@ -136,9 +156,9 @@ button.tpick:hover { border-color: var(--accent); }
 .dzkind { flex: 1; background: var(--surface-2); border: 1px solid var(--line); color: var(--subtle);
           border-radius: 9px; padding: 9px 12px; font-size: 12.5px; font-weight: 600; font-family: var(--font); cursor: pointer; }
 .dzkind:hover { color: var(--ink); border-color: var(--accent); }
-.dzkind.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dzkind.on { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
 .dzabout { font-size: 12px; color: var(--subtle); line-height: 1.55; }
-.dzhome { font-size: 11px; color: var(--subtle); font-family: var(--mono); opacity: .8; margin-top: 6px; }
+.dzhome { font-size: 11px; color: var(--faint); font-family: var(--mono); margin-top: 6px; }
 /* stacked fields — label + hint above a full-width control (a form you type prose into) */
 .dzfield { margin: 14px 0; }
 .dzlabel { font-size: 12.5px; font-weight: 600; color: var(--ink); margin-bottom: 3px; }
@@ -172,14 +192,14 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
    32px width still caps them, so a wide panel never stretches them apart. */
 #ptoolbar .ribtn { flex: 0 1 auto; min-width: 26px; }
 #railMark { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
-            color: var(--accent); cursor: default; filter: drop-shadow(0 0 8px rgba(255,93,77,.32)); }
+            color: var(--accent-ink); cursor: default; filter: drop-shadow(0 0 8px rgba(255,93,77,.32)); }
 #railMark svg { display: block; width: 20px; height: 20px; }
 .ribtn.disabled { opacity: .4; }
-.ribtn.closeall:hover { color: var(--st-warn); }
+.ribtn.closeall:hover { color: var(--st-warn-ink); }
 .ribtn { width: 32px; height: 32px; background: transparent; border: 1px solid transparent; color: var(--subtle); border-radius: 9px;
          cursor: pointer; display: inline-flex; align-items: center; justify-content: center; transition: all .15s; }
 .ribtn:hover { color: var(--ink); background: var(--surface); }
-.ribtn.on { color: var(--accent); background: var(--surface); border-color: var(--line); box-shadow: var(--edge); }
+.ribtn.on { color: var(--accent-ink); background: var(--surface); border-color: var(--line); box-shadow: var(--edge); }
 #railSpacer { flex: 1; }
 
 /* ── explorer ── */
@@ -191,8 +211,8 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 /* The heading becomes a row so the refresh button can sit at its right edge. Only when the
    button is present, so a heading without one keeps its original box exactly. */
 #xhead.xhead-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.xrefresh { background: transparent; border: 0; color: var(--subtle); cursor: pointer; padding: 2px; margin: -2px 0;
-            border-radius: 5px; display: inline-flex; align-items: center; opacity: .6; }
+.xrefresh { background: transparent; border: 0; color: var(--faint); cursor: pointer; padding: 2px; margin: -2px 0;
+            border-radius: 5px; display: inline-flex; align-items: center; }
 .xrefresh:hover { opacity: 1; background: var(--surface); color: var(--ink); }
 .xrefresh.spin svg { animation: xspin .6s linear; }
 @keyframes xspin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
@@ -202,7 +222,7 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 .xrow.sel { background: var(--surface-2); color: var(--ink); box-shadow: var(--edge); }
 .xrow.dir { color: var(--ink); font-weight: 500; }
 .xicon { display: inline-flex; align-items: center; color: var(--subtle); width: 14px; justify-content: center; flex: 0 0 auto; }
-.xrow.sel .xicon { color: var(--accent); }
+.xrow.sel .xicon { color: var(--accent-ink); }
 .xname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── splitters ── */
@@ -247,7 +267,7 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 /* ↑ the 1.5px accent underline marks the active tab in BOTH themes (operator: loved it in light,
    wanted it in dark for consistency); it is the same accent as the focused pane's edge. */
 .tab .ticon { display: inline-flex; color: var(--subtle); }
-.tab.active .ticon { color: var(--accent); }
+.tab.active .ticon { color: var(--accent-ink); }
 .tab .tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Finished while you were elsewhere — cleared once the tab has been on screen ~3s (#unseen).
    On the NAME, never the dot: the dot's pixel belongs to state, and a ring there fought the pulse. */
@@ -278,12 +298,12 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
   background: var(--sc); will-change: transform, opacity;
   animation: ringpulse 2s ease-out infinite;
 }
-.tab .tx:hover { color: var(--accent); }
-.tab.dirty .tname::after { content: '•'; color: var(--accent); margin-left: 5px; }
+.tab .tx:hover { color: var(--accent-ink); }
+.tab.dirty .tname::after { content: '•'; color: var(--accent-ink); margin-left: 5px; }
 .newTab { flex: 0 0 auto; background: transparent; border: 1px solid var(--line); color: var(--subtle); border-radius: 8px;
           width: 26px; height: 26px; cursor: pointer; font-size: 13px; line-height: 1; transition: all .15s;
           display: inline-flex; align-items: center; justify-content: center; padding: 0; }
-.newTab:hover { color: var(--accent); border-color: var(--accent); }
+.newTab:hover { color: var(--accent-ink); border-color: var(--accent); }
 
 /* pane zone — terminals + viewers live as glass cards */
 .panezone { flex: 1; position: relative; min-height: 0; padding: 0 10px 10px; }
@@ -312,8 +332,8 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 /* An icon inside a text button sat on the text BASELINE, so it looked dropped (operator, 2026-09-29,
    on the new Reveal in Finder button; the PNG button had the same offset). Centre it on the text. */
 .vbtn svg { vertical-align: -2px; margin-right: 1px; }
-.vbtn.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; padding: 9px 18px; font-size: 13px; }
-.vbtn.primary:hover { background: var(--accent-soft); color: #fff; }
+.vbtn.primary { background: var(--accent-fill); color: #fff; border-color: var(--accent-fill); font-weight: 600; padding: 9px 18px; font-size: 13px; }
+.vbtn.primary:hover { background: var(--accent-fill-hover); color: #fff; }
 .vbody { flex: 1; overflow-y: auto; min-height: 0; user-select: text; }
 .vbody.fill { overflow: hidden; display: flex; }
 .vbody.fill .htmlview { flex: 1; height: auto; }
@@ -335,7 +355,7 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 .mdview h1, .mdview h2, .mdview h3, .mdview h4 { line-height: 1.3; color: var(--ink); }
 .mdview h1 { font-size: 1.65em; border-bottom: 1px solid var(--line); padding-bottom: .3em; }
 .mdview h2 { font-size: 1.3em; border-bottom: 1px solid var(--line); padding-bottom: .22em; }
-.mdview a, .mdview .wikilink { color: var(--accent); text-decoration: none; cursor: pointer; }
+.mdview a, .mdview .wikilink { color: var(--accent-ink); text-decoration: none; cursor: pointer; }
 .mdview .wikilink:hover, .mdview a:hover { text-decoration: underline; }
 .mdview code { background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: .1em .38em; font-size: .86em; font-family: var(--mono); }
 .mdview pre { background: #0d0d10; border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; overflow-x: auto; box-shadow: var(--edge); }
@@ -409,15 +429,15 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 .tacts { display: flex; gap: 8px; margin-top: 14px; }
 .tbrand { margin-bottom: 30px; }
 .tbig { font-size: 27px; font-weight: 700; letter-spacing: -.02em; }
-.taccent { color: var(--accent); }
+.taccent { color: var(--accent-ink); }
 .tsub { color: var(--subtle); font-size: 13px; margin-top: 9px; line-height: 1.6; }
 .tchecks { display: flex; flex-direction: column; gap: 10px; }
 .tcheck { display: flex; align-items: center; gap: 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
           padding: 14px 16px; box-shadow: var(--edge); transition: border-color .15s; }
 .tcheck:hover { border-color: var(--line-strong); }
-.tcheck.ok .tmark { color: var(--st-ok); }
-.tcheck.warn .tmark { color: var(--st-warn); }
-.tcheck.bad .tmark { color: var(--st-error); }
+.tcheck.ok .tmark { color: var(--st-ok-ink); }
+.tcheck.warn .tmark { color: var(--st-warn-ink); }
+.tcheck.bad .tmark { color: var(--st-error-ink); }
 .tmark { font-size: 16px; font-weight: 700; width: 18px; text-align: center; }
 .tclabel { flex: 1; font-size: 13.5px; }
 .tcdetail { color: var(--subtle); font-size: 11px; margin-top: 3px; font-family: var(--mono); }
@@ -437,7 +457,7 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 .step.done .step-head { cursor: pointer; }
 .step-ix { width: 24px; height: 24px; flex: 0 0 auto; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
            font-size: 11.5px; font-weight: 600; font-family: var(--mono); color: var(--subtle); border: 1px solid var(--line-strong); }
-.step.active .step-ix { color: var(--accent); border-color: var(--accent); }
+.step.active .step-ix { color: var(--accent-ink); border-color: var(--accent); }
 .step.done .step-ix { color: var(--bg); background: var(--st-ok); border-color: transparent; }
 .step-name { flex: 1; font-size: 13.5px; font-weight: 550; color: var(--ink); }
 .step-msg { font-family: var(--mono); font-size: 10.5px; color: var(--subtle); max-width: 46%;
@@ -492,7 +512,7 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
          cursor: pointer; font-family: var(--font); color: var(--ink); transition: all .16s; box-shadow: var(--edge), var(--depth); }
 .hcard:hover { border-color: var(--accent); background: var(--surface-2); transform: translateY(-1px);
                box-shadow: var(--edge), 0 0 18px rgba(255,93,77,.12), var(--depth); }
-.hemoji { margin-bottom: 10px; color: var(--accent); display: inline-flex; }
+.hemoji { margin-bottom: 10px; color: var(--accent-ink); display: inline-flex; }
 .htitle { font-size: 15px; font-weight: 650; }
 .hhint { color: var(--subtle); font-size: 12px; margin-top: 4px; }
 
@@ -507,7 +527,7 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 .wngrid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-top: 26px; }
 .wncard { background: var(--surface); border: 1px solid var(--line); border-radius: 16px;
           padding: 20px; box-shadow: var(--edge), var(--depth); }
-.wnicon { color: var(--accent); display: inline-flex; margin-bottom: 10px; }
+.wnicon { color: var(--accent-ink); display: inline-flex; margin-bottom: 10px; }
 .wntitle { font-size: 15px; font-weight: 650; }
 .wnbody { color: var(--subtle); font-size: 12.5px; line-height: 1.65; margin-top: 6px; }
 /* The way out sits bottom-right with real air above it: it is the last thing on the pane and it
@@ -517,7 +537,7 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 .wnlink { background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
           color: var(--ink); font-family: var(--font); font-size: 12.5px; padding: 8px 14px;
           cursor: pointer; transition: all .16s; }
-.wnlink:hover { border-color: var(--accent); color: var(--accent); background: var(--surface-2); }
+.wnlink:hover { border-color: var(--accent); color: var(--accent-ink); background: var(--surface-2); }
 
 /* ── light theme (The-AIOS light: paper surfaces, same coral) ── */
 body.light {
@@ -546,6 +566,16 @@ body.light {
      rather than inventing a target: 5.62-6.83:1, the dark theme's band. Still far
      quieter than --ink (14.0:1), so the hierarchy the token exists for is unchanged. */
   --subtle: #5a5a62;
+  /* #24 contrast pass (0.11.0). Measured in the running App: coral and the status colours, used
+     as TEXT on light surfaces, read 1.5-3.0:1 (warn gold 1.52, ok green 1.79, coral 2.49 on the
+     editor zone) — the --subtle story again: tuned in dark, never re-derived for light. These ink
+     values clear 4.5:1 on every light surface (worst: --zone-edit). Fills, dots and borders keep
+     the bright hues; only text switches. */
+  --faint: #626269;
+  --st-testing: #7c4fc4;
+  --accent-ink: var(--accent);   /* operator decision: the brand coral as text too (see --accent-fill) */
+  --st-ok-ink: #1b7843; --st-busy-ink: #935600; --st-input-ink: #1d61bb;
+  --st-warn-ink: #835d00; --st-error-ink: #bb2c32;
   --edge: inset 0 1px 0 rgba(255,255,255,.7);
   --depth: 0 10px 26px -18px rgba(0,0,0,.25);
 }
@@ -570,18 +600,18 @@ body.light .modal-wrap { background: rgba(0,0,0,.25); }
            width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px;
            background: none; color: var(--subtle); cursor: pointer; opacity: 0; transition: opacity .12s; }
 .prow:hover .prowact, .prow.on .prowact { opacity: .75; }
-.prowact:hover { opacity: 1; color: var(--st-error); background: color-mix(in srgb, var(--st-error) 14%, transparent); }
+.prowact:hover { opacity: 1; color: var(--st-error-ink); background: color-mix(in srgb, var(--st-error) 14%, transparent); }
 /* confirm dialog — narrow, with the destructive action visually distinct from cancel */
 .modal.confirm { max-width: 420px; }
 .modal.confirm .mbody { color: var(--subtle); font-size: 12.5px; line-height: 1.5; padding: 4px 0 14px; }
 .modal.confirm .macts { display: flex; gap: 8px; justify-content: flex-end; }
-.modal.confirm .vbtn.danger { color: var(--st-error); border-color: color-mix(in srgb, var(--st-error) 40%, transparent); }
+.modal.confirm .vbtn.danger { color: var(--st-error-ink); border-color: color-mix(in srgb, var(--st-error) 40%, transparent); }
 .modal.confirm .vbtn.danger:hover { background: color-mix(in srgb, var(--st-error) 16%, transparent); }
 .plist { max-height: 320px; overflow-y: auto; margin-top: 10px; display: flex; flex-direction: column; gap: 2px; }
 .prow { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; cursor: pointer; color: var(--ink); font-size: 13px; }
 .prow.on { background: var(--surface-2); box-shadow: var(--edge); }
 .picon { display: inline-flex; color: var(--subtle); }
-.prow.on .picon { color: var(--accent); }
+.prow.on .picon { color: var(--accent-ink); }
 .plabel { flex: 0 0 auto; font-weight: 500; }
 .pdesc { color: var(--subtle); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chips { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
@@ -604,28 +634,28 @@ body.light .modal-wrap { background: rgba(0,0,0,.25); }
    header reads as the same signal the rows use, one scope up. Tabular digits keep the
    badge from jittering as the count crosses 9/99 during a sweep. */
 .xsectgit { flex: 0 0 auto; margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: 0;
-            color: var(--st-warn); background: color-mix(in srgb, var(--st-warn) 14%, transparent);
+            color: var(--st-warn-ink); background: color-mix(in srgb, var(--st-warn) 14%, transparent);
             border-radius: 5px; padding: 1px 5px; font-variant-numeric: tabular-nums; cursor: default; }
 .xsectgit + .xsort { margin-left: 6px; }
 .xsectsub { flex: 1; min-width: 0; font-size: 9px; font-weight: 600; letter-spacing: .02em; text-transform: none;
-            color: var(--subtle); opacity: .55; margin-left: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            color: var(--faint); margin-left: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .xdot.ring { background: transparent; border: 1.5px solid var(--accent); box-sizing: border-box; opacity: .6; }
 .xext { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
-.xempty { color: var(--subtle); font-size: 11px; line-height: 1.45; padding: 4px 14px 8px; opacity: .7; }
+.xempty { color: var(--faint); font-size: 11px; line-height: 1.45; padding: 4px 14px 8px; }
 .xadd { margin-left: auto; background: transparent; border: 1px solid var(--line); color: var(--subtle); border-radius: 6px;
         width: 19px; height: 19px; font-size: 14px; cursor: pointer; padding: 0; flex: 0 0 auto;
         display: inline-flex; align-items: center; justify-content: center; line-height: 0; }
-.xadd:hover { color: var(--accent); border-color: var(--accent); }
+.xadd:hover { color: var(--accent-ink); border-color: var(--accent); }
 .xroot .xrm { margin-left: auto; color: var(--subtle); opacity: 0; padding: 0 4px; }
 .xroot:hover .xrm { opacity: 1; }
-.xroot .xrm:hover { color: var(--accent); }
+.xroot .xrm:hover { color: var(--accent-ink); }
 /* AI-58: per-folder sort control — hover-reveal neutral glyph (no persistent tint):
    sits at the right edge (left of × on workspace roots), like the Glass explorer */
 .xsort { margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
          color: var(--subtle); opacity: 0; padding: 0 3px; border-radius: 4px; cursor: pointer; }
 .xroot .xsort { margin-left: auto; }
 .xroot:hover .xsort, .xsect:hover .xsort, .xrow:hover .xsort { opacity: .7; }
-.xsort:hover { opacity: 1; color: var(--accent); }
+.xsort:hover { opacity: 1; color: var(--accent-ink); }
 /* the currently-selected sort option in the menu reads accent */
 /* ── drop affordance ───────────────────────────────────────────────────────────
    Two states, because they answer different questions. While ANY drag is in flight the
@@ -640,7 +670,7 @@ body.light .modal-wrap { background: rgba(0,0,0,.25); }
   position: absolute; inset: 0 10px 10px; z-index: 40; pointer-events: none;
   display: none; align-items: flex-end; justify-content: center; padding-bottom: 14px;
   border-radius: 10px; font-size: 11px; font-weight: 700; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--accent);
+  text-transform: uppercase; color: var(--accent-ink);
   border: 1.5px dashed color-mix(in srgb, var(--accent) 45%, transparent);
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
@@ -652,7 +682,7 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
 }
 /* a terminal pane accepts its own drop — confirm on the pane itself, no label needed */
 .pane.termcard.dropok { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent); }
-.xctx button.on { color: var(--accent); font-weight: 600; }
+.xctx button.on { color: var(--accent-ink); font-weight: 600; }
 
 /* ── terminal pane — the raw tty fills the card (drag to select = copy) ── */
 .pane.termcard { display: flex; flex-direction: column; padding: 10px 12px 8px 12px; }
@@ -668,8 +698,8 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
 /* Per-card coral glyph, replacing the shared dot that used to live in ::before. Eleven
    identical dots told you nothing once the panel could collapse to icons alone. */
 .ptcon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
-         width: 13px; height: 13px; color: var(--accent); }
-.ptitle .pcount { margin-left: auto; color: var(--accent); font-family: var(--mono); font-size: 10.5px; letter-spacing: 0; }
+         width: 13px; height: 13px; color: var(--accent-ink); }
+.ptitle .pcount { margin-left: auto; color: var(--accent-ink); font-family: var(--mono); font-size: 10.5px; letter-spacing: 0; }
 
 /* nudge — whispers, grey glass (extension grammar) */
 #pNudge { display: none; background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border: 1px solid var(--line);
@@ -686,7 +716,7 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
    green = the rest) and a hover-reveal stateful dismiss (×). */
 
 /* a setting that cannot take effect says why, in the row itself */
-.thint.twarn { color: var(--st-warn); }
+.thint.twarn { color: var(--st-warn-ink); }
 
 /* quota */
 #pQuota { display: none; }
@@ -703,7 +733,10 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
 .prow2:hover { background: var(--surface-2); }
 .prow2 .rname { flex: 0 1 auto; min-width: 4.5em; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
 .prow2 .pst { flex: 1; min-width: 0; color: var(--subtle); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.prow2 .rmem { flex: 0 0 auto; color: var(--subtle); font-family: var(--mono); font-size: 9.5px; opacity: .65; margin-left: 6px; }
+.tab .treads { display: inline-flex; margin-left: 4px; color: var(--faint); }   /* AI-169: this tab reads its answers aloud */
+.prow2 .pused { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 10.5px; margin-left: 6px; }   /* AI-171 */
+.prow2 .pswitch { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--st-warn-ink); font-size: 10.5px; margin-left: 6px; }   /* AI-197 */
+.prow2 .rmem { flex: 0 0 auto; color: var(--faint); font-family: var(--mono); font-size: 9.5px; margin-left: 6px; }
 .prow2 .runacts { flex: 0 0 auto; display: inline-flex; gap: 1px; opacity: 0; transition: opacity .12s; margin-left: 4px; }
 .prow2:hover .runacts, .prow2:focus .runacts { opacity: 1; }
 /* #29 the action buttons must never push the row wider than the panel: the row clips,
@@ -722,14 +755,14 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
 .prow2 .runacts:has(.runact.note.has) { opacity: 1; }
 .prow2:not(:hover):not(:focus-within) .rname { max-width: 62%; }
 .runact { background: transparent; border: 0; color: var(--subtle); cursor: pointer; padding: 2px 3px; border-radius: 4px; display: inline-flex; }
-.runact:hover { color: var(--accent); background: var(--surface); }
-.runact.kill:hover { color: var(--st-error); }
+.runact:hover { color: var(--accent-ink); background: var(--surface); }
+.runact.kill:hover { color: var(--st-error-ink); }
 .padd { margin-left: 6px; background: transparent; border: 1px solid var(--line); color: var(--subtle); cursor: pointer;
         display: inline-flex; align-items: center; justify-content: center; padding: 1px; border-radius: 5px; }
-.padd:hover { color: var(--accent); border-color: var(--accent); }
+.padd:hover { color: var(--accent-ink); border-color: var(--accent); }
 .pcaltoggle { margin-left: 6px; background: transparent; border: 1px solid var(--line); color: var(--subtle); border-radius: 6px;
               font-size: 9px; padding: 2px 7px; cursor: pointer; font-family: var(--font); letter-spacing: .05em; text-transform: uppercase; flex: 0 0 auto; }
-.pcaltoggle:hover { color: var(--accent); border-color: var(--accent); }
+.pcaltoggle:hover { color: var(--accent-ink); border-color: var(--accent); }
 .pdot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--subtle); }
 .pdot.idle { background: var(--st-idle); }
 .pdot.busy { background: var(--st-busy); --sc: var(--st-busy); }
@@ -756,20 +789,20 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
 .pgo { display: flex; align-items: center; gap: 7px; margin-top: 8px; padding: 6px 8px; border-radius: 8px;
        border: 1px dashed var(--line-strong); color: var(--subtle); font-size: 11.5px; cursor: pointer; }
 .pgo:hover { color: var(--ink); border-color: var(--accent); }
-.pgo .pcount2 { margin-left: auto; color: var(--accent); font-family: var(--mono); }
+.pgo .pcount2 { margin-left: auto; color: var(--accent-ink); font-family: var(--mono); }
 
 /* calendar */
 .pcalhead { display: flex; align-items: center; gap: 4px; margin-bottom: 7px; }
 .pcalhead .plabel { flex: 1; text-align: center; color: var(--ink); font-size: 12px; font-weight: 600; }
 .pnav { background: transparent; border: 1px solid var(--line); color: var(--subtle); border-radius: 6px; width: 21px; height: 21px;
         cursor: pointer; font-size: 11px; line-height: 1; }
-.pnav:hover { color: var(--accent); border-color: var(--accent); }
+.pnav:hover { color: var(--accent-ink); border-color: var(--accent); }
 #pCal table { width: 100%; border-collapse: collapse; }
 #pCal th { color: var(--subtle); font-size: 9px; font-weight: 600; padding: 3px 0; text-transform: uppercase; }
 #pCal td { text-align: center; padding: 1px; }
 /* ISO week numbers — muted left column, BLANK header (month + week views) */
 #pCal th.wkh { padding-right: 4px; }
-#pCal td.wknum { font-size: 8.5px; font-weight: 600; color: var(--subtle); opacity: .5; text-align: center;
+#pCal td.wknum { font-size: 8.5px; font-weight: 600; color: var(--faint); text-align: center;
                  vertical-align: middle; padding: 0 4px 0 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 /* the note dot sits at the bottom edge — the day number gets a little headroom above it
    (box-sizing + top padding lifts the digit) so the two never overlap */
@@ -823,13 +856,13 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
 .phfix { flex: 0 0 auto; background: transparent; border: 1px solid var(--line); color: var(--subtle); cursor: pointer;
          border-radius: 6px; font-size: 9.5px; padding: 2px 8px; font-family: var(--font); letter-spacing: .05em;
          text-transform: uppercase; }
-.phfix:hover { color: var(--accent); border-color: var(--accent); }
+.phfix:hover { color: var(--accent-ink); border-color: var(--accent); }
 .phfix:disabled { opacity: .55; cursor: default; }
 /* the trash sits beside the action button, quiet until hovered — destructive controls should
    be findable, not prominent */
 .phtrash { flex: 0 0 auto; background: transparent; border: 0; padding: 2px 3px; cursor: pointer;
-           color: var(--subtle); opacity: .55; display: inline-flex; align-items: center; }
-.phtrash:hover { color: var(--st-error); opacity: 1; }
+           color: var(--faint); display: inline-flex; align-items: center; }
+.phtrash:hover { color: var(--st-error-ink); opacity: 1; }
 .phtrash:disabled { opacity: .3; cursor: default; }
 
 /* learnings + outputs */
@@ -843,17 +876,17 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
          padding: 2px 4px; }
 #pFoot .pbadge { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); border-radius: 8px;
                  padding: 3px 9px; cursor: default; }
-#pFoot .pbadge.upd { color: var(--accent); border-color: rgba(255,93,77,.4); cursor: pointer; }
-#pFoot .pbadge.ok { color: var(--st-ok); border-color: color-mix(in srgb, var(--st-ok) 35%, transparent); }
+#pFoot .pbadge.upd { color: var(--accent-ink); border-color: rgba(255,93,77,.4); cursor: pointer; }
+#pFoot .pbadge.ok { color: var(--st-ok-ink); border-color: color-mix(in srgb, var(--st-ok) 35%, transparent); }
 
 /* taste pass */
-.xpre { color: var(--subtle); opacity: .55; font-size: 10.5px; font-family: var(--mono); margin-right: 1px; }
+.xpre { color: var(--faint); font-size: 10.5px; font-family: var(--mono); margin-right: 1px; }
 .tab { -webkit-app-region: no-drag; }
 #drag { justify-content: center; padding-left: 0; } /* centered title, clear of the traffic lights */
 .wtitle { display: inline-flex; align-items: center; gap: 0; }
-#dragMark { display: inline-flex; align-items: center; color: var(--accent); margin-right: 6px; }
+#dragMark { display: inline-flex; align-items: center; color: var(--accent-ink); margin-right: 6px; }
 #dragMark svg { display: block; }
-#empty .emark#emptyMark { color: var(--accent); background: none; }
+#empty .emark#emptyMark { color: var(--accent-ink); background: none; }
 .wtitle b { letter-spacing: .04em; }
 .wtag { color: var(--subtle); font-size: 11px; letter-spacing: .02em; }
 .wtag::before { content: '—'; margin: 0 7px; opacity: .55; }
@@ -887,7 +920,7 @@ body.no-hints .xsectsub { display: none; }
 .noterow { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--surface-2); border-radius: 6px; }
 .notetext { flex: 1; font-size: 12px; color: var(--ink); white-space: normal; word-break: break-word; }
 .notedel { flex: 0 0 auto; background: none; border: 0; color: var(--subtle); cursor: pointer; display: inline-flex; padding: 2px; }
-.notedel:hover { color: var(--st-error); }
+.notedel:hover { color: var(--st-error-ink); }
 .notesinput { width: 100%; box-sizing: border-box; }
 /* multi-select picker (#16) + popup consistency (#20) */
 .msub { font-size: 11.5px; color: var(--subtle); line-height: 1.5; margin: 6px 0 10px; }
@@ -899,7 +932,7 @@ body.no-hints .xsectsub { display: none; }
 .pcheck.ticked { background: var(--accent); border-color: var(--accent); }
 .mgo:disabled { opacity: .45; cursor: default; }
 /* #19 a session with notes shows its note button ALWAYS (not hover-only) + a count */
-.runact.note.has { opacity: 1 !important; visibility: visible !important; color: var(--st-warn); position: relative; }
+.runact.note.has { opacity: 1 !important; visibility: visible !important; color: var(--st-warn-ink); position: relative; }
 .notebadge { position: absolute; top: -3px; right: -4px; min-width: 12px; height: 12px; padding: 0 2px;
              border-radius: 6px; background: var(--st-warn); color: var(--bg);
              font-size: 8.5px; font-weight: 700; line-height: 12px; text-align: center; }
@@ -914,10 +947,10 @@ body.no-hints .xsectsub { display: none; }
 .pbtn:hover { background: var(--surface); border-color: var(--accent); }
 .pbemoji { width: 16px; flex: 0 0 auto; opacity: .92; display: inline-flex; align-items: center; justify-content: center; color: var(--subtle); }
 .pblabel { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.pbkey { color: var(--subtle); font-size: 10px; font-family: var(--mono); opacity: .72; white-space: nowrap; }
-.pbval { color: var(--accent); font-family: var(--mono); font-size: 11px; min-width: 14px; text-align: right; flex: 0 0 auto; }
-.pbtn.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 650; justify-content: center; }
-.pbtn.primary:hover { background: var(--accent-soft); border-color: var(--accent-soft); }
+.pbkey { color: var(--faint); font-size: 10px; font-family: var(--mono); white-space: nowrap; }
+.pbval { color: var(--accent-ink); font-family: var(--mono); font-size: 11px; min-width: 14px; text-align: right; flex: 0 0 auto; }
+.pbtn.primary { background: var(--accent-fill); color: #fff; border-color: var(--accent-fill); font-weight: 650; justify-content: center; }
+.pbtn.primary:hover { background: var(--accent-fill-hover); border-color: var(--accent-fill-hover); }
 .pbtn.primary .pblabel { font-weight: 650; }
 .pbtn.accent { border-color: rgba(255,93,77,.4); background: color-mix(in srgb, var(--accent) 7%, var(--surface-2)); }
 .pbtn.accent:hover { background: color-mix(in srgb, var(--accent) 13%, var(--surface-2)); }
@@ -940,16 +973,16 @@ body.no-hints .xsectsub { display: none; }
 .plug-badge { flex: 0 0 auto; font-size: 9.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
               padding: 3px 7px; border-radius: 6px; font-family: var(--mono); border: 1px solid var(--line);
               color: var(--subtle); white-space: nowrap; }
-.plug-badge.official { color: var(--accent); border-color: rgba(255,93,77,.4); background: rgba(255,93,77,.08); }
+.plug-badge.official { color: var(--accent-ink); border-color: rgba(255,93,77,.4); background: rgba(255,93,77,.08); }
 .plug-badge.anthropic { color: #d8975a; border-color: rgba(216,151,90,.4); }
 .plug-badge.coach { color: #6cb0ff; border-color: rgba(108,176,255,.4); }
 .plug-badge.plugin-partner { color: #c792ea; border-color: rgba(199,146,234,.4); }
 .plug-desc { color: var(--subtle); font-size: 12px; line-height: 1.5; margin-top: 8px; flex: 1; }
-.plug-mkt { color: var(--subtle); font-size: 10.5px; font-family: var(--mono); margin-top: 10px; opacity: .7;
+.plug-mkt { color: var(--faint); font-size: 10.5px; font-family: var(--mono); margin-top: 10px;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plug-foot { display: flex; align-items: center; gap: 8px; margin-top: 13px; }
 .plug-foot .vbtn { display: inline-flex; align-items: center; gap: 5px; }
-.plug-installed { display: inline-flex; align-items: center; gap: 5px; color: var(--st-ok); font-size: 12px; font-weight: 600; }
+.plug-installed { display: inline-flex; align-items: center; gap: 5px; color: var(--st-ok-ink); font-size: 12px; font-weight: 600; }
 .plug-soon { color: var(--subtle); font-size: 11.5px; font-style: italic; flex: 1; }
 
 /* ═══ movable pulse cards — ↑↓ on hover (⌥↑↓ from the keyboard) ═══ */
@@ -957,7 +990,7 @@ body.no-hints .xsectsub { display: none; }
 .ptitle:hover .pmove, .ptitle:focus .pmove { opacity: 1; }
 .pmove button { background: transparent; border: 0; color: var(--subtle); cursor: pointer; font-size: 11px;
                 line-height: 1; padding: 1px 3px; border-radius: 4px; font-family: var(--font); }
-.pmove button:hover { color: var(--accent); background: var(--surface-2); }
+.pmove button:hover { color: var(--accent-ink); background: var(--surface-2); }
 .ptitle:focus { outline: none; }
 .ptitle:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 
@@ -975,7 +1008,7 @@ body.zen #work { flex: 1; }
 .ribadge { position: absolute; top: 2px; right: 3px; min-width: 13px; height: 13px; padding: 0 3px; box-sizing: border-box;
            border-radius: 7px; background: var(--accent); color: #0a0a0a; font-size: 8.5px; font-weight: 700;
            line-height: 13px; text-align: center; font-family: var(--mono); pointer-events: none; box-shadow: 0 0 0 2px var(--bg); }
-.ribtn.hasbadge { color: var(--accent); }
+.ribtn.hasbadge { color: var(--accent-ink); }
 body.light .ribadge { color: #fff; }
 
 /* ═══ compact density — tighten the pulse ═══ */
@@ -998,18 +1031,24 @@ body.compact .plitem { padding: 4px 6px; }
 .psub:hover { border-color: var(--line-strong); }
 .psubcaret { color: var(--subtle); font-size: 9px; width: 9px; flex: 0 0 auto; }
 .psublab { font-weight: 550; }
-.psubcount { margin-left: auto; color: var(--accent); font-family: var(--mono); font-size: 11.5px; }
+.psubcount { margin-left: auto; color: var(--accent-ink); font-family: var(--mono); font-size: 11.5px; }
 .psubadd { flex: 0 0 auto; width: 38px; background: var(--surface-2); border: 1px solid var(--line); color: var(--subtle);
            border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
-.psubadd:hover { color: var(--accent); border-color: var(--accent); }
+.psubadd:hover { color: var(--accent-ink); border-color: var(--accent); }
 .psubbox { padding: 5px 4px 2px; }
 .psubbox .prow2 { padding: 5px 8px; }
 .psubbox .pdot { width: 8px; height: 8px; }
-.psubempty { color: var(--subtle); font-size: 11px; opacity: .55; padding: 5px 10px; }
+.psubempty { color: var(--faint); font-size: 11px; padding: 5px 10px; }
+/* Review 13 — what AI-203's scope hid: a count that opens into plain rows. Muted with --faint (which
+   passes 4.5:1), never with opacity, and with no actions: these rows never notify. */
+.phiddentoggle { background: none; border: 0; color: var(--faint); font: inherit; font-size: 11px; padding: 5px 10px; cursor: pointer; text-align: left; }
+.phiddentoggle:hover { color: var(--muted); text-decoration: underline; }
+.prow.phidden { color: var(--faint); display: flex; gap: 8px; padding: 3px 10px; font-size: 11.5px; }
+.prow.phidden .pproj, .prow.phidden .pstate { font-family: var(--mono); font-size: 10.5px; }
 
 /* ═══ rail framework-status colors ═══ */
-.ribtn.updok { color: var(--st-ok); }
-.ribtn.updavail { color: var(--accent); }
+.ribtn.updok { color: var(--st-ok-ink); }
+.ribtn.updavail { color: var(--accent-ink); }
 .ribtn.updavail::after { content: ''; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%;
                          background: var(--accent); box-shadow: 0 0 0 2px var(--bg); }
 
@@ -1017,9 +1056,9 @@ body.compact .plitem { padding: 4px 6px; }
 .xrow .xname { flex: 1 1 auto; min-width: 0; }
 .xrow .gst { margin-left: auto; font-family: var(--mono); font-size: 9.5px; font-weight: 700; flex: 0 0 auto; padding-left: 4px; }
 .xrow .gdot { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
-.xrow.gM > .xname, .xrow.gR > .xname { color: var(--st-warn); } .xrow.gM .gst, .xrow.gR .gst { color: var(--st-warn); } .xrow.gM .gdot, .xrow.gR .gdot { background: var(--st-warn); }
-.xrow.gU > .xname, .xrow.gA > .xname { color: var(--st-ok); } .xrow.gU .gst, .xrow.gA .gst { color: var(--st-ok); } .xrow.gU .gdot, .xrow.gA .gdot { background: var(--st-ok); }
-.xrow.gD > .xname { color: var(--st-error); } .xrow.gD .gst { color: var(--st-error); } .xrow.gD .gdot { background: var(--st-error); }
+.xrow.gM > .xname, .xrow.gR > .xname { color: var(--st-warn-ink); } .xrow.gM .gst, .xrow.gR .gst { color: var(--st-warn-ink); } .xrow.gM .gdot, .xrow.gR .gdot { background: var(--st-warn); }
+.xrow.gU > .xname, .xrow.gA > .xname { color: var(--st-ok-ink); } .xrow.gU .gst, .xrow.gA .gst { color: var(--st-ok-ink); } .xrow.gU .gdot, .xrow.gA .gdot { background: var(--st-ok); }
+.xrow.gD > .xname { color: var(--st-error-ink); } .xrow.gD .gst { color: var(--st-error-ink); } .xrow.gD .gdot { background: var(--st-error); }
 .xkids { position: relative; }
 
 .xctx { position: fixed; z-index: 80; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 4px;
@@ -1037,7 +1076,7 @@ body.compact .plitem { padding: 4px 6px; }
 #dragacts button, #dragacts .ribtn { width: 26px; height: 26px; padding: 0; flex: 0 0 auto;
   background: transparent; border: 0; color: var(--subtle); cursor: pointer; border-radius: 7px;
   display: inline-flex; align-items: center; justify-content: center; }
-#dragacts button:hover, #dragacts .ribtn:hover { color: var(--accent); background: var(--surface); }
+#dragacts button:hover, #dragacts .ribtn:hover { color: var(--accent-ink); background: var(--surface); }
 #dragacts svg { display: block; }
 
 /* ═══ syntax-highlighted source editor (highlight.js overlay) ═══ */
@@ -1075,7 +1114,7 @@ body.compact .plitem { padding: 4px 6px; }
           border: 1px solid rgba(255,93,77,.28); color: var(--ink); border-radius: 11px 11px 4px 11px;
           padding: 7px 10px; font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word;
           user-select: text; }
-.dz-note { color: var(--subtle); font-size: 10px; font-family: var(--mono); padding: 0 2px; opacity: .8; }
+.dz-note { color: var(--faint); font-size: 10px; font-family: var(--mono); padding: 0 2px; }
 .dz-composer { flex: 0 0 auto; border-top: 1px solid var(--line); padding: 10px 12px; display: flex; gap: 8px;
                align-items: flex-end; }
 .dz-ask { flex: 1; min-width: 0; background: var(--bg); color: var(--ink); border: 1px solid var(--line);
@@ -1092,15 +1131,15 @@ body.compact .plitem { padding: 4px 6px; }
 .dz-label { display: flex; align-items: baseline; gap: 8px; color: var(--subtle); font-size: 10px;
             font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
 .dz-label .dz-count { margin-left: auto; font-family: var(--mono); font-weight: 500; letter-spacing: 0;
-                      text-transform: none; opacity: .75; }
-.dz-hint { color: var(--subtle); font-size: 11px; opacity: .8; }
+                      text-transform: none; color: var(--faint); }
+.dz-hint { color: var(--faint); font-size: 11px; }
 .dz-input, .dz-sel, .dz-ta { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--ink);
              border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; font-size: 13px;
              font-family: var(--font); outline: none; transition: border-color .15s; }
 .dz-ta { font-size: 12.5px; line-height: 1.55; resize: vertical; }
 .dz-bigta { font-family: var(--mono); font-size: 12px; line-height: 1.6; min-height: 240px; }
 .dz-input:focus, .dz-sel:focus, .dz-ta:focus { border-color: var(--accent); }
-.dz-empty { color: var(--subtle); font-size: 12.5px; text-align: center; padding: 40px 16px; opacity: .75; }
+.dz-empty { color: var(--faint); font-size: 12.5px; text-align: center; padding: 40px 16px; }
 .dz-foot { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--line);
            padding: 11px 18px; }
 .dz-path { flex: 1; min-width: 0; color: var(--subtle); font-size: 10.5px; font-family: var(--mono);
@@ -1108,7 +1147,7 @@ body.compact .plitem { padding: 4px 6px; }
 
 /* token palette — derived from our colors, works on dark + light (no external hljs theme) */
 .hljs-comment, .hljs-quote { color: var(--subtle); font-style: italic; }
-.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-section, .hljs-name, .hljs-tag { color: var(--accent); }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-section, .hljs-name, .hljs-tag { color: var(--accent-ink); }
 .hljs-string, .hljs-attr, .hljs-attribute, .hljs-symbol, .hljs-bullet, .hljs-addition { color: #3ec77a; }
 .hljs-number, .hljs-meta, .hljs-built_in { color: #e8b75a; }
 .hljs-title, .hljs-title.function_, .hljs-type, .hljs-selector-id, .hljs-selector-class { color: #6cb0ff; }
@@ -1201,7 +1240,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 .ttitle.dzstep3 { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .dzclear { background: none; border: 0; color: var(--subtle); font-family: var(--font); font-size: 10.5px;
            letter-spacing: .04em; text-transform: none; cursor: pointer; padding: 2px 4px; border-radius: 5px; }
-.dzclear:hover { color: var(--st-error); background: var(--surface-2); }
+.dzclear:hover { color: var(--st-error-ink); background: var(--surface-2); }
 
 
 /* zone strips: a quiet label, then tabs, then the zone's expand + (+) pinned right */
@@ -1212,7 +1251,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 .zexp { position: sticky; right: 0; flex: 0 0 auto; z-index: 2; margin-left: auto; background: var(--bg);
         border: 1px solid var(--line); color: var(--subtle); border-radius: 8px; width: 26px; height: 26px;
         display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; transition: all .15s; }
-.zexp:hover { color: var(--accent); border-color: var(--accent); }
+.zexp:hover { color: var(--accent-ink); border-color: var(--accent); }
 .zexp[hidden] { display: none !important; }
 
 /* xterm's viewport was the one scrollable surface without the app's auto-hide scrollbar
@@ -1245,7 +1284,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
   flex: 0 0 auto;
   border: 0;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--accent-fill);
   color: #fff;                 /* white in BOTH themes — the coral does not flip, so neither does this */
   font-size: 11px;
   font-weight: 700;
@@ -1257,8 +1296,33 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
   -webkit-app-region: no-drag;
   transition: filter .18s ease, transform .18s ease;
 }
-#dragacts .updpill:hover { filter: brightness(1.06); transform: translateY(-1px); background: var(--accent); color: #fff; }
+#dragacts .updpill:hover { filter: brightness(1.06); transform: translateY(-1px); background: var(--accent); color: #fff; }   /* the 0.10.1 hover, by operator decision (brand coral) */
 #dragacts .updpill[hidden] { display: none; }
+/* AI-200 — "What's in it?" beside the pill. Same specificity trap as the pill: `#dragacts button`
+   forces every title-bar control into a 26×26 box, so this needs the id + class selector and
+   undoes the same forced values. Outlined, not filled: the pill is the action, this is a question.
+   (It once sat INSIDE the comment above, ended it early and took the pill rule down with it —
+   theme.test guards that the pill selector parses.) */
+#dragacts .updexplain {
+  width: auto;
+  height: 24px;
+  padding: 0 10px;
+  margin-left: 8px;
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+#dragacts .updexplain:hover { border-color: var(--accent); }
+#dragacts .updexplain[hidden] { display: none; }
 /* AI-83 — the DOWNLOADING state. Same pill, visibly not-yet-actionable: muted rather than
    coral, and no hover lift, because a control that looks pressable while it is not is worse
    than one that says nothing. It reads as progress, not as an invitation. `disabled` carries
@@ -1312,10 +1376,10 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 .codeoverview:hover .ovmark { opacity: 1; }
 .chgnav { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; }
 .chgnav[hidden] { display: none; }
-.chgcount { font-family: var(--mono); font-size: 10.5px; color: var(--accent); white-space: nowrap; }
+.chgcount { font-family: var(--mono); font-size: 10.5px; color: var(--accent-ink); white-space: nowrap; }
 .chgbtn { width: 18px; height: 18px; padding: 0; border: 1px solid var(--line); border-radius: 5px;
           background: transparent; color: var(--subtle); font-size: 12px; line-height: 1; cursor: pointer; }
-.chgbtn:hover { color: var(--accent); border-color: var(--accent); }
+.chgbtn:hover { color: var(--accent-ink); border-color: var(--accent); }
 
 /* ═══ find in file (⌘F) ═══ */
 /* Floating over the work area, top-right — it must not reflow the document, or every match
@@ -1327,7 +1391,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
              padding: 4px 9px; font-size: 12px; width: 190px; outline: none; }
 .findinput:focus { border-color: var(--accent); }
 .findcount { color: var(--subtle); font-size: 11px; font-family: var(--mono); min-width: 44px; text-align: center; }
-.findcount.none { color: var(--accent); }
+.findcount.none { color: var(--accent-ink); }
 .findbtn { background: transparent; border: 0; color: var(--subtle); cursor: pointer; font-size: 15px;
            line-height: 1; padding: 2px 6px; border-radius: 5px; }
 .findbtn:hover { background: var(--surface-2); color: var(--ink); }
@@ -1337,7 +1401,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 ::highlight(aios-find-cur) { background: rgba(255, 93, 77, .55); color: #fff; }
 
 /* An ACTION row inside a checklist — no tick-box, and visibly a verb rather than an option. */
-.prow.act { color: var(--accent); font-weight: 600; }
+.prow.act { color: var(--accent-ink); font-weight: 600; }
 .prow.act .pdesc { color: var(--subtle); font-weight: 400; }
 /* Section label inside a picker — structure, never a target. */
 .prow.head { cursor: default; padding-top: 10px; padding-bottom: 3px; background: none; }
@@ -1357,7 +1421,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
   white-space: nowrap; pointer-events: none; }
 /* Resolved from the vault's LOCAL store — applies to sessions launched there, not machine-wide. */
 .ttoggle.scoped::after { content: 'this vault'; position: absolute; left: 100%; margin-left: 8px;
-  font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent);
+  font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--accent-ink);
   white-space: nowrap; pointer-events: none; }
 
 /* AI-132 keep-awake button. The STEAM carries the state (see the coffee icon), so colour here is
@@ -1371,7 +1435,7 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 /* The CUP is coral, not its background — the wash read as a chip around the icon and the operator
    asked for the glyph alone. The steam (a different icon, not an overlay) carries the same signal
    without relying on colour. */
-#dragCaffeine.caff-on { color: var(--accent); }
+#dragCaffeine.caff-on { color: var(--accent-ink); }
 /* An override in AUTO is a third state, not a brighter on: the cup has stopped following your
    sessions. A small dot says "you are steering this" without a second colour to decode, and the
    hover names the way back. Without it, "what brings it back to auto?" has no on-screen answer. */
@@ -1385,12 +1449,12 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 #dragCaffeine:hover { opacity: 1; }
 /* the cup inline in the Settings label, so the setting and the button read as one thing */
 .tlabicon { display: inline-flex; vertical-align: -2px; margin-right: 6px; opacity: .75; }
-#dragCaffeine.caff-warn { color: var(--st-warn); }
+#dragCaffeine.caff-warn { color: var(--st-warn-ink); }
 
 /* AI-82 split view. `.shown` is every pane on screen; `.active` is the one the keystrokes reach.
    Two marks because the operator needs both answers, and with two panes up "which is focused" is
    a question the single `.active` class could never have been asked. */
-.tab.shown:not(.active) { border-color: var(--line); opacity: .92; }
+.tab.shown:not(.active) { border-color: var(--line); }
 .tab.shown:not(.active) .tname { color: var(--ink); }
 /* The focused pane in a split gets a visible edge — with two terminals side by side, nothing else
    on screen says where the next keystroke lands. */
@@ -1412,7 +1476,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 /* #28 — a restored tab that has not been opened yet. Dimmed and italic so it reads as "waiting",
    not as a live session; opening it resumes the real one in its place. No animation of any kind:
    a placeholder that moves would be a repaint loop waiting to happen, which is how AI-157 began. */
-.tab.restoring .tname { opacity: .6; font-style: italic; }
+.tab.restoring .tname { color: var(--faint); font-style: italic; }
 .pane.restorecard { display: flex; align-items: center; justify-content: center; }
 .restoremsg { color: var(--subtle); font-size: 12px; }
 

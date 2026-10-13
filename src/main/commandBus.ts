@@ -4,14 +4,22 @@ import * as os from 'os';
 import { execFileSync } from 'child_process';
 import * as path from 'path';
 import * as aios from './aios';
-import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, type BusRequest } from '../core/commandBus';
-import { latestAgentName, pickResume, type ResumeCandidate } from '../core/resumeTarget';
+import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, type BusRequest } from '../core/commandBus';
+import { recordTyped } from './busSent';
+import { settingsToFile } from './advisorFile';
+import { contract4LaunchArgs, cleanFrom, advisorModelFor } from '../core/contract4';
+import { needsConsultBlock, ADVISOR_CONSULT_BLOCK } from '../core/advisor';
+import { normalizeVerb } from '../core/busVerbs';
+import { ResumeIndex } from './resumeIndex';
+import { supersededName, supersededBody, SUPERSEDED_SUFFIX, SUPERSEDED_KEEP_MS } from '../core/supersede';
+import { resolveSessionName, sessionKey } from '../core/nameMatch';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
-  shouldReleaseForSibling, countUserTurnsContaining, verifyVerdict, isDeliverable, maxAttemptsFor,
+  shouldReleaseForSibling, countDeliveries, verifyVerdict, isDeliverable, maxAttemptsFor,
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
+  queueTurn, stampAge, withQueuedAt, queuedAtOf, isQueuedDelivery, supersedes, type QueuedSend,
 } from '../core/sendQueue';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
 import { MY_SURFACE } from './surface';
@@ -302,7 +310,11 @@ function emit(win: BrowserWindow | undefined, kind: string, payload: Record<stri
 
 /** Live session by sanitized name, from the authoritative registry. */
 function targetByName(name: string): SendTarget | undefined {
-  const hit = aios.listRunningAgents().find((a) => a.name === name);
+  /* Exact first, else the ONE live session whose name cleans to the same handle (core/nameMatch,
+     app#58's idea): `--name Market-desk` is reachable as `market-desk`. Ambiguous → none. */
+  const all = aios.listRunningAgents();
+  const real = resolveSessionName(name, all.map((a) => a.name));
+  const hit = real === undefined ? undefined : all.find((a) => a.name === real);
   if (!hit || !Number.isInteger(hit.pid) || hit.pid <= 1) return undefined;
   return {
     name: hit.name, pid: hit.pid,
@@ -372,46 +384,45 @@ function writePayload(name: string, prompt: string): string {
  * name→session mapping, and `latestAgentName` takes the LAST record because a session can rename
  * itself (0.9.3) and answers to its newest name.
  *
- * BOUNDED ON PURPOSE. Transcripts are large and there can be hundreds; the bus must not stall
- * while a resume request reads a history. Newest-first, stop at the first match, and never look
- * at more than MAX_SCAN files — an operator resuming something they closed today is always well
- * inside that, and a name so old it falls outside is correctly reported as "nothing to resume"
- * rather than found slowly.
+ * NOT BOUNDED BY AGE ANY MORE. This read only the 60 newest transcripts, which on a busy fleet is
+ * about a day and a half: five resumes of workers idle since the day before dead-lettered in one
+ * morning with their transcripts on disk. The lookup now goes through a persisted, incremental
+ * index of every transcript (main/resumeIndex), built once in the background at bus start and
+ * refreshed before each lookup by reading only the files that changed. It is async, so the bus
+ * never waits on a history read.
  */
-const MAX_RESUME_SCAN = 60;
-function resumeIdFor(name: string, excludeSessionId?: string): string | undefined {
-  const base = path.join(os.homedir(), '.claude', 'projects');
-  let files: { f: string; mtimeMs: number }[] = [];
-  try {
-    for (const d of fs.readdirSync(base)) {
-      let entries: string[] = [];
-      try { entries = fs.readdirSync(path.join(base, d)); } catch { continue; }
-      for (const e of entries) {
-        if (!e.endsWith('.jsonl')) continue;
-        const full = path.join(base, d, e);
-        try { files.push({ f: full, mtimeMs: fs.statSync(full).mtimeMs }); } catch { /* vanished */ }
-      }
-    }
-  } catch { return undefined; }
-  files = files.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, MAX_RESUME_SCAN);
-  for (const { f, mtimeMs } of files) {
-    let text = '';
-    try { text = fs.readFileSync(f, 'utf8'); } catch { continue; }
-    const cand: ResumeCandidate = {
-      sessionId: path.basename(f, '.jsonl'),
-      mtimeMs,
-      latestName: latestAgentName(text),
-    };
-    const hit = pickResume(name, [cand], excludeSessionId);
-    if (hit) return hit;
+const resumeIndex = new ResumeIndex(
+  path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects'),   // review 18: honour CLAUDE_CONFIG_DIR
+  path.join(os.homedir(), '.aios', 'resume-index.json'),
+);
+function resumeIdFor(name: string, excludeSessionId?: string): Promise<string | undefined> {
+  return resumeIndex.lookup(name, excludeSessionId).catch(() => undefined);
+}
+
+/** AI-205 — every send currently held by any surface (both surfaces' `.holding` files). */
+function heldSends(): QueuedSend[] {
+  const dir = inboxDir();
+  const out: QueuedSend[] = [];
+  let names: string[] = [];
+  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.json.holding')); } catch { return out; }
+  for (const n of names) {
+    try {
+      const b = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8')) as Record<string, unknown>;
+      if (!isQueuedDelivery(normalizeVerb(b.action), b) || typeof b.name !== 'string') continue;   // sends + resume-to-live (should-fix 11)
+      const c = parseClaim(b._claim);
+      /* A hold whose holder is DEAD is not in line (review should-fix 8): it would block its target
+         until someone adopts it. The periodic adoption below picks it up. */
+      if (c && !alive(c.pid)) continue;
+      out.push({ key: n, target: sessionKey(b.name), from: cleanFrom(b.from), queuedAt: queuedAtOf(b, c ? c.at : fs.statSync(path.join(dir, n)).mtimeMs) });
+    } catch { /* mid-write or gone */ }
   }
-  return undefined;
+  return out;
 }
 
 /** Read the target's transcript; the counting RULE is pure and lives in core/sendQueue. */
 function readTranscript(sessionId: string): string {
   if (!sessionId) return '';
-  const base = path.join(os.homedir(), '.claude', 'projects');
+  const base = path.join(aios.claudeConfigDir(), 'projects');
   let dirs: string[] = [];
   try { dirs = fs.readdirSync(base); } catch { return ''; }
   for (const d of dirs) {
@@ -528,7 +539,23 @@ function markUndelivered(fromPath: string, req: BusRequest | null, reason: strin
   log(`UNDELIVERED ${path.basename(dest)} — ${reason}${req ? ` (${req.action} '${req.name}')` : ''}`);
 }
 
-/** Hand a claim back for a sibling surface/window to try, bounded by `releases`. */
+/* Review nit: a superseded message used to be deleted, which reads exactly like a delivery to the
+   sender. It is archived with what replaced it, out of the live inbox, and pruned after a week. */
+function archiveSuperseded(heldPath: string, by: string): void {
+  try {
+    const dir = path.join(path.dirname(heldPath), '_archive');
+    fs.mkdirSync(dir, { recursive: true });
+    const body = JSON.parse(fs.readFileSync(heldPath, 'utf8')) as Record<string, unknown>;
+    fs.writeFileSync(path.join(dir, supersededName(path.basename(heldPath))), JSON.stringify(supersededBody(body, by, MY_SURFACE, Date.now()), null, 2) + '\n');
+    fs.unlinkSync(heldPath);
+    for (const n of fs.readdirSync(dir)) {
+      if (!n.endsWith(SUPERSEDED_SUFFIX)) continue;
+      try { if (Date.now() - fs.statSync(path.join(dir, n)).mtimeMs > SUPERSEDED_KEEP_MS) fs.unlinkSync(path.join(dir, n)); } catch { /* gone */ }
+    }
+  } catch { try { fs.unlinkSync(heldPath); } catch { /* already gone */ } }
+}
+
+/** Hand a claim back for a sibling surface/window to try, bounded by `_releases`. */
 function releaseForSibling(heldPath: string, req: BusRequest, reason: string): boolean {
   if (!shouldReleaseForSibling(req.releases ?? 0, MAX_RELEASES)) return false;
   const releases = (req.releases ?? 0) + 1;
@@ -537,7 +564,8 @@ function releaseForSibling(heldPath: string, req: BusRequest, reason: string): b
     const body0 = JSON.parse(fs.readFileSync(heldPath, 'utf8')) as Record<string, unknown>;
     const body = withTried(body0, fulfillerId(MY_SURFACE, process.pid));   // so I never re-claim my own release
     delete body._claim;                     // an unclaimed file is what a sibling can take
-    body.releases = releases;
+    body._releases = releases;   // the shared bookkeeping name (review nit: was `releases`, Glass reads `_releases`)
+    delete body.releases;
     fs.writeFileSync(back, JSON.stringify(body, null, 2) + '\n');
     fs.unlinkSync(heldPath);
     log(`released ${path.basename(back)} for a sibling (${reason}); release ${releases}/${MAX_RELEASES}; tried=[${triedBy(body).join(',')}]`);
@@ -579,7 +607,15 @@ async function runSend(
     deliverText = pointerText(spilled);
     log(`send → '${req.name}' is ${byteLength(req.prompt)} bytes; delivering a pointer to ${spilled}`);
   }
-  const needle = safeNeedle(deliverText);
+  let needle = safeNeedle(deliverText);
+  /* AI-205: the delivered text is fixed at the FIRST type — a message that queued gets its age
+     stamped on, so the needle and baseline are taken from that text, then. */
+  const rawDeliver = deliverText;
+  /* AI-205: when this request FIRST queued (not when this surface claimed it) — the queue order,
+     the age stamp and the 24 h ceiling all read it, so an adopted hold keeps its place. */
+  let queuedAt = claimedAt;
+  try { queuedAt = queuedAtOf(JSON.parse(fs.readFileSync(heldPath, 'utf8')), claimedAt); } catch { /* keep the claim time */ }
+  let firstTypedAt = 0;
   let attempts = 0;   // how many times we have actually TYPED into the target
   /* Captured ONCE, before the first type, and reused by every attempt in this runSend.
      It used to be recomputed at the top of each iteration, which made a LATE delivery invisible:
@@ -591,16 +627,46 @@ async function runSend(
   let baseline: number | undefined;
   for (;;) {
     const target = targetByName(req.name);
-    const decision = decideSend(target, Date.now() - claimedAt, MAX_HOLD_MS);
+    /* AI-205: a live but busy target is waited on until its next idle (QUEUE_CEILING_MS), not
+       30 min; the never-type-into-busy rule is unchanged. */
+    const decision = decideSend(target, Date.now() - queuedAt, TIMINGS.QUEUE_CEILING_MS);
     if (decision.do === 'undeliverable') { markUndelivered(heldPath, req, decision.reason); return; }
     if (decision.do === 'hold') {
       if (!fs.existsSync(heldPath)) return;   // adopted or cleaned up elsewhere
       await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
       continue;
     }
+    /* AI-205 — one at a time, oldest first; a newer message from the same sender replaces an older
+       one still waiting. Only before the first type: once typed, a message is in flight. */
+    if (!firstTypedAt) {
+      /* Retired before its first type by the newer message that replaces it (below, on either
+         surface): it must not be delivered. */
+      if (!fs.existsSync(heldPath)) return;
+      const me = { key: path.basename(heldPath), target: sessionKey(req.name), from: req.from, queuedAt };
+      const turn = queueTurn(me, heldSends());
+      if (turn.do === 'superseded') {
+        archiveSuperseded(heldPath, turn.by);   // review nit: archived with what replaced it, never silently deleted
+        log(`send → '${req.name}' SUPERSEDED by a newer message from '${req.from}' (${turn.by}) — the older one is not delivered`);
+        return;
+      }
+      if (turn.do === 'wait') {
+        if (!fs.existsSync(heldPath)) return;
+        await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
+        continue;
+      }
+      /* Going out: retire every older message this one replaces NOW, rather than trusting each of
+         them to notice later (0.11.0 test 6.4 — the older resume checked after this send was
+         delivered and removed, found nothing newer, and went out too, after its own correction). */
+      for (const old of supersedes(me, heldSends())) {
+        archiveSuperseded(path.join(path.dirname(heldPath), old.key), me.key);
+        log(`retired ${old.key} — superseded by ${me.key}`);
+      }
+      deliverText = stampAge(rawDeliver, Date.now() - queuedAt, req.from);
+      needle = safeNeedle(deliverText);
+    }
     // idle → deliver, then prove it in the target's own transcript
     const sessionId = target ? target.sessionId : '';
-    if (baseline === undefined) baseline = countUserTurnsContaining(readTranscript(sessionId), needle, claimedAt);
+    if (baseline === undefined) baseline = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
     const before = baseline;
     /* THE CAP HAS TO SIT HERE, before the send — not only in the after-a-miss decision.
        A 'wait' verdict does `continue`, which re-enters this branch, so a cap enforced only
@@ -608,14 +674,14 @@ async function runSend(
        every cycle for the full hold. Caught by tracing the control flow rather than trusting
        the counter, which is the same lesson as everything else in this ticket. */
     if (attempts >= maxAttemptsFor(deliverText)) {
-      const late = countUserTurnsContaining(readTranscript(sessionId), needle, claimedAt);
+      const late = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
       if (verifyVerdict(before, late) !== 'pending') {
         try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         log(`delivered → '${req.name}' (verified late)`);
         return;
       }
-      if (Date.now() - claimedAt >= MAX_HOLD_MS) {
-        markUndelivered(heldPath, req, `sent to '${req.name}' ${attempts}x over ${Math.round((Date.now() - claimedAt) / 60000)} min without it ever appearing in that session's transcript`);
+      if (Date.now() - firstTypedAt >= MAX_HOLD_MS) {
+        markUndelivered(heldPath, req, `sent to '${req.name}' ${attempts}x over ${Math.round((Date.now() - firstTypedAt) / 60000)} min without it ever appearing in that session's transcript`);
         return;
       }
       await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
@@ -623,7 +689,9 @@ async function runSend(
       continue;   // watch, never type again
     }
     attempts++;
+    if (!firstTypedAt) firstTypedAt = Date.now();
     const emittedAt = Date.now();
+    recordTyped(deliverText, req.name, 'send', req.from);   // AI-172: before typing, so the label can never lose the race
     emit(win(), 'sendByName', { name: req.name, text: deliverText });
     /* If the surface says it could not deliver, stop here. Waiting out the verification window
        on a message that was never typed is how one request consumed its entire sibling-release
@@ -643,7 +711,7 @@ async function runSend(
     const until = Date.now() + VERIFY_WINDOW_MS;
     while (Date.now() < until) {
       await new Promise((r) => setTimeout(r, VERIFY_TICK_MS));
-      const now = countUserTurnsContaining(readTranscript(sessionId), needle, claimedAt);
+      const now = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
       const verdict = verifyVerdict(before, now);
       if (verdict === 'pending') continue;
       try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
@@ -666,7 +734,7 @@ async function runSend(
     const miss = decideAfterVerifyMiss({
       targetAlive: !!after,
       targetBusy: !!after && !isDeliverable(after.status),
-      heldMs: Date.now() - claimedAt,
+      heldMs: Date.now() - firstTypedAt,   // AI-205: the verification budget runs from the first type
       attempts,
       maxAttempts: maxAttemptsFor(deliverText),
     });
@@ -678,7 +746,7 @@ async function runSend(
     if (miss.do === 'wait') {
       /* Out of sends, not out of hope: watch for a late arrival and never type again. A turn
          that lands after the window closed must not be sent twice. */
-      const late = countUserTurnsContaining(readTranscript(sessionId), needle, claimedAt);
+      const late = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
       if (verifyVerdict(before, late) !== 'pending') {
         try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         log(`delivered → '${req.name}' (verified late)`);
@@ -703,6 +771,20 @@ async function runSend(
  */
 function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
     let taskFile: string | undefined;
+    /* The worker's model is decided first: the consult instruction depends on it, and appending it
+       can turn a short inline task into a multi-line one that must spill to a file.
+       An explicit `model` wins over `tier`, matching the `spawn` wrapper
+       (`[ -n "$model" ] && spawn_model="$model"`) — so a caller pinning an id is never
+       second-guessed, and only a bare `tier` is resolved. */
+    let model = req.model;
+    if (!model && req.tier) {
+      const r = resolveTier(req.tier);
+      if ('error' in r) { markUndelivered(heldPath, req, r.error); return; }
+      model = r.model;                    // may be undefined — that is `judgment`
+    }
+    if (needsConsultBlock(model, advisorModelFor(req.advisor, req.advisorRung))) {
+      req = { ...req, task: (req.task || 'Start session') + '\n' + ADVISOR_CONSULT_BLOCK };   // canonical's block, verbatim
+    }
     /* On Windows the pane's shell is PowerShell, but buildSpawnCmd (shared pure core, POSIX
        quoting) can only quote the inline prompt the POSIX way — which mangles an apostrophe in
        PowerShell and corrupts the worker's first prompt. So route EVERY task through a temp file
@@ -714,27 +796,84 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
     }
     // No task → a bootstrap prompt, so the worker runs its Session Start Ritual on turn
     // one instead of sitting idle (mirrors the `spawn` wrapper).
-    /* An explicit `model` wins over `tier`, matching the `spawn` wrapper
-       (`[ -n "$model" ] && spawn_model="$model"`) — so a caller pinning an id is never
-       second-guessed, and only a bare `tier` is resolved. */
-    let model = req.model;
-    if (!model && req.tier) {
-      const r = resolveTier(req.tier);
-      if ('error' in r) { markUndelivered(heldPath, req, r.error); return; }
-      model = r.model;                    // may be undefined — that is `judgment`
-    }
+    const c4 = contract4Args(req);
+    if ('error' in c4) { markUndelivered(heldPath, req, c4.error); return; }
     const cmd = buildSpawnCmd(aios.shellSettings().claudeCmd, req.name, {
-      task: req.task || 'Start session', model, taskFile,
+      task: req.task || 'Start session', model, taskFile, extraArgs: c4.args,
     });
+    // AI-172: the first prompt the worker receives is bus-typed too — record exactly that text.
+    recordTyped(taskFile ? taskFileInstruction(taskFile) : (req.task || 'Start session'), req.name, 'spawn');
     // background like every other bus path (#47): a fresh spawn was the one that still switched the
     // operator's screen, whatever busFocus said (operator-tested on 0.10.1).
     emit(win(), 'terminal', { name: req.name, cmd, background: true });
     log(`spawn '${req.name}'${req.task ? ' with task' : ''}${req.tier && !req.model ? ` [tier ${req.tier} → ${model ?? 'default'}]` : model ? ` [model ${model}]` : ''}${taskFile ? ' (task via file)' : ''}`);
 }
 
+/**
+ * The closed-session half of `resume`, async because the name lookup reads transcripts: the bus
+ * hands it off and keeps claiming other requests. The request file stays held until this lands,
+ * exactly as a deferred `send` does, so nothing is lost if the lookup takes a while on a cold index.
+ */
+async function runResume(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): Promise<void> {
+  try {
+    const sid = await resumeIdFor(req.name, process.env.CLAUDE_CODE_SESSION_ID);
+    if (!sid) {
+      /* NO TRANSCRIPT. Falling back to a spawn unasked would hand back a fresh something when
+         the caller asked for the same someone — so the default is to refuse and SAY the name
+         that could not be found, which is what makes the dead letter actionable. */
+      if (req.fallback !== 'spawn') {
+        markUndelivered(heldPath, req,
+          `resume '${req.name}': no transcript found for that name — nothing to resume `
+          + `(it may never have run under that name, or it was renamed since). `
+          + `Pass "fallback":"spawn" to start a fresh one instead.`);
+        return;
+      }
+      log(`resume '${req.name}' — no transcript; falling back to spawn as asked`);
+    } else {
+      let taskFile: string | undefined;
+      /* Same Windows quoting rule as spawn: PowerShell mangles POSIX-quoted apostrophes, so
+         every prompt goes through a file there. */
+      if (needsTaskFile(req.prompt) || (process.platform === 'win32' && req.prompt)) {
+        taskFile = path.join(os.tmpdir(), `aios-resume-task-${req.name}.md`);
+        try { fs.writeFileSync(taskFile, req.prompt as string); } catch { taskFile = undefined; }
+      }
+      const c4 = contract4Args(req);
+      if ('error' in c4) { markUndelivered(heldPath, req, c4.error); return; }
+      const cmd = buildResumeCmd(aios.shellSettings().claudeCmd, sid, { prompt: req.prompt, taskFile, extraArgs: c4.args });
+      if (req.prompt) recordTyped(taskFile ? taskFileInstruction(taskFile) : req.prompt, req.name, 'resume', req.from);   // AI-172
+      // background: the new session opens as a tab with an activity mark; the operator's
+      // current tab and keyboard focus stay where they are (setting `busFocus`).
+      emit(win(), 'terminal', { name: req.name, cmd, background: true });
+      log(`resume '${req.name}' → session ${sid.slice(0, 8)}${req.prompt ? ' with prompt' : ''}${taskFile ? ' (via file)' : ''}`);
+      try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+      return;
+    }
+    runSpawn(win, heldPath, req);
+    try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+  } catch (e) {
+    markUndelivered(heldPath, req, `resume '${req.name}' failed: ${String((e as Error)?.message ?? e)}`);
+  }
+}
+
 /** spawn / kill act immediately once claimed — nothing about the target can refuse them. */
+/**
+ * AI-198 — the arguments contract 4 adds to a launch: `--effort` and the advisor (as
+ * `--settings {"advisorModel":…}`). A rung names a fixed model from the contract's table.
+ */
+function contract4Args(req: BusRequest): { args: string[] } | { error: string } {
+  /* A rung names a FIXED advisor model from the contract's own table (judgment = claude-opus-5-5),
+     never hooks/resolve-tier, which answers judgment with '' ("inherit the default"). */
+  return { args: settingsToFile(contract4LaunchArgs({ effort: req.effort, advisorModel: advisorModelFor(req.advisor, req.advisorRung) })) };
+}
+
 function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
   try {
+    if (req.fieldError) {
+      /* Contract 4: a field we cannot honour is dead-lettered NAMING it, never silently dropped —
+         a worker launched without the effort it was asked for is the quiet failure. */
+      markUndelivered(heldPath, req, req.fieldError.reason);
+      return;
+    }
     if (req.action === 'unknown') {
       /* Refuse a verb we do not implement rather than defaulting it to spawn — see BusAction. */
       markUndelivered(heldPath, req,
@@ -758,41 +897,13 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
       const live = targetByName(req.name);
       if (live) {
         emit(win(), 'focusByName', { name: req.name });
-        log(`resume '${req.name}' — already running, revealing and delivering`);
+        log(`resume '${req.name}' — already running, revealing and delivering${req.effort || req.advisor ? ' (effort/advisor NOT applied: a running session cannot change them)' : ''}`);
         if (req.prompt) void runSend(win, heldPath, { ...req, action: 'send' }, Date.now());
         else try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         return;
       }
-      const sid = resumeIdFor(req.name, process.env.CLAUDE_CODE_SESSION_ID);
-      if (!sid) {
-        /* NO TRANSCRIPT. Falling back to a spawn unasked would hand back a fresh something when
-           the caller asked for the same someone — so the default is to refuse and SAY the name
-           that could not be found, which is what makes the dead letter actionable. */
-        if (req.fallback !== 'spawn') {
-          markUndelivered(heldPath, req,
-            `resume '${req.name}': no transcript found for that name — nothing to resume `
-            + `(it may never have run, or its history is older than the ${MAX_RESUME_SCAN} most `
-            + `recent sessions). Pass "fallback":"spawn" to start a fresh one instead.`);
-          return;
-        }
-        log(`resume '${req.name}' — no transcript; falling back to spawn as asked`);
-      } else {
-        let taskFile: string | undefined;
-        /* Same Windows quoting rule as spawn: PowerShell mangles POSIX-quoted apostrophes, so
-           every prompt goes through a file there. */
-        if (needsTaskFile(req.prompt) || (process.platform === 'win32' && req.prompt)) {
-          taskFile = path.join(os.tmpdir(), `aios-resume-task-${req.name}.md`);
-          try { fs.writeFileSync(taskFile, req.prompt as string); } catch { taskFile = undefined; }
-        }
-        const cmd = buildResumeCmd(aios.shellSettings().claudeCmd, sid, { prompt: req.prompt, taskFile });
-        // background: the new session opens as a tab with an activity mark; the operator's
-        // current tab and keyboard focus stay where they are (setting `busFocus`).
-        emit(win(), 'terminal', { name: req.name, cmd, background: true });
-        log(`resume '${req.name}' → session ${sid.slice(0, 8)}${req.prompt ? ' with prompt' : ''}${taskFile ? ' (via file)' : ''}`);
-        try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
-        return;
-      }
-      runSpawn(win, heldPath, req);
+      void runResume(win, heldPath, req);
+      return;              // runResume owns the held file from here
     } else if (targetByName(req.name)) {
       /* Never duplicate — but never steal the screen either. An agent's request is not the operator
          asking to look somewhere: the pane is marked, and the operator chooses when to switch. */
@@ -801,8 +912,8 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
     } else {
       runSpawn(win, heldPath, req);
     }
-    /* One cleanup for every branch that did NOT already return — kill, spawn, and resume's
-       opt-in fallback. The branches that return have unlinked their own held file first. */
+    /* One cleanup for every branch that did NOT already return — kill and spawn. The branches
+       that return (resume included, which hands its held file to runResume) clean up their own. */
     try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
   } catch (e) {
     markUndelivered(heldPath, req, `${req.action} failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -848,6 +959,7 @@ function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number 
   try {
     const body = JSON.parse(raw) as Record<string, unknown>;
     body._claim = { surface: MY_SURFACE, pid: process.pid, at };
+    withQueuedAt(body, at);   // AI-205: when it FIRST queued — kept through adoption and release
     fs.writeFileSync(fsPath, JSON.stringify(body, null, 2) + '\n');
     fs.renameSync(fsPath, heldPath);   // atomic: exactly one surface can win
   } catch { return undefined; }        // lost the race, or it vanished — either is fine
@@ -857,9 +969,18 @@ function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number 
 /** Set by initCommandBus so the parse-grace re-check can reach the same pipeline. */
 let recheck: (fsPath: string) => void = () => { /* until the bus starts */ };
 
+/* A request addressing a LIVE session uses its real registry name from here on, so every later step
+   (the pane lookup, the verdict, the log) agrees. A spawn creates the name, so it is left alone. */
+function withRealName(req: BusRequest): BusRequest {
+  if (req.action !== 'send' && req.action !== 'kill' && req.action !== 'resume') return req;
+  const real = resolveSessionName(req.name, aios.listRunningAgents().map((a) => a.name));
+  return real && real !== req.name ? { ...req, name: real } : req;
+}
+
 function consume(win: () => BrowserWindow | undefined, fsPath: string): void {
-  const held = claim(fsPath);
-  if (!held) return;
+  const held0 = claim(fsPath);
+  if (!held0) return;
+  const held = { ...held0, req: withRealName(held0.req) };
   if (held.req.action === 'send') void runSend(win, held.heldPath, held.req, held.at);
   else runImmediate(win, held.heldPath, held.req);
 }
@@ -900,10 +1021,14 @@ function adoptHolds(win: () => BrowserWindow | undefined, dir: string): void {
     const req = parseRequest(JSON.stringify(body));
     if (!req) { markUndelivered(p, null, 'unparseable held request'); continue; }
     log(`adopting ${f} (${stamp ? `holder pid ${stamp.pid} gone or hold stale` : 'unstamped, contract-1 era'})`);
+    /* Re-claim, but NEVER move when it queued: ordering, the age stamp and the ceiling read
+       _queuedAt, and a restamped time let a stale message overtake its own correction. */
+    withQueuedAt(body, stamp ? stamp.at : Date.now());
     body._claim = { surface: MY_SURFACE, pid: process.pid, at: Date.now() };
     try { fs.writeFileSync(p, JSON.stringify(body, null, 2) + '\n'); } catch { /* keep going */ }
-    if (req.action === 'send') void runSend(win, p, req, Date.now());
-    else runImmediate(win, p, req);
+    const real = withRealName(req);
+    if (real.action === 'send') void runSend(win, p, real, Date.now());
+    else runImmediate(win, p, real);
   }
 }
 
@@ -965,6 +1090,12 @@ export function initCommandBus(getWin: () => BrowserWindow | undefined, appVersi
      agent asks "is a surface alive?" and is told no while this App is running. A stat and a
      small parse; it writes only when the record already names nobody alive. */
   setInterval(() => healPresence(appVersion), 20 * 1000);
+  /* Warm the resume index now, in the background, so the first `resume` after launch is a
+     refresh of what changed rather than the one-time read of the whole history. */
+  const t0 = Date.now();
+  void resumeIndex.refresh()
+    .then(() => log(`resume index ready: ${resumeIndex.size()} transcripts in ${Date.now() - t0} ms`))
+    .catch((e) => log(`resume index build failed (${e instanceof Error ? e.message : String(e)})`));
   recheck = (p: string) => { if (fs.existsSync(p)) consume(getWin, p); };
   try {
     // Only `*.json` is a request — `.holding` and `.undelivered` sit deliberately OUTSIDE
@@ -985,5 +1116,8 @@ export function initCommandBus(getWin: () => BrowserWindow | undefined, appVersi
     }
   } catch { /* empty/absent inbox */ }
   adoptHolds(getWin, dir);
+  /* Periodically too, not only at startup (review should-fix 8): a hold left by a surface that died
+     would otherwise block its target for the whole 24 h ceiling. canAdoptHold never takes a live one. */
+  setInterval(() => adoptHolds(getWin, dir), 5 * 60 * 1000);
   log(`watching ${dir} (contract ${INBOX_CONTRACT}, surface '${MY_SURFACE}')`);
 }

@@ -1,3 +1,5 @@
+import { freshness, parseLsRemote } from '../core/freshness';
+import { inScope, busNamesFrom, type SessionScope } from '../core/sessionScope';
 import * as fs from 'fs';
 import * as os from 'os';
 import {
@@ -129,8 +131,8 @@ function stripWrapping(v: string): string {
 }
 
 /* DISPLAY FORM. A name reaches us from three places and only one of them is reliably cased:
-   `aliases:` carries link slugs (`chuy`), prose carries display names (`Chuy`), and a shouty
-   line can carry `CHUY`. Greeting somebody by their slug reads as a bug even when the string is
+   `aliases:` carries link slugs (`mari`), prose carries display names (`Mari`), and a shouty
+   line can carry `MARI`. Greeting somebody by their slug reads as a bug even when the string is
    genuinely theirs, so the value is normalised before it is ever shown.
    ONLY when there is no internal casing worth keeping — an all-lowercase or all-uppercase
    string. `McDonald`, `O'Brien` and `van Gogh` already carry deliberate casing and are returned
@@ -157,10 +159,10 @@ export function operatorName(): string {
 
   /* CANDIDATES, best-signal first. The order was `aliases:` first, on the reasoning that it is
      structured and language-agnostic — sound in theory, wrong in practice, and one operator's
-     real vault proved it within the hour: his `aliases:` are `chuy` / `chuycepeda`, because in
-     Obsidian that field exists to make LINKS resolve, so lowercase slugs are the norm there. The
-     app greeted him in lowercase off his own link aliases while his prose said
-     `My name is Jesús "Chuy" Cepeda.`
+     real vault proved it within the hour: its `aliases:` were lowercase slugs, because in Obsidian
+     that field exists to make LINKS resolve, so lowercase slugs are the norm there. The app
+     greeted the operator in lowercase off their own link aliases while their prose said
+     `My name is María "Mari" Ruiz.` (names changed)
      So: an explicit quoted nickname is the strongest "call me this", the identity phrase is next,
      and `aliases:` stays as the language-agnostic NET for a vault whose prose we cannot parse. */
   const cands: string[] = [];
@@ -380,8 +382,14 @@ export function countNotes(kind: 'declared' | 'observed' | 'projects'): number {
    entered, so it answers "blocked longest" without us having to remember anything. */
 export interface RunningAgent { pid: number; name: string; status: string; sessionId: string; cwd: string; startedAt: number; updatedAt: number; waitingFor?: string; statusUpdatedAt?: number; kind: string; entrypoint: string; }
 
+/** Claude Code's config folder. It honours CLAUDE_CONFIG_DIR, so the App reads where Claude Code
+ *  actually writes (the registry, transcripts, settings). Unset — every Finder launch — it is ~/.claude. */
+export const claudeConfigDir = (): string => process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+/** ~/.claude.json, or $CLAUDE_CONFIG_DIR/.claude.json when that is set (Claude Code's own rule). */
+export const claudeJsonDefault = (): string => (process.env.CLAUDE_CONFIG_DIR ? path.join(process.env.CLAUDE_CONFIG_DIR, '.claude.json') : path.join(os.homedir(), '.claude.json'));
+
 export function listRunningAgents(): RunningAgent[] {
-  const dir = path.join(os.homedir(), '.claude', 'sessions');
+  const dir = path.join(claudeConfigDir(), 'sessions');
   let files: string[] = [];
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return []; }
   const out: RunningAgent[] = [];
@@ -437,7 +445,87 @@ export function isOperatorSession(a: { kind: string; entrypoint: string }): bool
   return a.kind === 'interactive' && !/^sdk-/i.test(a.entrypoint);
 }
 export function listOperatorSessions(): RunningAgent[] {
-  return listRunningAgents().filter(isOperatorSession);
+  const all = listRunningAgents().filter(isOperatorSession);
+  const base = sessionScope();
+  /* Review blocker 6: pane membership is decided HERE, from the process tree, not from the
+     renderer's report. The renderer only learns a pane's session id after the panel has listed
+     it — and a session outside the framework/workspace folders was never listed, so it never
+     got an id, so it was never listed: every pulse declared it "(ended)". Main owns the ptys,
+     so "is this session a descendant of one of my panes?" has an exact answer without waiting. */
+  const ids = new Set(base.paneSessionIds);
+  for (const id of paneSessionIdsFromTree(all)) ids.add(id);
+  const scope = { ...base, paneSessionIds: ids };
+  return all.filter((a) => inScope({ ...a, cwd: realOr(a.cwd || '') }, scope));
+}
+
+/* The App's pty pids, registered by main.ts (which owns the `ptys` map). */
+let ptyPidSource: () => number[] = () => [];
+export function setPtyPidSource(fn: () => number[]): void { ptyPidSource = fn; }
+let treeCache: { at: number; key: string; ids: Set<string> } | undefined;
+/** Session ids whose process descends from one of this App's ptys. Memoized briefly: one `ps`. */
+export function paneSessionIdsFromTree(running: RunningAgent[], procTable?: string): Set<string> {
+  const ptyPids = ptyPidSource().filter((n) => Number.isInteger(n) && n > 0);
+  if (!ptyPids.length || !running.length) return new Set();
+  const key = `${ptyPids.join(',')}|${running.map((a) => a.pid).join(',')}`;
+  if (!procTable && treeCache && treeCache.key === key && Date.now() - treeCache.at < 1500) return treeCache.ids;
+  const map = sessionPidsUnder(ptyPids, running.map((a) => a.pid), procTable);
+  const byPid = new Map(running.map((a) => [a.pid, a.sessionId]));
+  const ids = new Set<string>();
+  for (const pid of Object.values(map)) { const id = byPid.get(pid); if (id) ids.add(id); }
+  if (!procTable) treeCache = { at: Date.now(), key, ids };
+  return ids;
+}
+
+/* AI-203 — the sessions open in this App's panes, reported by the renderer every pulse. */
+let paneSessionIds: ReadonlySet<string> = new Set();
+export function setPaneSessionIds(ids: unknown): void {
+  paneSessionIds = new Set(Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string' && !!x) : []);
+}
+/** Every name in USER.md's Identity table (a primary session), lowercased. */
+export function primaryNames(): Set<string> {
+  const root = frameworkRoot();
+  if (!root) return new Set();
+  let text = '';
+  try { text = fs.readFileSync(path.join(root, 'USER.md'), 'utf8'); } catch { return new Set(); }   // no USER.md
+  const out = primaryNamesIn(text);
+  /* Review should-fix 13: this used to key ONLY on the `## Identity` heading, so renaming it emptied
+     the set silently and every primary session vanished from the panel. The table is now also found
+     by its header row; when neither is there it is said once, rather than read as "no primaries". */
+  if (!out.size && !warnedNoIdentity) { warnedNoIdentity = true; console.log('[scope] USER.md has no Identity table (Name | Role | Greeting style) — primary sessions are not recognised by name'); }
+  return out;
+}
+let warnedNoIdentity = false;
+/** Pure: names from the Identity table, found under `## Identity` OR by its header row anywhere. */
+export function primaryNamesIn(text: string): Set<string> {
+  const out = new Set<string>();
+  const lines = String(text ?? '').split(/\r?\n/);
+  const cells = (l: string) => l.split('|').slice(1, -1).map((c) => c.replace(/`/g, '').trim());
+  const isHeader = (l: string) => { const c = cells(l).map((x) => x.toLowerCase()); return c[0] === 'name' && c.includes('role'); };
+  let start = lines.findIndex((l) => /^##\s+Identity/.test(l));
+  if (start === -1) start = lines.findIndex((l) => l.startsWith('|') && isHeader(l)) - 1;
+  if (start < -1) return out;
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^##\s/.test(line)) break;
+    if (!line.startsWith('|')) { if (out.size) break; continue; }   // the table ended
+    const raw = cells(line)[0] ?? '';
+    if (raw && raw.toLowerCase() !== 'name' && !/^[ :-]+$/.test(raw)) out.add(raw.toLowerCase());
+  }
+  return out;
+}
+const realOr = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };
+let scopeCache: { at: number; key: string; scope: SessionScope } | undefined;
+export function sessionScope(): SessionScope {
+  const fw = frameworkRoot();
+  const logPath = process.env.AIOS_BUS_LOG || path.join(os.homedir(), '.aios', 'bus-sent.jsonl');
+  const key = `${fw ?? ''}|${logPath}`;
+  if (scopeCache && scopeCache.key === key && Date.now() - scopeCache.at < 1500) return { ...scopeCache.scope, paneSessionIds };
+  const roots = [...(fw ? [fw] : []), ...workspaceFolders()].map(realOr);
+  let busNames = new Set<string>();
+  try { busNames = busNamesFrom(fs.readFileSync(logPath, 'utf8'), Math.floor(Date.now() / 1000)); } catch { /* none yet */ }
+  const scope: SessionScope = { paneSessionIds, primaries: primaryNames(), busNames, roots, caseInsensitive: process.platform !== 'linux' };
+  scopeCache = { at: Date.now(), key, scope };
+  return scope;
 }
 
 function isAlive(pid: number): boolean {
@@ -564,7 +652,7 @@ export interface RateLimit { fiveHourPct: number; sevenDayPct: number; fiveHourR
 
 export function rateLimit(): RateLimit | undefined {
   try {
-    const d = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'rate-limit-cache.json'), 'utf8'));
+    const d = JSON.parse(fs.readFileSync(path.join(claudeConfigDir(), 'rate-limit-cache.json'), 'utf8'));
     return {
       fiveHourPct: Number(d.five_hour_pct) || 0,
       sevenDayPct: Number(d.seven_day_pct) || 0,
@@ -1104,7 +1192,7 @@ export function readCollabSpaces(): CollabSpace[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export interface FrameworkStatus { repo: string; hash: string; synced: string; }
+export interface FrameworkStatus { repo: string; hash: string; synced: string; ref: string; }
 
 export function readFrameworkStatus(): FrameworkStatus | undefined {
   const root = frameworkRoot();
@@ -1116,7 +1204,7 @@ export function readFrameworkStatus(): FrameworkStatus | undefined {
     const m = line.match(/^([a-z]+)=(.*)$/i);
     if (m) kv[m[1]] = m[2].trim();
   }
-  return { repo: kv.repo ?? '', hash: kv.hash ?? '', synced: kv.synced ?? '' };
+  return { repo: kv.repo ?? '', hash: kv.hash ?? '', synced: kv.synced ?? '', ref: kv.ref ?? '' };
 }
 
 /* THE GIT BINARY, resolved once and remembered. A packaged app's PATH finds the Xcode shim,
@@ -1156,7 +1244,13 @@ export function updateRetryDelay(failures: number, capMs: number): number {
   return Math.min(5_000 * 2 ** (n - 1), capMs);
 }
 
-export function checkForUpdates(): Promise<'up-to-date' | 'available' | 'unknown'> {
+/* TESTING (canonical freshness-probe.sh, release/2026-10-11): the vault is on a non-default branch,
+   ahead of main — never offer or run an update for it. The branch of the last check is kept here
+   so the status post can name it. */
+let lastTestingBranch = '';
+export function testingBranch(): string { return lastTestingBranch; }
+
+export function checkForUpdates(): Promise<'up-to-date' | 'available' | 'unknown' | 'testing'> {
   const status = readFrameworkStatus();
   if (!status || !status.repo || !status.hash) return Promise.resolve('unknown');
   /* The hash must LOOK like a commit before it is compared. A freshly written tracker can carry
@@ -1169,11 +1263,14 @@ export function checkForUpdates(): Promise<'up-to-date' | 'available' | 'unknown
   return new Promise((resolve) => {
     // SSH remotes need an agent the GUI process may not have — public repo, use https
     const url = status.repo.replace(/^git@github\.com:/, 'https://github.com/');
-    execFile(gitBin(), ['ls-remote', url, 'HEAD'], { timeout: 8000 }, (err, stdout) => {
+    /* Every branch head, not just HEAD: a vault on a release branch is AHEAD of main, and
+       comparing it with HEAD alone read it as "update available" — an offer that would pull it back
+       to main. `--symref` names the default branch. The decision is shared core (core/freshness). */
+    execFile(gitBin(), ['ls-remote', '--symref', url], { timeout: 8000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
       if (err || !stdout) return resolve('unknown');
-      const remote = stdout.trim().split(/\s+/)[0];
-      if (!remote) return resolve('unknown');
-      resolve(remote.startsWith(status.hash) ? 'up-to-date' : 'available');
+      const f = freshness({ hash: status.hash, ref: status.ref }, parseLsRemote(stdout));
+      lastTestingBranch = f.state === 'testing' ? f.branch : '';
+      resolve(f.state);
     });
   });
 }
@@ -1227,7 +1324,7 @@ export function dailyNotePath(iso: string): string | undefined {
 
 // ── shell settings (.glass/shell.json — synced beside state.json) ───────────
 
-export interface ShellSettings { claudeCmd: string; showHints: boolean; showNudges: boolean; showMemory: boolean; theme: string; termFontSize: number; appFontSize: number; hiddenCards: string[]; showHidden: boolean; fileIcons: boolean; autoReveal: boolean; showWeekNumbers: boolean; killBehavior: 'ask' | 'kill' | 'capture'; terminalMode: 'auto' | 'ask'; caffeinate: CaffeinateMode; openNotesIn: 'rendered' | 'source'; ignorePaths: string[]; locale: LocalePref; attention: NotifyLevel; busFocus: 'stay' | 'follow'; }
+export interface ShellSettings { claudeCmd: string; showHints: boolean; showNudges: boolean; showMemory: boolean; theme: string; termFontSize: number; appFontSize: number; hiddenCards: string[]; showHidden: boolean; fileIcons: boolean; autoReveal: boolean; autoOpenExports: boolean; showWeekNumbers: boolean; killBehavior: 'ask' | 'kill' | 'capture'; terminalMode: 'auto' | 'ask'; caffeinate: CaffeinateMode; lidAwake: boolean; lidAsked: boolean; openNotesIn: 'rendered' | 'source'; ignorePaths: string[]; locale: LocalePref; attention: NotifyLevel; busFocus: 'stay' | 'follow'; }
 
 /** Operator-defined names/globs the explorer hides AND git status ignores
  *  (no pending-commit bubble) — the desktop analog of VS Code's `files.exclude`
@@ -1252,7 +1349,10 @@ export function shellSettings(): ShellSettings {
     // what a command-bus spawn/send does to the screen: 'stay' (default) keeps the operator where
     // they are and marks the target tab; 'follow' is the old behaviour (switch to it)
     busFocus: raw.busFocus === 'follow' ? 'follow' : 'stay',
-    theme: raw.theme === 'light' ? 'light' : 'dark',
+    /* AI-190: absent means FOLLOW THE SYSTEM, the way `locale: 'auto'` does. An exec on a
+       light-everywhere Mac was greeted by a dark first frame and only relaxed on finding the
+       sun button. A stored 'light'/'dark' is the operator's own pick and is kept as is. */
+    theme: raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : 'system',
     termFontSize: Number(raw.termFontSize) || 12.5,
     // interface scale, in the same "font size" language as the terminal's — 13 is 100%.
     // Applied as a real zoom factor (crisp text) rather than restyling every rule.
@@ -1262,6 +1362,9 @@ export function shellSettings(): ShellSettings {
     showHidden: raw.showHidden === true,      // default off
     fileIcons: raw.fileIcons !== false,       // default on (enhanced)
     autoReveal: raw.autoReveal !== false,     // default on
+    // a new file in 03 - export/ opens itself in a tab (the claude.ai-artifact feel); off = it
+    // only shows up in the tree. Default on: absent keeps the behaviour every install already has.
+    autoOpenExports: raw.autoOpenExports !== false,
     showWeekNumbers: raw.showWeekNumbers !== false, // default on (Glass parity)
     ignorePaths: Array.isArray(raw.ignorePaths)
       ? raw.ignorePaths.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim())
@@ -1275,6 +1378,11 @@ export function shellSettings(): ShellSettings {
        out — anything else (a typo, a hand-edit, an older file) lands on auto rather than silently
        disabling the feature. */
     caffeinate: raw.caffeinate === 'manual' ? 'manual' : 'auto',
+    /* Keep-awake with the lid closed (macOS). OFF unless the operator turns it on: unlike the
+       blocker it needs a one-time administrator install, and a laptop that stays awake in a bag
+       is a choice someone has to make, never a default. */
+    lidAwake: raw.lidAwake === true,
+    lidAsked: (raw as { lidAsked?: unknown }).lidAsked === true,   // the one-time lid question was answered
     openNotesIn: raw.openNotesIn === 'source' ? 'source' : 'rendered', // Glass "Open files in": rendered preview (default) or raw source
   };
 }
@@ -1646,6 +1754,40 @@ function whichCheck(id: string, cmd: string, severity: 'fail' | 'warn', missingK
 }
 
 /**
+ * The gh probe, POSIX lane. Exported so a test can run it against a fake `gh`.
+ *
+ * "Installed" means `gh --version` RUNS, not that `command -v gh` answers — the same definition
+ * install-tool.sh uses (`works`). `command -v` alone said yes on a Mac where the terminal said
+ * "command not found: gh": the row read "not authenticated", Connect GitHub ran `gh auth login`
+ * into the error, and Re-check kept the same verdict, so the operator had no way forward from
+ * inside the app.
+ */
+export const GH_PROBE_POSIX =
+  'gh_runs() { command -v gh >/dev/null 2>&1 && gh --version >/dev/null 2>&1; }; ' +
+  'if gh_runs && gh auth status >/dev/null 2>&1; then echo AUTHED; ' +
+  "elif grep -qs 'github\\.com' \"$HOME/.git-credentials\"; then echo PATOK; " +
+  /* #50: on macOS a stored token lives in Keychain (osxkeychain), which this probe must not read —
+     a `git credential fill` on the 5-second poll raised an endless loop of Keychain modals. The
+     token lane verifies the token ONCE, on the operator's own click, and leaves this marker. */
+  /* PATMARK, not PATOK: whether the marker still counts (the token's own expiry, a 90-day re-verify
+     cap) is decided in Node by patMarkerValid — dates do not parse portably in sh. */
+  'elif [ -f "$HOME/.aios/github-pat-verified" ]; then echo PATMARK; ' +
+  'elif gh_runs; then echo NOAUTH; else echo NOGH; fi';
+
+/**
+ * gh is here but signed out. The login still goes THROUGH the installer ladder, never straight to
+ * `gh auth login`: the probe and the terminal that runs the login are two different shells, and
+ * when they disagree about where gh is, a bare login dies on "command not found: gh". The ladder
+ * settles it inside the terminal itself — gh already runs there, it says so and logs in; it does
+ * not, it installs gh first and then logs in. Same command either way, so a wrong verdict here
+ * can no longer strand anyone. The bare login is only the fallback for a build without the ladder.
+ */
+function ghNoAuth(loginCmd: string): CheckResult {
+  const cmd = installToolCmd('gh', loginCmd) || loginCmd;
+  return { id: 'gh', label: t('setupCheck.gh'), status: 'warn', message: t('setupCheck.ghNoAuth'), repairCmd: cmd, repairHint: cmd, canRepair: false };
+}
+
+/**
  * The gh check, Windows lane — same four verdicts as the POSIX one (authed / stored-token /
  * installed-but-not-authed / absent), reached with tools that exist here.
  *
@@ -1658,7 +1800,9 @@ function whichCheck(id: string, cmd: string, severity: 'fail' | 'warn', missingK
  * this change's scope), and a missing key renders as the key itself.
  */
 async function ghCheckWin(): Promise<CheckResult> {
-  const probe = 'if (Get-Command gh -ErrorAction SilentlyContinue) { '
+  /* `gh --version` as well as Get-Command, for the same reason as GH_PROBE_POSIX: a gh that is
+     found but does not run is not installed. */
+  const probe = 'if ((Get-Command gh -ErrorAction SilentlyContinue) -and (gh --version 2>$null)) { '
     + 'gh auth status *> $null; if ($?) { "AUTHED" } '
     + 'elseif ((cmdkey /list:git:https://github.com 2>$null | Out-String) -match "github") { "PATOK" } '
     + 'elseif ((Test-Path "$HOME\\.git-credentials") -and (Select-String -Quiet -Path "$HOME\\.git-credentials" -Pattern "github.com")) { "PATOK" } '
@@ -1669,7 +1813,7 @@ async function ghCheckWin(): Promise<CheckResult> {
   const loginCmd = 'gh auth login --web --git-protocol https';
   if (out?.includes('AUTHED')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghOk'), canRepair: false };
   if (out?.includes('PATOK')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghPat'), canRepair: false };
-  if (out?.includes('NOAUTH')) return { id: 'gh', label: t('setupCheck.gh'), status: 'warn', message: t('setupCheck.ghNoAuth'), repairCmd: loginCmd, repairHint: loginCmd, canRepair: false };
+  if (out?.includes('NOAUTH')) return ghNoAuth(loginCmd);
   /* gh genuinely absent. This used to be winget-or-nothing, and winget-then-login in ONE pane:
      winget installed gh into a PATH that pane could not see, so the login that followed failed
      with "gh is not recognized", and a real first install ended with gh installed by hand from
@@ -2000,18 +2144,18 @@ function doctorChecks(): DoctorCheck[] {
            from ~/.git-credentials, which the `store` helper writes in plain text and which costs
            nothing to read; an osxkeychain-only PAT will read as "not authenticated", a
            false-negative that is merely a redundant login rather than a modal loop. */
-        const probe =
-          'if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then echo AUTHED; ' +
-          "elif grep -qs 'github\\.com' \"$HOME/.git-credentials\"; then echo PATOK; " +
-          'elif command -v gh >/dev/null 2>&1; then echo NOAUTH; else echo NOGH; fi';
-        const out = await zshOut(probe);
+        const out = await zshOut(GH_PROBE_POSIX);
         const loginCmd = 'gh auth login --web --git-protocol https';
         // rank the answers: both shells reply, and the BEST answer wins. Without this, a
         // non-interactive "NOGH" would outrank the interactive shell's "NOAUTH" and send someone
         // to install a tool they already have.
         if (out?.includes('AUTHED')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghOk'), canRepair: false };
         if (out?.includes('PATOK')) return { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghPat'), canRepair: false };
-        if (out?.includes('NOAUTH')) return { id: 'gh', label: t('setupCheck.gh'), status: 'warn', message: t('setupCheck.ghNoAuth'), repairCmd: loginCmd, repairHint: loginCmd, canRepair: false };
+        /* Review should-fix 19: the marker used to pass forever — a token that expired or was revoked
+           still read "connected". It passes only while patMarkerValid says so; after that the row
+           asks to connect again, the same path as a signed-out gh. */
+        if (out?.includes('PATMARK')) return patMarkerValid() ? { id: 'gh', label: t('setupCheck.gh'), status: 'pass', message: t('setupCheck.ghPat'), canRepair: false } : ghNoAuth(loginCmd);
+        if (out?.includes('NOAUTH')) return ghNoAuth(loginCmd);
         /* gh genuinely absent. This branch used to ask one question — can Homebrew write? — and
            had nothing to offer when the answer was no. A Mac with no Homebrew was then told its
            Homebrew "belongs to another account", given no command, and Connect GitHub ran
@@ -2191,7 +2335,18 @@ export async function computeHealth(): Promise<CheckResult[]> {
 
 /** One battery of doctor checks → the gated stepper (done/active/locked). */
 export async function onboardingState(): Promise<OnboardingDerived<CheckResult>> {
-  return deriveOnboarding(await setupChecks());
+  return deriveOnboarding(await setupChecks(), onboardingSkipped());
+}
+/* Steps the operator passed with "Skip for now". In ~/.aios, not the framework's shell.json: the
+   framework may not exist yet when GitHub is offered (it comes before the setup session). */
+const skippedFile = (): string => path.join(os.homedir(), '.aios', 'onboarding-skipped.json');
+export function onboardingSkipped(): Set<string> {
+  try { const j = JSON.parse(fs.readFileSync(skippedFile(), 'utf8')); return new Set(Array.isArray(j) ? j.filter((x) => typeof x === 'string') : []); } catch { return new Set(); }
+}
+export function skipOnboardingStep(id: string): void {
+  if (id !== 'github') return;   // only skippable steps; today that is GitHub alone
+  const s = onboardingSkipped(); s.add(id);
+  try { fs.mkdirSync(path.dirname(skippedFile()), { recursive: true }); fs.writeFileSync(skippedFile(), JSON.stringify([...s]) + '\n'); } catch { /* unwritable — the step stays offered */ }
 }
 
 /**
@@ -2223,15 +2378,73 @@ export function storeGitHubPat(pat: string): boolean {
   } catch { return false; }
 }
 
+/** #50 — the marker the gh probe reads. Holds a timestamp, never the token. */
+export const githubPatMarker = (): string => path.join(os.homedir(), '.aios', 'github-pat-verified');
+
+/**
+ * #50 — check a just-stored token with GitHub ONCE, on the operator's click, and record that it
+ * worked. Without this, a Mac's token (stored in Keychain) could never pass the gh check, because
+ * the check reads only ~/.git-credentials. One request, the token never logged or written by us.
+ */
+export function verifyGitHubPat(pat: string, get: (token: string) => Promise<number | { status: number; expires?: string }> = githubUserStatus): Promise<boolean> {
+  const token = (pat || '').trim();
+  if (!token) return Promise.resolve(false);
+  return get(token).then((r) => {
+    const status = typeof r === 'number' ? r : r.status;
+    if (status !== 200) return false;
+    /* Review should-fix 19: record WHEN it stops being true. GitHub states a token's expiry in the
+       `github-authentication-token-expiration` header; a token with none still gets re-verified
+       after PAT_REVERIFY_MS, which is what catches a revoked one. */
+    const exp = typeof r === 'number' ? undefined : r.expires;
+    const expiresAt = exp && Number.isFinite(Date.parse(exp.replace(' UTC', 'Z').replace(' ', 'T'))) ? new Date(Date.parse(exp.replace(' UTC', 'Z').replace(' ', 'T'))).toISOString() : null;
+    try {
+      fs.mkdirSync(path.dirname(githubPatMarker()), { recursive: true });
+      fs.writeFileSync(githubPatMarker(), JSON.stringify({ verifiedAt: new Date().toISOString(), expiresAt }) + '\n');
+    } catch { return false; }
+    return true;
+  }, () => false);
+}
+
+/** A verified token is trusted this long before the row asks to connect again (revocation is invisible otherwise). */
+export const PAT_REVERIFY_MS = 90 * 24 * 60 * 60 * 1000;
+/** Does the #50 marker still count? Before the token's own expiry AND within PAT_REVERIFY_MS of its check.
+ *  Reads the older plain-timestamp marker too (no expiry known → only the re-verify cap applies). */
+export function patMarkerValid(now = Date.now()): boolean {
+  let raw = '';
+  try { raw = fs.readFileSync(githubPatMarker(), 'utf8').trim(); } catch { return false; }
+  let verifiedAt = NaN, expiresAt = NaN;
+  try { const j = JSON.parse(raw) as { verifiedAt?: string; expiresAt?: string | null }; verifiedAt = Date.parse(String(j.verifiedAt)); if (j.expiresAt) expiresAt = Date.parse(j.expiresAt); }
+  catch { verifiedAt = Date.parse(raw); }
+  if (!Number.isFinite(verifiedAt) || now - verifiedAt > PAT_REVERIFY_MS) return false;
+  return !(Number.isFinite(expiresAt) && now >= expiresAt);
+}
+
+function githubUserStatus(token: string): Promise<{ status: number; expires?: string }> {
+  return new Promise((resolve) => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const https = require('https') as typeof import('https');
+    const req = https.get('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'aios-app', Accept: 'application/vnd.github+json' },
+      timeout: 8000,
+    }, (res) => {
+      res.resume();
+      const h = res.headers['github-authentication-token-expiration'];
+      resolve({ status: res.statusCode || 0, expires: typeof h === 'string' ? h : undefined });
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ status: 0 }); });
+    req.on('error', () => resolve({ status: 0 }));
+  });
+}
+
 // ── Claude Code global config (ported from the extension — all fs-only) ─────
 
 /** Claude Code's home dir (~/.claude) + global config (~/.claude.json).
  *  Env-overridable (GLASS_CLAUDE_HOME / GLASS_CLAUDE_JSON) so the doctor's
  *  account/skills/plugin checks are testable against a fixture, not the
  *  developer's real machine state. Production never sets these. */
-export const claudeDir = () => process.env.GLASS_CLAUDE_HOME || path.join(os.homedir(), '.claude');
+export const claudeDir = () => process.env.GLASS_CLAUDE_HOME || claudeConfigDir();
 const claudeSettingsPath = () => path.join(claudeDir(), 'settings.json');
-const claudeJsonPath = () => process.env.GLASS_CLAUDE_JSON || path.join(os.homedir(), '.claude.json');
+const claudeJsonPath = () => process.env.GLASS_CLAUDE_JSON || claudeJsonDefault();
 
 /* ORDERED BY CAPABILITY, STRONGEST FIRST — and that order is now load-bearing, not cosmetic.
    The setup step recommends `MODEL_OPTIONS[0]` by name as "the most capable one available here",
@@ -2242,16 +2455,9 @@ const claudeJsonPath = () => process.env.GLASS_CLAUDE_JSON || path.join(os.homed
    actually advertises (2.1.270 carries claude-opus-5, claude-opus-5[1m], claude-sonnet-5) rather
    than from memory. It had been a generation behind — topping out at Opus 4.8 while the operator
    was running Opus 5.
-   STILL A HARDCODED LIST, and it will go stale again: nothing here derives from the binary. That
-   is the real fix and it is not this one. Until then, this list is a release-time checklist item. */
-export const MODEL_OPTIONS = [
-  { label: 'Opus 5 — 1M context', value: 'claude-opus-5[1m]' },
-  { label: 'Opus 5', value: 'claude-opus-5' },
-  { label: 'Sonnet 5 — 1M context', value: 'claude-sonnet-5[1m]' },
-  { label: 'Sonnet 5', value: 'claude-sonnet-5' },
-  { label: 'Haiku 4.5', value: 'claude-haiku-4-5' },
-  { label: 'Default (clear the override)', value: '' },
-];
+   AI-194 (0.11.0): it WENT stale again — a generation behind MODEL_LADDER, which is what the
+   picker actually shows. It is now derived from the ladder, so there is one list to refresh. */
+export const MODEL_OPTIONS: { label: string; value: string }[] = [];   // filled below, from MODEL_LADDER
 export const MODE_OPTIONS = ['default', 'auto', 'acceptEdits', 'plan', 'bypassPermissions'];
 
 function readJson(p: string): Record<string, unknown> {
@@ -2326,16 +2532,29 @@ function writeClaudeUserJson(mutate: (j: Record<string, unknown>) => void): void
    carries account extras and the operator's own pinned value, neither of which can be ranked —
    and one caller needs a ranking. */
 const MODEL_LADDER = [
-  /* Opus 5.5 — verified present in Claude Code 2.1.280's own model catalog before it was listed
-     here, because an id the catalog does not know is refused outright rather than falling back.
-     Opus 5 stays below it: an operator pinned to it must still see a named option, not a raw id. */
+  /* AI-194 (0.11.0) — the current generation, each id VERIFIED in Claude Code 2.1.296's own model
+     catalog first, because an id the catalog does not know is refused outright rather than
+     falling back: claude-fable-5-1, claude-opus-5-5[1m], claude-sonnet-5-5[1m], claude-haiku-5-5.
+     Ordered as MODEL-ROUTING's ladder (frontier → judgment → scale → fast); the setup step does
+     not read index 0 (it recommends an alias, RECOMMENDED_SETUP_MODEL), so Fable at the top is a
+     ranking, not a recommendation. Fable has no 1M variant in the catalog. The previous generation
+     stays at the bottom so an operator pinned to it sees a name, not a raw id. */
+  { label: 'Fable 5.1', value: 'claude-fable-5-1' },
   { label: 'Opus 5.5 — 1M context', value: 'claude-opus-5-5[1m]' },
   { label: 'Opus 5.5', value: 'claude-opus-5-5' },
+  { label: 'Sonnet 5.5 — 1M context', value: 'claude-sonnet-5-5[1m]' },
+  { label: 'Sonnet 5.5', value: 'claude-sonnet-5-5' },
+  { label: 'Haiku 5.5', value: 'claude-haiku-5-5' },
   { label: 'Opus 5 — 1M context', value: 'claude-opus-5[1m]' },
   { label: 'Opus 5', value: 'claude-opus-5' },
   { label: 'Sonnet 5', value: 'claude-sonnet-5' },
   { label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
 ];
+MODEL_OPTIONS.push(...MODEL_LADDER, { label: 'Default (clear the override)', value: '' });
+
+/** AI-194 — Claude Code's persisted effort levels (`effortLevel` in settings; verified in the
+ *  2.1.296 schema: low · medium · high · xhigh — `max` exists for a session, never persisted). */
+export const EFFORT_OPTIONS = ['low', 'medium', 'high', 'xhigh'] as const;
 
 /* Claude Code accepts ALIASES — `opus`, `opus[1m]`, `sonnet` — each meaning "the latest of that
    family". They are not ids, so they never match the ladder, and an unlabelled alias surfaced in
@@ -2442,9 +2661,11 @@ export function outputStyleOptions(): string[] {
 
 export interface ClaudeConfig {
   account: string; model: string; mode: string; remoteControl: boolean; autoUpdates: boolean;
+  effort: string;            // AI-194: effortLevel ('' = Claude's default for the model)
+  advisor: string;           // AI-195: advisorModel ('' = no advisor)
   // Claude-owned toggles surfaced in Settings (see src/core/claudeConfig.ts for the stores)
   outputStyle: string; reduceMotion: boolean; switchModelsOnFlag: boolean;
-  claudeInChrome: boolean; copyOnSelect: boolean;
+  claudeInChrome: boolean; copyOnSelect: boolean; diffPanel: boolean;
   agentPushNotif: boolean; inputNeededNotif: boolean; awaySummary: boolean; autoCompact: boolean;
 }
 
@@ -2475,6 +2696,8 @@ export function claudeConfig(): ClaudeConfig {
     account: cj?.oauthAccount?.emailAddress || '',
     // every one of these reads through the registry, so the row and the file agree
     model: str('model'),
+    effort: str('effort'),
+    advisor: str('advisor'),
     mode: str('mode'),
     remoteControl: bool('remoteControl'),
     outputStyle: str('outputStyle'),
@@ -2482,6 +2705,7 @@ export function claudeConfig(): ClaudeConfig {
     switchModelsOnFlag: bool('switchModelsOnFlag'),
     claudeInChrome: bool('claudeInChrome'),
     copyOnSelect: bool('copyOnSelect'),
+    diffPanel: bool('diffPanel'),
     agentPushNotif: bool('agentPushNotif'),
     inputNeededNotif: bool('inputNeededNotif'),
     awaySummary: bool('awaySummary'),
@@ -2516,7 +2740,13 @@ export function seedClaudeDefaults(): { seeded: string[]; already: boolean } {
   const r = frameworkRoot();
   let raw: Record<string, unknown> = {};
   if (r) { try { raw = JSON.parse(fs.readFileSync(path.join(r, '.glass', 'shell.json'), 'utf8')); } catch { raw = {}; } }
-  if (raw.claudeDefaultsSeeded) return { seeded: [], already: true };
+  /* Keys added AFTER a framework was first seeded get their own one-time pass, under the same rule
+     (only when nothing is on disk): otherwise every existing install would never receive them. */
+  if (raw.claudeDefaultsSeeded) {
+    const late: string[] = [];
+    if (!raw.claudeDefaultsSeededDiffPanel && seedDiffPanelOnce()) late.push('diffPanel');
+    return { seeded: late, already: true };
+  }
   const [settings, user, project, local] = claudeStores();
   const seeded: string[] = [];
   for (const id of seedableKeys()) {
@@ -2526,7 +2756,18 @@ export function seedClaudeDefaults(): { seeded: string[]; already: boolean } {
     try { setClaudeConfig(id as ClaudeConfigKey, CLAUDE_KEYS[id].seed); seeded.push(id); } catch { /* skip */ }
   }
   setShellSetting('claudeDefaultsSeeded', true);
+  if (seeded.includes('diffPanel') && isSet('diffPanel', ...claudeStores())) setShellSetting('claudeDefaultsSeededDiffPanel', true);
   return { seeded, already: false };
+}
+/* The diff panel's own one-time pass. The marker is set only once a value is really ON DISK — the
+   writer refuses an empty or missing ~/.claude.json (a fresh machine before the Claude sign-in), and
+   marking that as done would mean the default never lands. Returns whether it wrote. */
+function seedDiffPanelOnce(): boolean {
+  if (isSet('diffPanel', ...claudeStores())) { setShellSetting('claudeDefaultsSeededDiffPanel', true); return false; }   // already chosen
+  try { setClaudeConfig('diffPanel' as ClaudeConfigKey, false); } catch { return false; }
+  if (!isSet('diffPanel', ...claudeStores())) return false;   // not written yet — retried next launch
+  setShellSetting('claudeDefaultsSeededDiffPanel', true);
+  return true;
 }
 
 /** Which Claude keys are actually PRESENT on disk. The UI needs this to tell "the operator chose

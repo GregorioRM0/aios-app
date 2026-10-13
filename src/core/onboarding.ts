@@ -1,7 +1,7 @@
 /**
  * The Onboarding flow — the pure model behind the sequenced onboarding stepper.
  *
- * Seven gated steps, each VERIFIED by doctor checks (the Batch-D CheckResult
+ * Gated steps, each VERIFIED by doctor checks (the Batch-D CheckResult
  * shape): a step is done only when every required check passes. The first
  * not-done step is `active` (its buttons are live); everything after is
  * `locked`. Optional checks (node) surface but never gate.
@@ -18,9 +18,11 @@ export interface OnboardingStepSpec {
   required: string[];
   /** Shown on the step but never gates it (e.g. node — warn-only). */
   optional?: string[];
+  /** The operator may pass it with "Skip for now"; a skipped step counts as done. */
+  skippable?: boolean;
 }
 
-/** The sequence. FOUR steps, and the fourth is a conversation.
+/** The sequence. FOUR steps, and the third is a conversation.
  *
  *  It was seven. The operator who walked it named the problem exactly: every extra box is a
  *  decision handed to someone who has no basis for making it. "Starter pack" was the proof —
@@ -28,7 +30,7 @@ export interface OnboardingStepSpec {
  *  commissioned the feature cannot explain it at the moment of use, a newcomer certainly cannot.
  *
  *  So the app owns only what a script does better than a conversation — install, sign in,
- *  authorize — and everything downstream of "Claude runs and GitHub is authorized" belongs to
+ *  authorize — and everything downstream of "Claude runs" belongs to
  *  the setup session: the vault (fresh or cloned — a question worth ASKING, not two buttons),
  *  the wiring, the frequent tasks, the interview. That work needs judgment, and a session can
  *  ask a follow-up where a button can only guess.
@@ -41,7 +43,13 @@ export interface OnboardingStepSpec {
 export const ONBOARDING_STEPS: OnboardingStepSpec[] = [
   { id: 'prereqs', required: ['git', 'claude'], optional: ['node', 'psPolicy'] },
   { id: 'login', required: ['account'] },
-  { id: 'github', required: ['gh'] },
+  /* GitHub BEFORE the setup session, and SKIPPABLE (operator decision, 0.11.0 test). #51 moved it
+     last because, while it was a hard gate in front of setup, a Mac with no Homebrew stalled on it
+     and never reached "Set up my AIOS" — GitHub buys an off-machine backup, and nothing upstream
+     needs it (SETUP.md: "never a gate"). The operator's point stands too: connected first, the vault
+     is backed up from its first day, and Claude is already signed in to help if `gh` gets stuck.
+     "Skip for now" keeps #51's guarantee — this step can never block the conversation. */
+  { id: 'github', required: ['gh'], skippable: true },
   {
     id: 'firstrun',
     required: ['personalized'],
@@ -57,6 +65,8 @@ export interface OnboardingStepState<C extends OnboardingCheckLike = OnboardingC
   checks: C[];
   required: string[];
   optional: string[];
+  /** Passed with "Skip for now" rather than by its checks. */
+  skipped: boolean;
 }
 
 export interface OnboardingDerived<C extends OnboardingCheckLike = OnboardingCheckLike> {
@@ -67,14 +77,15 @@ export interface OnboardingDerived<C extends OnboardingCheckLike = OnboardingChe
 
 /** Derive the stepper from one battery of check results. Idempotent + honest:
  *  re-running never "re-does" anything — done is only what re-verifies as done. */
-export function deriveOnboarding<C extends OnboardingCheckLike>(checks: C[]): OnboardingDerived<C> {
+export function deriveOnboarding<C extends OnboardingCheckLike>(checks: C[], skipped: ReadonlySet<string> = new Set()): OnboardingDerived<C> {
   const by = new Map<string, C>(checks.map((c) => [c.id, c]));
   const steps: OnboardingStepState<C>[] = ONBOARDING_STEPS.map((s) => {
     const req = s.required.map((id) => by.get(id)).filter((c): c is C => !!c);
     const opt = (s.optional ?? []).map((id) => by.get(id)).filter((c): c is C => !!c);
     // A missing required check can never read as done — absent evidence ≠ pass.
-    const done = req.length === s.required.length && req.every((c) => c.status === 'pass');
-    return { id: s.id, done, state: 'locked', checks: [...req, ...opt], required: s.required, optional: s.optional ?? [] };
+    const passed = req.length === s.required.length && req.every((c) => c.status === 'pass');
+    const wasSkipped = !passed && !!s.skippable && skipped.has(s.id);
+    return { id: s.id, done: passed || wasSkipped, state: 'locked', checks: [...req, ...opt], required: s.required, optional: s.optional ?? [], skipped: wasSkipped };
   });
   let current = steps.findIndex((s) => !s.done);
   if (current < 0) current = steps.length;

@@ -284,7 +284,8 @@ test('the ceiling is WIDTH, not count — measured against the zone in front of 
      and setVisible were always N-general — and the two-cap was itself the reported bug, because
      the replace-at-capacity rule evicted panes by a policy that looked arbitrary with three tabs.
      A count cap is the wrong instrument in both directions: it wastes a 34" monitor and ruins a
-     laptop. So the gate is whether every pane stays usable at ~40 columns. */
+     laptop. So the gate is whether every pane stays usable: 320px in the editor zone, and in the
+     terminal zone 60 columns at the live cell width (minTermPanePx, #24). */
   assert.equal(fitsAnother(1, 1400), true, 'two panes fit a normal window');
   assert.equal(fitsAnother(2, 1400), true, 'and three fit a wide one');
   assert.equal(fitsAnother(2, 800), false, 'but not a narrow one — 3 x 320 does not fit 800');
@@ -349,7 +350,7 @@ test('a NEW pane never evicts a split — it joins if it fits, else takes the zo
   /* MEASURED. The ceiling is width — the same rule as fitsAnother() — so the answer differs
      between a laptop and a 34" monitor and cannot be a constant. */
   assert.match(body, /getBoundingClientRect\(\)\.width/, 'the zone must be measured, never assumed');
-  assert.match(body, /MIN_PANE_PX/, 'and compared against the narrowest usable pane');
+  assert.match(body, /minPaneFor\(z\)/, 'and compared against the narrowest usable pane (per zone; terminals by columns, #24)');
   assert.match(body, /SPLIT_GAP_PX/, 'with the gaps charged for');
 
   /* GATED ON `fresh`. applySplit() re-homes every pane on every layout change; a re-home that
@@ -422,4 +423,28 @@ test('the tab menu can always split — including on the tab you are looking at'
     'gating the split item on an unfocused tab is what made the menu look dead');
   assert.match(app, /const partner = id === active\[z\] \? nextTabAfter\(z, id\) : id;/,
     'the focused tab splits with its neighbour; any other tab splits with itself');
+});
+
+test('#24: a terminal pane\'s floor is measured in COLUMNS at the live font, and renderer and core agree', async () => {
+  const { MIN_TERM_COLS, PANE_CHROME_PX, minTermPanePx } = await import('../core/split');
+  assert.equal(minTermPanePx(undefined), MIN_PANE_PX, 'no live terminal to measure → the px floor');
+  assert.equal(minTermPanePx(2), MIN_PANE_PX, 'a tiny cell never lowers the floor below MIN_PANE_PX');
+  assert.equal(minTermPanePx(9.6), Math.ceil(60 * 9.6 + PANE_CHROME_PX), 'the operator\'s 60 columns at a 16px font');
+  assert.equal(minTermPanePx(9.6), Math.ceil(MIN_TERM_COLS * 9.6 + PANE_CHROME_PX), 'measured: 16px font → 9.6px cells');
+  assert.ok(minTermPanePx(10.8) > minTermPanePx(9.6), '⌘+ raises the floor, so a bigger font cannot make a split unreadable');
+  assert.equal(fitsAnother(1, 700, minTermPanePx(10.8)), false, 'two 18px-font terminals do not fit 700px');
+  assert.equal(fitsAnother(1, 700), true, 'where the old fixed floor would have split them');
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  assert.match(app, new RegExp(`const MIN_TERM_COLS = ${MIN_TERM_COLS};`));
+  assert.match(app, new RegExp(`const PANE_CHROME_PX = ${PANE_CHROME_PX};`));
+  assert.match(app, /return Math\.max\(MIN_PANE_PX, Math\.ceil\(MIN_TERM_COLS \* cell \+ PANE_CHROME_PX\)\);/);
+  assert.equal((app.match(/\/ nextCount >= minPaneFor\(z\);/g) || []).length, 2, 'both room checks use the per-zone floor');
+});
+
+test('review 16: the floor is measured from the font (no private xterm internals) and re-checked on resize and zoom', () => {
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  assert.doesNotMatch(app.replace(/\/\*[\s\S]*?\*\//g, ''), /_core/, 'no xterm private API');
+  assert.match(app, /ctx\.measureText\('0'\.repeat\(100\)\)\.width \/ 100/, 'cell width from the terminal font itself');
+  assert.match(app, /window\.addEventListener\('resize', \(\) => \{ clearTimeout\(floorTimer\); floorTimer = setTimeout\(enforceSplitFloor, 150\); \}\);/, 'window shrink');
+  assert.match(app, /enforceSplitFloor\(\);   \/\/ review 16: a bigger font raises the floor/, 'font zoom');
 });
