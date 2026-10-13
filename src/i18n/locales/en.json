@@ -1102,6 +1102,7 @@
   "restore.confirm": "Reopen",
   "restore.wasActive": "you were in this one",
   "restore.failed": "Could not resume {name} — open the tab again to retry.",
+  "restore.alreadyRunning": "“{name}” is already running in another terminal, so it was not opened a second time.",
   "restore.tabHint": "Not running yet — resumes when you open it",
   "restore.done": "Reopened {n} — each resumes when you open it",
   "restore.missing": "couldn't find: {names}",

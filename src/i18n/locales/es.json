@@ -1102,6 +1102,7 @@
   "restore.confirm": "Reabrir",
   "restore.wasActive": "estabas en esta",
   "restore.failed": "No se pudo reanudar {name} — abre la pestaña otra vez para reintentar.",
+  "restore.alreadyRunning": "“{name}” ya se está ejecutando en otra terminal, así que no se abrió por segunda vez.",
   "restore.tabHint": "Aún no está corriendo — se reanuda al abrirla",
   "restore.done": "Se reabrieron {n} — cada una se reanuda al abrirla",
   "restore.missing": "no se encontraron: {names}",

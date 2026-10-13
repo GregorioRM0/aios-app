@@ -626,3 +626,15 @@ test('operator decision: "with the lid closed" is asked ONCE, Yes preselected, t
   assert.match(app, /paintCaffeine\(st\);\s*void maybeAskLid\(st\);/, 'on the operator\'s own click');
   for (const loc of ['en', 'es', 'pt-br']) assert.ok(JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'))['caffeinate.lidAsk'], loc);
 });
+
+test('app#59: a restored tab never starts a second process on a session that is already live', () => {
+  const app = fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8');
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main', 'main.ts'), 'utf8');
+  const fn = /async function materializeRestore\(id\) \{[\s\S]*?\n\}/.exec(app)![0];
+  const resumeAt = fn.indexOf('--resume');
+  assert.ok(fn.indexOf('openHere') > -1 && fn.indexOf('openHere') < resumeAt, 'checks our own tabs BEFORE resuming');
+  assert.ok(fn.indexOf('sessionIsLive') > -1 && fn.indexOf('sessionIsLive') < resumeAt, 'and the live registry BEFORE resuming');
+  assert.match(fn, /if \(openHere\) \{ closePane\(id\); setActive\(openHere\[0\]\); return; \}/, 'already in a tab: go there');
+  assert.match(main, /return !!sid && aios\.listRunningAgents\(\)\.some\(\(a\) => a\.sessionId === sid\);/, 'main answers from the full registry, not the filtered panel list');
+  for (const loc of ['en', 'es', 'pt-br']) assert.match(JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'))['restore.alreadyRunning'], /\{name\}/);
+});

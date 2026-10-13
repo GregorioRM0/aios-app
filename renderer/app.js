@@ -4725,6 +4725,17 @@ async function materializeRestore(id) {
   const ph = panes.get(id);
   if (!ph || ph.kind !== 'restore' || ph.materializing) return;
   ph.materializing = true;
+  /* app#59 — never start a second process on a transcript that is already live (a bus `resume`
+     may have reopened it first, or another terminal holds it). Two processes on one transcript fork
+     the conversation and make the name ambiguous to the bus. Already in one of our tabs → go there;
+     running elsewhere → say so, and drop the placeholder instead of duplicating it. */
+  const openHere = [...panes.entries()].find(([pid, q]) => pid !== id && q.kind === 'term' && !q.exited && q.sessionId === ph.sessionId);
+  if (openHere) { closePane(id); setActive(openHere[0]); return; }
+  if (await window.glassShell.sessionIsLive(ph.sessionId).catch(() => false)) {
+    closePane(id);
+    toast(t('restore.alreadyRunning', { name: ph.name }));
+    return;
+  }
   const cmd = `${CLAUDE} --resume ${shq(ph.sessionId)}`;
   const newId = await createPane({ name: ph.name, cmd, cwd: ph.cwd || undefined });
   if (newId == null) {

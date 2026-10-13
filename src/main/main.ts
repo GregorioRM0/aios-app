@@ -753,6 +753,12 @@ ipcMain.handle('session:copyLastAnswer', (_e, sessionId: string) => {
   } catch { /* unreadable */ }
   return 0;
 });
+/* app#59 — is this session id already running (any surface, any terminal)? Asked by tab restore
+   before it starts `claude --resume <id>`, so one transcript never gets two live processes. */
+ipcMain.handle('session:isLive', (_e, sessionId: string) => {
+  const sid = String(sessionId || '');
+  return !!sid && aios.listRunningAgents().some((a) => a.sessionId === sid);
+});
 ipcMain.on('panes:sessions', (_e, ids: unknown) => aios.setPaneSessionIds(ids));   // AI-203
 ipcMain.on('pty:programStatus', (_e, m: { sessionId?: string; data?: string; at?: number }) => {
   host?.setProgramStatus(String(m?.sessionId ?? ''), String(m?.data ?? ''), Number(m?.at) || Date.now());

@@ -1102,6 +1102,7 @@
   "restore.confirm": "Reabrir",
   "restore.wasActive": "você estava nesta",
   "restore.failed": "Não foi possível retomar {name} — abra a aba de novo para tentar outra vez.",
+  "restore.alreadyRunning": "“{name}” já está em execução em outro terminal, então não foi aberto uma segunda vez.",
   "restore.tabHint": "Ainda não está rodando — retoma quando você abrir",
   "restore.done": "{n} reabertas — cada uma retoma quando você abrir",
   "restore.missing": "não encontradas: {names}",

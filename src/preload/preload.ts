@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('glassShell', {
   paneSessions: (ids: string[]) => ipcRenderer.send('panes:sessions', ids),
   speakable: (sessionId: string): Promise<{ text: string; lang: string }> => ipcRenderer.invoke('session:speakable', sessionId),
   copyLastAnswer: (sessionId: string): Promise<number> => ipcRenderer.invoke('session:copyLastAnswer', sessionId),
+  sessionIsLive: (sessionId: string): Promise<boolean> => ipcRenderer.invoke('session:isLive', sessionId),
   ptyResize: (id: number, cols: number, rows: number) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   ptyKill: (id: number) => ipcRenderer.send('pty:kill', { id }),
   onPtyData: (cb: (m: { id: number; data: string }) => void) => ipcRenderer.on('pty:data', (_e, m) => cb(m)),
