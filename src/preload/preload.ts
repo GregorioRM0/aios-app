@@ -103,6 +103,7 @@ contextBridge.exposeInMainWorld('glassShell', {
     supportOnly: boolean; report: string;
   }> => ipcRenderer.invoke('doctor:triage'),
   doctorHealth: (): Promise<{ id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[]> => ipcRenderer.invoke('doctor:health'),
+  routineHealth: (): Promise<Array<{ name: string; status: string; state?: string; detail?: string; writtenAt?: number; validUntil?: number; why?: string }>> => ipcRenderer.invoke('health:routines'),
   // Connectors card: list / connect / disconnect / add one the framework does not bundle
   connectorsList: (): Promise<{ rows: ConnRow[]; foreign: { id: string }[]; other: { id: string; custom: boolean; tracked: boolean }[] }> => ipcRenderer.invoke('connectors:list'),
   connectorsConnect: (id: string, answers?: Record<string, string>): Promise<ConnResult> => ipcRenderer.invoke('connectors:connect', id, answers),
@@ -120,8 +121,10 @@ contextBridge.exposeInMainWorld('glassShell', {
   starterApply: (id: string): Promise<{ id: string; tasks: number; agents: string[] } | null> => ipcRenderer.invoke('starter:apply', id),
   // Agent/Skill Designer: compose file + registry entry for live preview + save
   designerCatalog: (kind: string): Promise<{ name: string; description: string; group: string; path: string; custom: boolean }[]> => ipcRenderer.invoke('designer:catalog', kind),
-  taskHandoff: (prompt: string, name?: string): Promise<string> => ipcRenderer.invoke('task:handoff', { prompt, name }),
-  designerHandoff: (req: { kind: string; fields: { name: string; description: string; keywords?: string; tier?: string; body: string }; mode: string; targetPath?: string }): Promise<{ file: string; prompt: string } | null> => ipcRenderer.invoke('designer:handoff', req),
+  taskHandoff: (prompt: string, name?: string): Promise<string | { error: string }> => ipcRenderer.invoke('task:handoff', { prompt, name }),
+  askName: (intent: string, panes?: string[]): Promise<string> => ipcRenderer.invoke('ask:name', intent, panes),
+  askUnique: (name: string, panes?: string[]): Promise<string> => ipcRenderer.invoke('ask:unique', name, panes),
+  designerHandoff: (req: { kind: string; fields: { name: string; description: string; keywords?: string; tier?: string; body: string }; mode: string; targetPath?: string }): Promise<{ file: string; prompt: string } | { error: string } | null> => ipcRenderer.invoke('designer:handoff', req),
   designerRead: (relPath: string): Promise<{ description: string; body: string } | null> => ipcRenderer.invoke('designer:read', relPath),
   designerBrief: (req: { kind: string; fields: { name: string; description: string; keywords?: string; tier?: string; body: string }; mode: string; templatePath?: string; targetPath?: string }): Promise<string> => ipcRenderer.invoke('designer:brief', req),
   shellConfig: (): Promise<{ claudeCmd: string; showHints: boolean; showNudges: boolean }> => ipcRenderer.invoke('shell:config'),

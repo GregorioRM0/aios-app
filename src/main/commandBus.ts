@@ -12,7 +12,7 @@ import { needsConsultBlock, ADVISOR_CONSULT_BLOCK } from '../core/advisor';
 import { normalizeVerb } from '../core/busVerbs';
 import { ResumeIndex } from './resumeIndex';
 import { supersededName, supersededBody, SUPERSEDED_SUFFIX, SUPERSEDED_KEEP_MS } from '../core/supersede';
-import { resolveSessionName, sessionKey } from '../core/nameMatch';
+import { resolveSessionName, resolveFormerName, sessionKey } from '../core/nameMatch';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
@@ -25,6 +25,7 @@ import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presen
 import { MY_SURFACE } from './surface';
 import { needsPointer, pointerText, byteLength, isStalePayload, INLINE_LIMIT } from '../core/busPayload';
 import { pickBash } from '../core/bashResolve';
+import { runDir, writePrivateFile } from './privateRun';
 
 /**
  * Spawn-inbox command bus (main side) — CONTRACT 2.
@@ -80,6 +81,8 @@ function busLogAppend(msg: string): void {
   } catch { /* a trail is a nice-to-have; delivery is not */ }
 }
 const log = (msg: string): void => { console.log(`[command-bus] ${msg}`); busLogAppend(msg); };
+/** The same trail, for other main-process modules: the one log an operator already knows to send. */
+export const appLog = (tag: string, msg: string): void => { console.log(`[${tag}] ${msg}`); busLogAppend(`${tag}: ${msg}`); };
 
 /*
  * These timings are CONTRACT, not tuning — they must match the Glass extension's, because
@@ -791,8 +794,15 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
        on win32: the command becomes `claude --name X 'Read <file>…'` (no apostrophes to mangle)
        and the worker reads the task verbatim. On POSIX, only long/multiline tasks spill, as before. */
     if (needsTaskFile(req.task) || (process.platform === 'win32' && req.task)) {
-      taskFile = path.join(os.tmpdir(), `aios-spawn-task-${req.name}.md`);
-      try { fs.writeFileSync(taskFile, req.task as string); } catch { taskFile = undefined; }
+      /* A PRIVATE file (privateRun: ~/.aios/run, never the shared /tmp), and a failed write is a
+         dead letter. Falling back to typing the task inline brought back the Windows apostrophe
+         mangling and flooded the terminal with a long POSIX task — Glass already refused here
+         (AI-66); the App now does the same. */
+      try { taskFile = writePrivateFile(runDir(), `aios-spawn-task-${req.name}.md`, req.task as string); }
+      catch (e) {
+        markUndelivered(heldPath, req, `could not write the task file safely (${(e as Error).message}) — not spawned; the task is never typed inline instead`);
+        return;
+      }
     }
     // No task → a bootstrap prompt, so the worker runs its Session Start Ritual on turn
     // one instead of sitting idle (mirrors the `spawn` wrapper).
@@ -834,8 +844,11 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
       /* Same Windows quoting rule as spawn: PowerShell mangles POSIX-quoted apostrophes, so
          every prompt goes through a file there. */
       if (needsTaskFile(req.prompt) || (process.platform === 'win32' && req.prompt)) {
-        taskFile = path.join(os.tmpdir(), `aios-resume-task-${req.name}.md`);
-        try { fs.writeFileSync(taskFile, req.prompt as string); } catch { taskFile = undefined; }
+        try { taskFile = writePrivateFile(runDir(), `aios-resume-task-${req.name}.md`, req.prompt as string); }
+        catch (e) {
+          markUndelivered(heldPath, req, `could not write the prompt file safely (${(e as Error).message}) — not resumed; the prompt is never typed inline instead`);
+          return;
+        }
       }
       const c4 = contract4Args(req);
       if ('error' in c4) { markUndelivered(heldPath, req, c4.error); return; }
@@ -884,10 +897,15 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
     if (req.action === 'kill') {
       // Registry pid → SIGTERM reaches resumed/external sessions too; closeByName also
       // tears down the app pane if this session owns one.
-      const t = targetByName(req.name);
+      /* app#65: a session renamed after it started is still reachable by the name it had — the
+         kill used to log "no live pid" and leave it running. Current names always win. */
+      let t = targetByName(req.name);
+      const renamed = t ? undefined : resolveFormerName(req.name, aios.listRunningAgents());
+      if (!t && renamed) t = targetByName(renamed);
       if (t) { try { process.kill(t.pid, 'SIGTERM'); } catch { /* already gone */ } }
-      emit(win(), 'closeByName', { name: req.name });
-      log(`kill '${req.name}'${t ? ` (pid ${t.pid})` : ' (no live pid; pane close only)'}`);
+      emit(win(), 'closeByName', { name: t ? t.name : req.name });
+      log(`kill '${req.name}'${t ? `${renamed ? ` → renamed '${t.name}'` : ''} (pid ${t.pid})`
+        : ' — no live session has that name or was renamed from it; closed any pane of that name'}`);
     } else if (req.action === 'resume') {
       /* ALREADY AWAKE → reveal and deliver, never reopen. The caller asked for a specific
          someone; that someone is already running, so resuming would create a SECOND process for
@@ -1058,13 +1076,15 @@ function surfaceDeadLetters(getWin: () => BrowserWindow | undefined): void {
     } catch { /* unreadable — still worth reporting that it exists */ }
     return { file: f, to, reason, at };
   });
-  for (const it of items) log(`DEAD LETTER — a message to '${it.to}' was never delivered: ${it.reason} (${it.file})`);
-  /* Notify ONCE per dead letter, not every sweep. Repeating an alert the operator has already
-     read trains them to dismiss it unseen, which is how the next one gets missed — the very
-     failure this exists to prevent. The log still records every sweep; only the interruption
-     is deduplicated. */
+  /* ONCE per dead letter — the notification AND the log line. Repeating an alert the operator has
+     already read trains them to dismiss it unseen, which is how the next one gets missed. The log
+     line repeated too, every sweep, and app#65 found one message written to the log thirty times
+     over 2.5 hours: noise that buried the line that mattered. The file on disk stays the record. */
   const fresh = items.filter((it) => !announcedDeadLetters.has(it.file));
-  for (const it of fresh) announcedDeadLetters.add(it.file);
+  for (const it of fresh) {
+    announcedDeadLetters.add(it.file);
+    log(`DEAD LETTER — a message to '${it.to}' was never delivered: ${it.reason} (${it.file})`);
+  }
   if (fresh.length) emit(getWin(), 'deadLetters', { items: fresh });
 }
 

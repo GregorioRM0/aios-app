@@ -393,6 +393,14 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 .modal input { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--ink); border: 1px solid var(--line);
                border-radius: 9px; padding: 11px 13px; font-size: 14px; font-family: var(--font); outline: none; transition: border-color .15s; }
 .modal input:focus { border-color: var(--accent); }
+/* app#66 — the session-name row under the Ask field: smaller, monospace, so it reads as a handle */
+.mname { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.mnamelbl { color: var(--subtle); font-size: 11.5px; white-space: nowrap; }
+/* the italic hint under the Ask fields — pointing a recurring job to Frequent Tasks */
+.maskhint { margin-top: 10px; color: var(--subtle); font-size: 11.5px; font-style: italic; }
+.maskhintlink { background: none; border: 0; padding: 0; font: inherit; color: var(--accent-ink); cursor: pointer; }
+.maskhintlink:hover { text-decoration: underline; }
+.modal .mnamein { padding: 6px 10px; font-size: 12.5px; font-family: var(--mono, ui-monospace, Menlo, monospace); }
 .mhint { color: var(--subtle); font-size: 11px; margin-top: 9px; }
 
 /* ── layout menu + toasts ── */
@@ -820,6 +828,9 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
    the dot derives from the status tokens via --sc (.st-ok / .st-warn). */
 .phrow { display: flex; align-items: center; gap: 8px; overflow: hidden; padding: 4px 6px; border-radius: 7px; font-size: 12px; color: var(--ink); }
 .phrow:hover { background: var(--surface-2); }
+.phhelp { margin: 10px 6px 2px; align-self: flex-start; background: var(--surface-2); color: var(--accent-ink); border: 1px solid var(--line);
+  border-radius: 7px; padding: 5px 10px; font: inherit; font-size: 11.5px; cursor: pointer; }
+.phhelp:hover { border-color: var(--accent); }
 .phdot { --sc: var(--st-ok); width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--sc);
          box-shadow: 0 0 6px color-mix(in srgb, var(--sc) 40%, transparent); }
 /* Shrinkable, or a long service name pushes the fix button past the card edge. It was
@@ -827,7 +838,14 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
    label comes from a manifest someone else writes — "Atlassian (Jira & Confluence)" clipped the
    DISCONNECT button in half. min-width:0 is the load-bearing half: without it a flex item refuses
    to shrink below its content and ellipsis never engages. */
-.phlab { flex: 0 1 auto; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The NAME yields last (operator, 0.12.0: "V…", "Clau…"): it still CAN shrink — a name that cannot
+   pushed Disconnect off the Connectors card — but at a fifth of the detail's rate, so the detail
+   ellipsizes first and a name survives unless it is very long. */
+.phlab { flex: 0 0.2 auto; min-width: 0; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* In the HEALTH card a name never yields: the names are our own short labels (or job names,
+   capped), and the detail is hover-only anyway. Scoped here so the Connectors card keeps a
+   shrinkable name for long service labels. */
+#pHealth .phrow .phlab { flex-shrink: 0; max-width: 65%; }
 
 /* State colour must beat .phdot's own default.
    `.st-warn` and `.phdot` are BOTH one class (0,1,0) and .phdot is declared ~630 lines later, so
@@ -853,6 +871,10 @@ body.dragging #panes.dropok::after, body.dragging #tpanes.dropok::after {
          font-family: var(--mono); line-height: 1.35; overflow-wrap: anywhere; }
 .phmsg { flex: 1 1 auto; min-width: 0; color: var(--subtle); font-size: 10px; font-family: var(--mono);
          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+/* Every Health row's detail only on hover, whatever its colour (operator, 0.12.0): the colour and
+   "Let Claude help" are what an operator acts on; the detail is extra. Opacity, so nothing moves. */
+#pHealth .phrow .phmsg { opacity: 0; transition: opacity .12s; }
+#pHealth .phrow:hover .phmsg, #pHealth .phrow:focus-within .phmsg { opacity: 1; }
 .phfix { flex: 0 0 auto; background: transparent; border: 1px solid var(--line); color: var(--subtle); cursor: pointer;
          border-radius: 6px; font-size: 9.5px; padding: 2px 8px; font-family: var(--font); letter-spacing: .05em;
          text-transform: uppercase; }
@@ -988,6 +1010,12 @@ body.no-hints .xsectsub { display: none; }
 /* ═══ movable pulse cards — ↑↓ on hover (⌥↑↓ from the keyboard) ═══ */
 .pmove { margin-left: auto; display: inline-flex; gap: 1px; opacity: 0; transition: opacity .12s; }
 .ptitle:hover .pmove, .ptitle:focus .pmove { opacity: 1; }
+/* #60 — reorder arrows, left of the status dot, on hover only (no space at rest, like #23's actions) */
+.prow2 .rowmove { display: none; flex-direction: column; gap: 0; margin: -2px -2px -2px -2px; }
+.prow2:hover .rowmove, .prow2:focus-within .rowmove { display: inline-flex; }
+.prow2 .rowmove button { background: transparent; border: 0; color: var(--subtle); cursor: pointer; font-size: 9px;
+  line-height: 1; padding: 1px 4px; border-radius: 3px; }
+.prow2 .rowmove button:hover { color: var(--accent-ink); background: var(--surface); }
 .pmove button { background: transparent; border: 0; color: var(--subtle); cursor: pointer; font-size: 11px;
                 line-height: 1; padding: 1px 3px; border-radius: 4px; font-family: var(--font); }
 .pmove button:hover { color: var(--accent-ink); background: var(--surface-2); }

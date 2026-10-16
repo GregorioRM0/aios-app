@@ -1032,11 +1032,8 @@ function renderActionCards(m) {
 }
 
 async function onIntentAsk() {
-  const intent = await askWithChips();
-  if (!intent) return;
-  const slugged = ('ask-' + intent.toLowerCase().replace(/[^a-z0-9]+/g, '-')).slice(0, 28).replace(/-+$/, '');
-  const prompt = `Find the right AIOS action for this intent and run it: "${intent}". Search my agents, /aios: commands, skills, and frequent tasks; pick the best match, tell me in one line which you chose and why, then execute it.`;
-  await createPane({ name: slugged, cmd: `${CLAUDE} --name ${slugged} ${shq(prompt)}` });
+  const ask = await askWithChips();
+  if (ask) await launchAsk(ask);
 }
 
 async function openFrameworkDoc(file) {
@@ -1071,9 +1068,15 @@ async function refreshHealth() {
     mv.prepend(re);
   }
   H.appendChild(title);
+  /* ONE RULE FOR EVERY ROW, WHATEVER ITS COLOUR (operator, 0.12.0): a dot and the full name; the
+     detail appears on hover, full text in the tooltip. Operators are mostly non-technical — the
+     colour tells them something needs attention and "Let Claude help" is what they act on; a
+     message like "run skills/setup.sh" is extra information for whoever wants it. Names had been
+     crushed to "V…" and "Clau…" to make room for that detail. */
   for (const c of rows) {
+    const ok = c.status === 'pass';
     const r = el('div', 'phrow');
-    r.appendChild(el('span', 'phdot ' + (c.status === 'pass' ? 'st-ok' : 'st-warn')));
+    r.appendChild(el('span', 'phdot ' + (ok ? 'st-ok' : 'st-warn')));
     r.appendChild(el('span', 'phlab', c.label));
     const msg = el('span', 'phmsg', c.message);
     msg.title = c.message + (c.repairHint ? '\n→ ' + c.repairHint : '');
@@ -1082,8 +1085,78 @@ async function refreshHealth() {
     feedMark(r, 'health', c.id + '|' + c.status);
     H.appendChild(r);
   }
-  H.style.display = rows.length ? '' : 'none';
+  /* #27 — SCHEDULED JOBS, from canonical's status files (~/.aios/health, hooks/aios-health.py).
+     Shown only when a job has written one; a machine with no scheduled jobs sees nothing new. A
+     job past its deadline reads "no result since …" — never "didn't run": it may have run and
+     failed to write. No notification: the card is where you look, the rituals already speak up. */
+  let jobs = [];
+  try { jobs = await window.glassShell.routineHealth(); } catch { jobs = []; }
+  if (jobs.length) {
+    /* No group heading (operator, 0.12.0): the two-line rows already read as a different kind, and
+       "scheduled jobs" is our word, not theirs. What a row IS lives in the name's tooltip. */
+    for (const j of jobs) {
+      const r = el('div', 'phrow');   // same rule as the checks above
+      const dot = j.status === 'ok' ? 'st-ok' : j.status === 'waiting' ? 'st-mute' : j.status === 'fail' ? 'st-error' : 'st-warn';
+      r.appendChild(el('span', 'phdot ' + dot));
+      const lab = el('span', 'phlab', j.name); lab.title = t('health.jobTip'); r.appendChild(lab);
+      const msg = el('span', 'phmsg', routineHealthText(j));
+      msg.title = [routineHealthText(j), j.detail].filter(Boolean).join('\n');
+      r.appendChild(msg);
+      feedMark(r, 'health', 'job:' + j.name + '|' + j.status);
+      H.appendChild(r);
+    }
+  }
+  /* "OK, BUT THEN?" — a red or amber dot with no next step (operator test, 0.12.0). One button for
+     the whole card, shown only when something is not green: it opens a helper session whose brief
+     carries the ACTUAL findings, and which asks before every command (`default` mode, the
+     github-help pattern). One session, not one per row: problems are often related. */
+  const notGreen = rows.filter((c) => c.status !== 'pass');
+  const badJobs = jobs.filter((j) => j.status !== 'ok' && j.status !== 'waiting');
+  if (notGreen.length || badJobs.length) {
+    const help = el('button', 'phhelp', t('health.askClaude'));
+    help.type = 'button';
+    help.title = t('health.askClaudeHint');
+    help.addEventListener('click', () => void openHealthHelp(notGreen, badJobs));
+    H.appendChild(help);
+  }
+  H.style.display = rows.length || jobs.length ? '' : 'none';
   feedPrime('health');
+}
+
+/** The health helper: a brief built from what is actually wrong, delivered through the private
+ *  handoff file (never typed), run in `default` mode so it asks before every command. */
+async function openHealthHelp(notGreen, badJobs) {
+  const lines = [
+    ...notGreen.map((c) => `- ${c.label}: ${c.message}${c.repairHint ? ` (the App suggests: ${c.repairHint})` : ''}`),
+    // the status line already carries the detail for warn/fail; an overdue job's last detail is added once
+    ...badJobs.map((j) => `- scheduled job "${j.name}": ${routineHealthText(j)}${j.detail && j.status === 'overdue' ? ` — last detail: ${j.detail}` : ''} (status file: ~/.aios/health/${j.name}.json)`),
+  ];
+  const brief = 'Help me fix my AIOS health. These items in the AIOS App\'s Health card are not green:\n'
+    + lines.join('\n') + '\n\n'
+    + 'For each one: find the cause, explain it in plain words, and propose the fix. Ask me before you run any command or change anything. '
+    + 'Scheduled jobs write their status with hooks/aios-health.py at the end of each run; a job is fixed when its NEXT run writes a fresh "ok", so tell me how to trigger it or when it is due — never edit or delete a status file to make it look green. '
+    + 'When you are done, tell me to press ↻ on the Health card to re-check.';
+  const handed = await window.glassShell.taskHandoff(brief, 'health-help').catch((e) => ({ error: String(e && e.message || e) }));
+  if (handed && typeof handed === 'object') { toast(t('handoff.failed', { why: handed.error })); return; }
+  spawnNamed('health-help', handed, undefined, 'default');
+}
+
+/** One line for a scheduled job, in the operator's language (canonical's wording, aios-health.py line()). */
+function routineHealthText(j) {
+  const loc = (window.i18n && window.i18n.getLocale && window.i18n.getLocale()) || 'en';
+  const tag = loc === 'es' ? 'es-MX' : loc === 'pt-br' ? 'pt-BR' : 'en-US';
+  const when = (ms) => (ms ? new Date(ms).toLocaleString(tag, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '?');
+  const detail = j.detail ? ': ' + j.detail : '';
+  switch (j.status) {
+    case 'ok': return t('health.job.ok', { time: when(j.writtenAt) });
+    case 'waiting': return t('health.job.waiting', { time: when(j.validUntil) });
+    case 'warn': return t('health.job.warn', { detail, time: when(j.writtenAt) });
+    case 'fail': return t('health.job.fail', { detail, time: when(j.writtenAt) });
+    case 'overdue':
+      if (j.state === 'pending') return t('health.job.neverRan', { time: when(j.validUntil) });
+      return t('health.job.overdue', { time: when(j.writtenAt) }) + (j.state && j.state !== 'ok' ? ' ' + t('health.job.lastResult', { state: j.state }) : '');
+    default: return t('health.job.unreadable', { why: j.why || '' });
+  }
 }
 
 function healthFixButton(c) {
@@ -1771,7 +1844,9 @@ function renderPulseRunning(m) {
     /* Keyed by IDENTITY. `FEED.seen` returns early for a key it has already marked, so two rows
      sharing a name meant the SECOND one silently skipped its entry animation — the last thing
      in the session display still keyed on a label instead of on what the session is. */
-  for (const a of sessions) { const r = sessionRow(a); feedMark(r, 'sess', a.key || a.name); box.appendChild(r); }
+  /* #60: in TAB order, so moving a row and dragging a tab are the same act seen from two places. */
+  const inTabOrder = sessions.map((a, i) => ({ a, i, k: sessionTabPos(a) })).sort((x, y) => x.k - y.k || x.i - y.i).map((x) => x.a);
+  for (const a of inTabOrder) { const r = sessionRow(a); feedMark(r, 'sess', a.key || a.name); box.appendChild(r); }
     if (!sessions.length) box.appendChild(el('div', 'psubempty', t('pulse.noSessions')));
     /* Review 13: AI-203's scope can be wrong, and a wrong HIDE is invisible unless it is counted.
        So the panel says how many it hid and can show them — plain rows, never notifying. */
@@ -2062,10 +2137,25 @@ function sessionRow(a) {
   const r = el('div', 'prow2'); r.tabIndex = 0;
   const s = statusInfo(a.status);
   const dot = el('span', 'pdot ' + s.cls); dot.title = s.title;
-  r.appendChild(dot);
-  r.appendChild(el('span', 'rname', a.name));
   const stt = theater.get(a.key || a.name) || { busySince: 0, lastDur: 0 };
   const ownPane = (() => { const hit = byName(a.name, a.id); return hit && !panes.get(hit[0]).exited ? { id: hit[0], p: panes.get(hit[0]) } : null; })();
+  /* #60 — reorder from the panel. The ↑/↓ sit LEFT of the status dot and show on hover (the
+     operator's placement): they are about the row's position, so they live at its edge, apart
+     from the actions about the session. Only a session with a tab here can move — an external
+     one has no tab to put anywhere. The panel lists sessions in tab order, so the two cannot
+     disagree: one order (tabOrder), shown twice. */
+  r.dataset.sid = a.key || a.name;
+  if (ownPane) {
+    const mv = el('span', 'rowmove');
+    const up = el('button', '', '▲'); up.title = t('pulse.moveUp');
+    const dn = el('button', '', '▼'); dn.title = t('pulse.moveDown');
+    up.addEventListener('click', (e) => { e.stopPropagation(); moveSessionTab(ownPane.id, -1, r.dataset.sid); });
+    dn.addEventListener('click', (e) => { e.stopPropagation(); moveSessionTab(ownPane.id, 1, r.dataset.sid); });
+    mv.append(up, dn);
+    r.appendChild(mv);
+  }
+  r.appendChild(dot);
+  r.appendChild(el('span', 'rname', a.name));
   if (s.cls === 'busy') {
     // live-run theater: shimmer verb + honest elapsed; pty ticker when we own the stream
     const pst = el('span', 'pst');
@@ -2147,8 +2237,39 @@ function sessionRow(a) {
   actBtn('trash', t('session.kill'), 'kill', () => void endSession({ name: a.name, pid: a.pid, sessionId: a.id }));
   r.appendChild(acts);
   r.addEventListener('click', open);
-  r.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
+  r.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') open();
+    else if (ownPane && e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault();
+      moveSessionTab(ownPane.id, e.key === 'ArrowUp' ? -1 : 1, r.dataset.sid);
+    }
+  });
   return r;
+}
+/** #60 — where a session's pane sits in the strips (editor zone first), for the panel's order. */
+function sessionTabPos(a) {
+  const hit = byName(a.name, a.id);
+  if (!hit || panes.get(hit[0]).exited) return 1e12;   // no pane here: after every tab, in registry order
+  const z = zoneOf(panes.get(hit[0]));
+  return (z === 'main' ? 0 : 1e6) + tabOrder[z].indexOf(hit[0]);
+}
+/** #60 — move a session's tab one step among the SESSION tabs of its strip (plain terminals and
+ *  files keep their places relative to each other), then repaint the panel and keep focus. */
+function moveSessionTab(paneId, dir, sid) {
+  const p = panes.get(paneId);
+  if (!p) return;
+  const z = zoneOf(p);
+  const live = (pulse.lastRunning && pulse.lastRunning.running) || [];
+  /* name-ok: a set-membership test ("is this pane a live session at all?") that only decides which
+     tabs count as session tabs; it never picks one session, so duplicate names cannot mislead it. */
+  const isSession = (id) => { const q = panes.get(id); return !!q && !q.exited && live.some((a) => (a.id && q.sessionId === a.id) || a.name === q.name); };
+  const order = tabOrder[z].filter(isSession);
+  const i = order.indexOf(paneId);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= order.length) return;
+  moveTab(z, paneId, order[j], dir > 0);   // repaints the panel too
+  const row = [...document.querySelectorAll('#pRun .prow2')].find((x) => x.dataset.sid === sid);
+  if (row) row.focus();
 }
 function terminalRow(tid, p) {
   const r = el('div', 'prow2'); r.tabIndex = 0;
@@ -2802,6 +2923,9 @@ function moveTab(z, dragId, overId, after) {
      a condition that silently stops being true the day the caller changes. */
   setVisible(z);
   saveLayout();
+  /* #60: the panel lists sessions in tab order — repaint it now, so a dragged tab and the row move
+     together instead of on the next poll. Guarded: a move can come before the panel exists. */
+  if (document.getElementById('pRun')) { try { renderPulseRunning(); } catch { /* panel not ready */ } }
 }
 
 /* AI-69 — A TERMINAL COMING BACK INTO VIEW MUST BE REPAINTED, and fit() cannot do it.
@@ -3554,7 +3678,7 @@ const needsSetup = (cmd) => {
   /* The remedies are exempt, or the operator could never climb out. Three of them:
      /login and /logout fix the account; the aios-setup session IS the setup; and the
      cold-start interview is what writes the declared context the gate asks for. */
-  return !/\/(login|logout)\b/.test(c) && !/--name\s+(aios-setup|github-help)\b/.test(c) && !/cold-start-interview/.test(c);
+  return !/\/(login|logout)\b/.test(c) && !/--name\s+(aios-setup|github-help|health-help)\b/.test(c) && !/cold-start-interview/.test(c);
 };
 
 /* One gate for every runnable action. Before this, a missing prerequisite surfaced as
@@ -4605,13 +4729,17 @@ async function batchResume() {
      as you type: the opening view is "most recent", typing reaches the rest.
      Unnamed sessions are excluded on purpose — see the note in main.ts — and the hint below says
      how many, so their absence is stated rather than discovered. */
+  /* AI-209: a session is found by ANY name it had — "boston" reaches `fortress-companion`, which
+     was born `boston-companion` — and the row says so, plus how big it is (a 600 MB transcript is
+     a slow resume, worth knowing before ticking it). */
+  const mb = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? Math.round(n / 1e6) + ' MB' : Math.max(1, Math.round((n || 0) / 1e3)) + ' KB');
   const items = data.items.map((r) => ({
     label: r.name,
-    desc: agoLabel(r.at) + (r.proj ? ' · ' + r.proj : ''),
+    desc: [agoLabel(r.at), r.proj, r.size ? mb(r.size) : '', (r.was && r.was.length) ? t('resume.was', { names: r.was.join(', ') }) : ''].filter(Boolean).join(' · '),
     icon: 'term',
     value: { kind: 'sess', r },
     picked: false,          // NEVER pre-ticked — each tick spawns a process
-    hay: [r.name, r.proj, r.id].filter(Boolean).join(' '),   // an id can still be pasted in
+    hay: [r.name, ...(r.was || []), r.proj, r.id].filter(Boolean).join(' '),   // an id can still be pasted in
   }));
   const chosen = await checkModal(t('resume.title'), items, {
     hint: t('resume.sub3', { named: data.named, unnamed: data.unnamed }),
@@ -6365,14 +6493,8 @@ window.glassShell.onIntent(async (m) => {
       return;
     }
     case 'ask': {
-      const intent = await askWithChips();
-      if (intent) {
-        const slugged = ('ask-' + intent.toLowerCase().replace(/[^a-z0-9]+/g, '-')).slice(0, 28).replace(/-+$/, '');
-        const prompt = `Find the right AIOS action for this intent and run it: "${intent}". Search my agents, /aios: commands, skills, and frequent tasks; pick the best match, tell me in one line which you chose and why, then execute it.`;
-        // long prompts travel as a temp file, never typed into the pty (see task:handoff)
-        const handed = await window.glassShell.taskHandoff(prompt, slugged).catch(() => prompt);
-        await createPane({ name: slugged, cmd: `${CLAUDE} --name ${slugged} ${shq(handed)}` });
-      }
+      const ask = await askWithChips();
+      if (ask) await launchAsk(ask);
       return;
     }
     case 'openFile':
@@ -6568,7 +6690,7 @@ function openWhatsNewTab() {
        gets the cup — the same glyphs sitting in the title bar — so reading the note teaches the
        operator what to look for afterwards. An arbitrary decorative icon here would be a missed
        chance to connect the words to the surface. */
-    for (const [n, glyph] of [[1, 'layout'], [2, 'coffee'], [3, 'check']]) {
+    for (const [n, glyph] of [[1, 'assistant'], [2, 'panel'], [3, 'bolt']]) {
       const c = el('div', 'wncard');
       const ic = el('div', 'wnicon'); ic.innerHTML = icon(glyph, 22);
       c.append(ic, el('div', 'wntitle', t('whatsnew.h' + n)), el('div', 'wnbody', t('whatsnew.b' + n)));
@@ -6613,7 +6735,7 @@ function openWhatsNewTab() {
    cannot tell you whether a 0.9.10 exists). Add the new version here at each cut; a test fails
    if package.json names a version that is missing. */
 const RELEASES = ['0.6.0', '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4', '0.8.5', '0.8.6', '0.8.7',
-  '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.9.4', '0.9.5', '0.9.6', '0.9.7', '0.9.8', '0.9.9', '0.10.0', '0.10.1', '0.11.0', '0.11.1'];
+  '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.9.4', '0.9.5', '0.9.6', '0.9.7', '0.9.8', '0.9.9', '0.10.0', '0.10.1', '0.11.0', '0.11.1', '0.12.0'];
 let whatsNewFrom = null;
 /** Releases strictly between the one they had and the one they now run. [] when none, or unknown. */
 function skippedReleases(from, to) {
@@ -8238,6 +8360,7 @@ function checkModal(title, items, { placeholder, hint, confirmLabel, allowEmpty,
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
     wrap.className = 'modal-wrap';
+    claimModal(wrap, () => done(null));
     wrap.innerHTML = `<div class="modal"><div class="mtitle"></div><div class="msub"></div>
       <input id="checkInput" /><div class="plist"></div>
       <div class="mfoot"><span class="mhint"></span><button class="vbtn primary mgo"></button></div></div>`;
@@ -8386,6 +8509,7 @@ function confirmModal(title, message, confirmLabel) {
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
     wrap.className = 'modal-wrap';
+    claimModal(wrap, () => done(false));
     wrap.innerHTML = `<div class="modal confirm"><div class="mtitle"></div>
       <div class="mbody"></div>
       <div class="macts"><button class="vbtn cancel"></button><button class="vbtn danger"></button></div></div>`;
@@ -8413,6 +8537,7 @@ function listModal(title, items, placeholder) {
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
     wrap.className = 'modal-wrap';
+    claimModal(wrap, () => done(null));
     wrap.innerHTML = `<div class="modal"><div class="mtitle"></div>
       <input id="pickInput" /><div class="plist"></div>
       <div class="mhint"></div></div>`;
@@ -8632,7 +8757,7 @@ async function openPalette() {
   const v = await listModal(t('palette.title'), items, t('palette.placeholder'));
   if (!v) return;
   if (v.t === 'pane') void createPane({ name: v.name, cmd: v.cmd });
-  else if (v.t === 'ask') { const i = await askWithChips(); if (i) { const slug = ('ask-' + i.toLowerCase().replace(/[^a-z0-9]+/g, '-')).slice(0, 28).replace(/-+$/, ''); const p2 = 'Find the right AIOS action for this intent and run it: "' + i + '". Pick the best match, say which in one line, then execute.'; const h2 = await window.glassShell.taskHandoff(p2, slug).catch(() => p2); void createPane({ name: slug, cmd: CLAUDE + ' --name ' + slug + ' ' + shq(h2) }); } }
+  else if (v.t === 'ask') { const ask = await askWithChips(); if (ask) void launchAsk(ask); }
   else if (v.t === 'settings') openSettingsTab();
   else if (v.t === 'setup') openSetupTab();
   else if (v.t === 'plugins') openPluginsTab();
@@ -8791,6 +8916,7 @@ function openDesignerTab() {
       // the same indirection the spawn wrapper and the command bus use. Typing a long
       // multi-line brief into the pty mangled the shell quoting and truncated it.
       const h = await window.glassShell.designerHandoff({ kind: st.kind, fields, mode: st.mode, targetPath: st.targetPath || undefined }).catch(() => null);
+      if (h && h.error) { toast(t('handoff.failed', { why: h.error })); return; }
       if (!h) { toast(t('designer.needName')); return; }
       void createPane({ name: 'aios-builder', cmd: CLAUDE + ' --name aios-builder ' + shq('/aios:agent aios-builder — ' + h.prompt) });
       toast(t('designer.handedOff'));
@@ -8986,19 +9112,43 @@ window.addEventListener('keydown', (e) => { if (handleChord(e)) { e.preventDefau
    keystroke. A handler here would be shadowed on macOS and drift from the menu. */
 
 /* ── ask modal + toasts ───────────────────────────────────────────────────── */
-function recentAsks() {
-  try { return JSON.parse(localStorage.getItem('recentAsks') || '[]'); } catch { return []; }
-}
-function pushRecentAsk(t) {
-  try {
-    const r = [t, ...recentAsks().filter((x) => x !== t)].slice(0, 4);
-    localStorage.setItem('recentAsks', JSON.stringify(r));
-  } catch { /* ignore */ }
-}
+/* No recent-ask list (operator, 0.12.0 test: tried as chips, as a line, as a stack — all read as
+   clutter). A job worth re-running belongs in Frequent Tasks, so the dialog points there instead.
+   The prompts stored by earlier versions are cleared once. */
+try { localStorage.removeItem('recentAsks'); } catch { /* storage unavailable */ }
+/* app#66: Ask AIOS asks for the session's NAME too, pre-filled. A sentence-derived name broke an
+   operator whose vault addresses sessions by identity (`atlas-TT-MM-JJ`); the suggestion now picks
+   a dated identity the intent names, folds letters instead of dropping them, and is editable —
+   once the operator types in it, it stops following the prompt. Resolves { intent, name } or null. */
 async function askWithChips() {
-  const v = await inputModal(t('ask.title'), t('ask.placeholder'), recentAsks());
-  if (v) pushRecentAsk(v);
-  return v;
+  const keys = /Mac/i.test(navigator.platform) ? '⌘⇧F' : 'Ctrl+Shift+F';   // the menu's accelerator (menu.ts)
+  const v = await inputModal(t('ask.title'), t('ask.placeholder'), null, {
+    hint: { before: t('ask.frequentHintBefore'), link: t('ask.frequentHintLink'), after: t('ask.frequentHintAfter', { keys }), onLink: () => void pickFrequent() },
+    nameField: { label: t('ask.nameLabel'), suggest: (text) => window.glassShell.askName(text, openPaneNames()).catch(() => '') },
+  });
+  if (!v || !v.value) return null;
+  return { intent: v.value, name: v.name };
+}
+/** A session name that is safe on a command line and in the registry, whatever was typed. */
+function safeSessionName(raw, fallback) {
+  const s = String(raw || '').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[-.]+|-+$/g, '').slice(0, 48);
+  return s || fallback || 'ask-intent';
+}
+/** Names of the tabs open in this window that are not ended — part of what "a running name" means. */
+function openPaneNames() { return [...panes.values()].filter((p) => !p.exited && p.name).map((p) => p.name); }
+/** The one launch path for an Ask AIOS intent (Home card, command bus, palette). */
+async function launchAsk(ask) {
+  /* Typed or suggested, the final name never duplicates a running session or an open tab — the bus
+     addresses sessions by name, so two of one name is one it cannot reach reliably. */
+  const panesNow = openPaneNames();
+  const wanted = safeSessionName(ask.name, await window.glassShell.askName(ask.intent, panesNow).catch(() => ''));
+  const name = await window.glassShell.askUnique(wanted, panesNow).catch(() => wanted);
+  const prompt = `Find the right AIOS action for this intent and run it: "${ask.intent}". Search my agents, /aios: commands, skills, and frequent tasks; pick the best match, tell me in one line which you chose and why, then execute it.`;
+  // long prompts travel as a temp file, never typed into the pty (see task:handoff)
+  /* Refused, not inlined, when the handoff file cannot be written safely (see task:handoff). */
+  const handed = await window.glassShell.taskHandoff(prompt, name).catch((e) => ({ error: String(e && e.message || e) }));
+  if (handed && typeof handed === 'object') { toast(t('handoff.failed', { why: handed.error })); return; }
+  await createPane({ name, cmd: `${CLAUDE} --name ${shq(name)} ${shq(handed)}` });
 }
 
 // A minimal choice modal (reuses the input-modal chrome + chip styling): a title
@@ -9009,6 +9159,7 @@ async function openSessionNotes(name) {
   let notes = await window.glassShell.notesGet(name).catch(() => []);
   const wrap = document.createElement('div');
   wrap.className = 'modal-wrap';
+  claimModal(wrap, () => done());
   wrap.innerHTML = `<div class="modal"><div class="mtitle"></div><div class="noteslist"></div><input class="notesinput tinput" /><div class="mhint"></div></div>`;
   wrap.querySelector('.mtitle').textContent = t('session.notesTitle', { name });
   wrap.querySelector('.mhint').textContent = t('session.notesHint');
@@ -9038,10 +9189,22 @@ async function openSessionNotes(name) {
   wrap.addEventListener('click', (e) => { if (e.target === wrap) done(); });
 }
 
+/* ONE DIALOG AT A TIME. Shortcuts open dialogs from anywhere, so ⌘⇧F with Ask open stacked Frequent
+   Tasks on top of it (operator test, 0.12.0) — two dialogs, Esc closing only the front one. Every
+   dialog claims the slot as it opens: whatever is already open is CANCELLED (its caller gets the
+   same answer as Esc), never just removed, so no caller is left waiting on a dialog that is gone. */
+function claimModal(wrap, cancel) {
+  for (const w of document.querySelectorAll('.modal-wrap')) {
+    if (w === wrap) continue;
+    if (typeof w.__cancel === 'function') { try { w.__cancel(); } catch { w.remove(); } } else w.remove();
+  }
+  wrap.__cancel = cancel;
+}
 function inputModal(title, placeholder, chips, opts) {
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
     wrap.className = 'modal-wrap';
+    claimModal(wrap, () => done(null));
     wrap.innerHTML = `<div class="modal"><div class="mtitle"></div>
       <input id="askInput" />
       <div class="mhint"></div></div>`;
@@ -9063,14 +9226,65 @@ function inputModal(title, placeholder, chips, opts) {
       }
       input.after(cw);
     }
+    /* opts.nameField — a second, smaller field for the session's name (app#66). It follows the
+       main field through `suggest` until the operator types in it; from then on it is theirs. With
+       it, the modal resolves { value, name } instead of a string. */
+    let nameIn = null;
+    if (opts && opts.nameField) {
+      const row = el('label', 'mname');
+      row.appendChild(el('span', 'mnamelbl', opts.nameField.label));
+      nameIn = document.createElement('input');
+      nameIn.className = 'mnamein';
+      nameIn.spellcheck = false;
+      row.appendChild(nameIn);
+      wrap.querySelector('.mhint').before(row);
+      /* ONCE TOUCHED, IT IS THEIRS — even emptied. Clearing it used to hand it back to the
+         suggestion, which refilled it mid-edit: the operator could not rewrite the name (operator
+         test, 0.12.0). The suggestion keeps updating as the PLACEHOLDER, and an empty field at
+         Enter launches with it (launchAsk), so leaving it blank still means "your suggestion". */
+      let touched = false, seq = 0, timer = 0;
+      const follow = () => {
+        clearTimeout(timer);
+        timer = setTimeout(async () => {
+          const my = ++seq;
+          const s = await opts.nameField.suggest(input.value.trim());
+          if (my !== seq || !document.contains(nameIn)) return;
+          nameIn.placeholder = s || '';
+          if (!touched) nameIn.value = s || '';
+        }, 120);
+      };
+      input.addEventListener('input', follow);
+      wrap.querySelectorAll('.chip').forEach((b) => b.addEventListener('click', follow));
+
+      nameIn.addEventListener('input', () => { touched = true; });
+    }
+    /* opts.hint — one italic line above "Enter to run", with an optional link that leaves this dialog
+       for somewhere better suited (Ask → Frequent Tasks for a job that recurs). */
+    if (opts && opts.hint) {
+      const h = el('div', 'maskhint');
+      h.append(document.createTextNode(opts.hint.before || ''));
+      if (opts.hint.link) {
+        const l = el('button', 'maskhintlink', opts.hint.link); l.type = 'button';
+        l.addEventListener('click', () => { wrap.remove(); resolve(null); if (opts.hint.onLink) opts.hint.onLink(); });
+        h.appendChild(l);
+      }
+      h.append(document.createTextNode(opts.hint.after || ''));
+      wrap.querySelector('.mhint').before(h);
+    }
     input.focus();
     const done = (val) => { wrap.remove(); resolve(val); };
+    const submit = () => {
+      const v = input.value.trim();
+      done(nameIn ? { value: v, name: nameIn.value.trim() } : v);
+    };
     // Enter resolves the (trimmed) string — '' is a valid "submit blank" (e.g. spawn → adj-animal
     // handle); only Escape / backdrop resolve null (cancel). Callers distinguish '' from null.
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); done(input.value.trim()); }
-      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
-    });
+    for (const f of [input, nameIn].filter(Boolean)) {
+      f.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+      });
+    }
     wrap.addEventListener('click', (e) => { if (e.target === wrap) done(null); });
   });
 }

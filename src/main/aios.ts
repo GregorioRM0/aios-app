@@ -1,5 +1,8 @@
 import { freshness, parseLsRemote } from '../core/freshness';
 import { inScope, busNamesFrom, type SessionScope } from '../core/sessionScope';
+import { identityNamesIn } from '../core/sessionName';
+import { routineRows, type RoutineRow } from '../core/routineHealth';
+import { runDir, writePrivateFile } from './privateRun';
 import * as fs from 'fs';
 import * as os from 'os';
 import {
@@ -380,7 +383,14 @@ export function countNotes(kind: 'declared' | 'observed' | 'projects'): number {
    which is why it is invisible on a machine whose sessions are all idle — that absence is the
    field working, not the field missing. `statusUpdatedAt` is when the CURRENT status was
    entered, so it answers "blocked longest" without us having to remember anything. */
-export interface RunningAgent { pid: number; name: string; status: string; sessionId: string; cwd: string; startedAt: number; updatedAt: number; waitingFor?: string; statusUpdatedAt?: number; kind: string; entrypoint: string; }
+export interface RunningAgent { pid: number; name: string; status: string; sessionId: string; cwd: string; startedAt: number; updatedAt: number; waitingFor?: string; statusUpdatedAt?: number; kind: string; entrypoint: string; formerNames?: string[]; }
+
+/** app#65: `formerNames` as the registry writes it — strings, or `{ name }` objects; anything else ignored. */
+export function formerNamesOf(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => (typeof x === 'string' ? x : x && typeof x === 'object' && typeof (x as { name?: unknown }).name === 'string' ? (x as { name: string }).name : ''))
+    .map((s) => s.trim()).filter(Boolean);
+}
 
 /** Claude Code's config folder. It honours CLAUDE_CONFIG_DIR, so the App reads where Claude Code
  *  actually writes (the registry, transcripts, settings). Unset — every Finder launch — it is ~/.claude. */
@@ -394,7 +404,7 @@ export function listRunningAgents(): RunningAgent[] {
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return []; }
   const out: RunningAgent[] = [];
   for (const f of files) {
-    let d: { pid?: number; name?: string; status?: string; sessionId?: string; cwd?: string; startedAt?: number; updatedAt?: number; waitingFor?: string; statusUpdatedAt?: number; kind?: string; entrypoint?: string };
+    let d: { pid?: number; name?: string; status?: string; sessionId?: string; cwd?: string; startedAt?: number; updatedAt?: number; waitingFor?: string; statusUpdatedAt?: number; kind?: string; entrypoint?: string; formerNames?: unknown };
     try { d = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
     const pid = Number(d?.pid ?? path.basename(f, '.json'));
     if (!Number.isInteger(pid) || pid <= 0 || !isAlive(pid)) continue;
@@ -411,6 +421,7 @@ export function listRunningAgents(): RunningAgent[] {
       // Missing = an older CLI that predates the field; those were all terminal sessions.
       kind: String(d?.kind ?? '').trim() || 'interactive',
       entrypoint: String(d?.entrypoint ?? '').trim(),
+      ...(formerNamesOf(d?.formerNames).length ? { formerNames: formerNamesOf(d?.formerNames) } : {}),
     });
   }
   const seen = new Set<number>();
@@ -495,24 +506,9 @@ export function primaryNames(): Set<string> {
   return out;
 }
 let warnedNoIdentity = false;
-/** Pure: names from the Identity table, found under `## Identity` OR by its header row anywhere. */
-export function primaryNamesIn(text: string): Set<string> {
-  const out = new Set<string>();
-  const lines = String(text ?? '').split(/\r?\n/);
-  const cells = (l: string) => l.split('|').slice(1, -1).map((c) => c.replace(/`/g, '').trim());
-  const isHeader = (l: string) => { const c = cells(l).map((x) => x.toLowerCase()); return c[0] === 'name' && c.includes('role'); };
-  let start = lines.findIndex((l) => /^##\s+Identity/.test(l));
-  if (start === -1) start = lines.findIndex((l) => l.startsWith('|') && isHeader(l)) - 1;
-  if (start < -1) return out;
-  for (let i = start + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^##\s/.test(line)) break;
-    if (!line.startsWith('|')) { if (out.size) break; continue; }   // the table ended
-    const raw = cells(line)[0] ?? '';
-    if (raw && raw.toLowerCase() !== 'name' && !/^[ :-]+$/.test(raw)) out.add(raw.toLowerCase());
-  }
-  return out;
-}
+/** Pure: names from the Identity table, found under `## Identity` OR by its header row anywhere.
+ *  The parser moved to the shared core (Glass reads the same table for app#66). */
+export function primaryNamesIn(text: string): Set<string> { return identityNamesIn(text); }
 const realOr = (p: string): string => { try { return fs.realpathSync(p); } catch { return p; } };
 let scopeCache: { at: number; key: string; scope: SessionScope } | undefined;
 export function sessionScope(): SessionScope {
@@ -2326,6 +2322,20 @@ export async function repairCheck(id: string): Promise<CheckResult | null> {
  *  day after. Order = display order on the pulse card. */
 export const HEALTH_IDS = ['framework', 'vault', 'account', 'skills', 'claude', 'gh'] as const;
 
+/** #27 — scheduled-job health from canonical's status files ($AIOS_HEALTH_DIR or ~/.aios/health).
+ *  Read only; the jobs themselves (hooks/aios-health.py) write them. No directory → no rows. */
+export function routineHealth(now = Date.now()): RoutineRow[] {
+  const dir = process.env.AIOS_HEALTH_DIR || path.join(os.homedir(), '.aios', 'health');
+  let names: string[] = [];
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const files = names.filter((f) => f.endsWith('.json') && !f.startsWith('.')).map((file) => {
+    let text = '';
+    try { text = fs.readFileSync(path.join(dir, file), 'utf8'); } catch (e) { text = `\u0000unreadable: ${(e as Error).message}`; }
+    return { file, text };
+  });
+  return routineRows(files, now);
+}
+
 export async function computeHealth(): Promise<CheckResult[]> {
   const all = await setupChecks();
   return HEALTH_IDS.map((id) => all.find((c) => c.id === id)).filter((c): c is CheckResult => !!c);
@@ -3045,15 +3055,14 @@ if ($Ok -eq 'True') {
 }
 `;
     try {
-      const out = path.join(os.tmpdir(), 'aios-setup', 'done.ps1');
-      fs.mkdirSync(path.dirname(out), { recursive: true });
+      const dir = runDir('setup');   // private: this file is EXECUTED (privateRun)
       /* A BOM, and it is load-bearing. These four strings are LOCALIZED, so they carry em
          dashes and accents the moment the operator is on Spanish or Portuguese — and Windows
          PowerShell 5.1 decodes a BOM-less file as the ANSI codepage, where an em dash's third
          UTF-8 byte (0x94) becomes CP1252's RIGHT DOUBLE QUOTATION MARK, which PowerShell honours
          as a string DELIMITER. Without the BOM a Spanish banner does not merely look wrong, it
          fails to parse, and the operator's step ends in a red wall instead of a verdict. */
-      fs.writeFileSync(out, String.fromCharCode(0xFEFF) + psBody, 'utf8');
+      const out = writePrivateFile(dir, 'done.ps1', String.fromCharCode(0xFEFF) + psBody);
       return psRunHint(out);
     } catch { return ''; }
   }
@@ -3066,10 +3075,9 @@ else
 fi
 `;
   try {
-    const out = path.join(os.tmpdir(), 'aios-setup', 'done.sh');
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, body, { mode: 0o700 });
-    return out;
+    /* Private, because it is EXECUTED: in a shared /tmp/aios-setup another local user could have
+       created the folder first and controlled what runs (privateRun). */
+    return writePrivateFile(runDir('setup'), 'done.sh', body, 0o700);
   } catch { return ''; }
 }
 
@@ -3106,16 +3114,15 @@ function setupScriptPath(file: string): string {
   }
   try {
     const body = fs.readFileSync(packaged, 'utf8');       // works: fs is shimmed for asar
-    /* os.tmpdir(), not app.getPath('userData'): this module is deliberately electron-free so
-       the doctor suite can import it outside an Electron process, and the compiler caught the
-       import the moment I reached for it. A transient, idempotent script is exactly what a temp
-       dir is for. */
-    const out = path.join(os.tmpdir(), 'aios-setup', file);
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, body, { mode: 0o700 });
+    /* A private run dir (privateRun), not app.getPath('userData'): this module is deliberately
+       electron-free so the doctor suite can import it outside an Electron process. Not os.tmpdir()
+       either: on Linux that is the shared /tmp, and these scripts are executed. */
+    /* Private, because these scripts are EXECUTED (privateRun): ~/.aios/run/setup on macOS/Linux. */
+    const dir = runDir('setup');
+    const out = writePrivateFile(dir, file, body, 0o700);
     for (const sib of fs.readdirSync(path.dirname(packaged))) {
       if (sib === file) continue;
-      try { fs.writeFileSync(path.join(path.dirname(out), sib), fs.readFileSync(path.join(path.dirname(packaged), sib), 'utf8'), { mode: 0o700 }); } catch { /* the one asked for is what matters */ }
+      try { writePrivateFile(dir, sib, fs.readFileSync(path.join(path.dirname(packaged), sib), 'utf8'), 0o700); } catch { /* the one asked for is what matters */ }
     }
     return out;
   } catch { return ''; }

@@ -4,6 +4,8 @@ import { installWebPermissionPolicy } from './webPermissions';
 import { withDefaultLocale } from './termLocale';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
 import { plainText } from '../core/plainText';
+import { askSessionName, uniqueName } from '../core/sessionName';
+import { runDir, writePrivateFile } from './privateRun';
 import { speakable, lastAnswer, guessLang } from '../core/speakable';
 import { answerPlain } from '../core/answerPlain';
 import { t } from '../i18n';
@@ -14,9 +16,10 @@ import { execFile } from 'child_process';
 import { pathToFileURL } from 'url';   // main builds the file:// URL itself — see shell:openPathExternal
 import { classifyForRead } from './preview';   // the fs:read gate (#39)
 import * as pty from 'node-pty';
-import { PanelHost } from './panelHost';
+import { PanelHost, setPanelLog } from './panelHost';
 import { installMenu } from './menu';
-import { initCommandBus } from './commandBus';
+import { initCommandBus, appLog } from './commandBus';
+setPanelLog(appLog);   // panel notes land in the bus trail (see panelHost)
 import * as caffeine from './caffeinate';
 import { composeBuilderBrief, slugify, type DesignerKind, type DesignerFields } from '../core/designer';
 import { taskFileInstruction, needsTaskFile } from '../core/commandBus';
@@ -411,14 +414,25 @@ function resolveIn(relOrAbs: string): string | null {
    re-read because its mtime moved.
    The archive is still never READ on the app's own initiative — only when this picker is opened,
    and nothing resumes without being ticked (AI-67's constraint). */
-const nameCache = new Map<string, string>();
+const nameCache = new Map<string, { name: string; was: string[] }>();
 const RESUMABLE_CAP = 2000;      // a backstop, not a page: far above any real archive
 
-function sessionNameFromTranscript(file: string, mtime: number): string {
+/* AI-209 — WHAT A SESSION WAS CALLED, not only what it is called now. Measured: "boston" in the
+   picker found nothing, because `boston-companion` renamed itself `fortress-companion` in its last
+   minutes, and the list matched current names only. A session is recognised by any name the
+   operator ever knew it by, so the reader also returns the earlier ones — the name it was BORN
+   with (its first agent-name row, from the head it already reads) plus any others in the tail
+   window — and the picker searches and shows them. No extra reads: same tail, same head. */
+const agentNameOf = (line: string): string => {
+  if (!line.includes('"agent-name"')) return '';
+  try { const j = JSON.parse(line); return j && typeof j.agentName === 'string' ? j.agentName : ''; } catch { return ''; /* a chunk boundary split this line */ }
+};
+function sessionNamesFromTranscript(file: string, mtime: number): { name: string; was: string[] } {
   const key = file + ':' + mtime;
   const hit = nameCache.get(key);
   if (hit !== undefined) return hit;
   let name = '';
+  const seen: string[] = [];
   let fd = -1;
   try {
     fd = fs.openSync(file, 'r');
@@ -443,26 +457,30 @@ function sessionNameFromTranscript(file: string, mtime: number): string {
       fs.readSync(fd, buf, 0, buf.length, start);
       const lines = buf.toString('utf8').split('\n');
       for (let k = lines.length - 1; k >= 0; k--) {
-        if (!lines[k].includes('"agent-name"')) continue;
-        try { const j = JSON.parse(lines[k]); if (j && typeof j.agentName === 'string') { name = j.agentName; break; } } catch { /* a chunk boundary split this line */ }
+        const n = agentNameOf(lines[k]);
+        if (!n) continue;
+        if (!name) name = n;
+        if (!seen.includes(n)) seen.push(n);    // the rest of this chunk is free: other names it held
       }
       if (start === 0) break;
     }
-    if (!name) {
-      // Nothing in the tail — fall back to the head, which is where a never-renamed session
-      // declares itself.
-      const b = Buffer.alloc(16 * 1024);
-      const n = fs.readSync(fd, b, 0, b.length, 0);
-      for (const line of b.subarray(0, n).toString('utf8').split('\n')) {
-        if (!line.includes('"agent-name"')) continue;
-        try { const j = JSON.parse(line); if (j && typeof j.agentName === 'string') { name = j.agentName; break; } } catch { /* partial line */ }
-      }
+    /* The head: where a never-renamed session declares itself, and where a renamed one says what it
+       was born as. */
+    const b = Buffer.alloc(16 * 1024);
+    const nb = fs.readSync(fd, b, 0, b.length, 0);
+    for (const line of b.subarray(0, nb).toString('utf8').split('\n')) {
+      const n = agentNameOf(line);
+      if (!n) continue;
+      if (!name) name = n;
+      if (!seen.includes(n)) seen.push(n);
+      break;
     }
   } catch { /* unreadable — list it unnamed rather than hide it */ } finally {
     if (fd >= 0) { try { fs.closeSync(fd); } catch { /* already closed */ } }
   }
-  nameCache.set(key, name);
-  return name;
+  const out = { name, was: seen.filter((n) => n !== name) };
+  nameCache.set(key, out);
+  return out;
 }
 
 /* #28 — WHERE EACH SESSION WE ARE ABOUT TO OFFER STANDS NOW. Not `sessions:resumable`: that list
@@ -489,7 +507,7 @@ ipcMain.handle('sessions:locate', (_e, ids: unknown) => {
 
 ipcMain.handle('sessions:resumable', () => {
   const dir = path.join(aios.claudeConfigDir(), 'projects');
-  let files: Array<{ file: string; at: number }> = [];
+  let files: Array<{ file: string; at: number; size: number }> = [];
   try {
     for (const proj of fs.readdirSync(dir)) {
       const pdir = path.join(dir, proj);
@@ -497,7 +515,7 @@ ipcMain.handle('sessions:resumable', () => {
       try { entries = fs.readdirSync(pdir); } catch { continue; }
       for (const f of entries) {
         if (!f.endsWith('.jsonl')) continue;
-        try { files.push({ file: path.join(pdir, f), at: fs.statSync(path.join(pdir, f)).mtimeMs }); } catch { /* vanished */ }
+        try { const st = fs.statSync(path.join(pdir, f)); files.push({ file: path.join(pdir, f), at: st.mtimeMs, size: st.size }); } catch { /* vanished */ }
       }
     }
   } catch { return { items: [], total: 0, named: 0 }; }
@@ -506,12 +524,17 @@ ipcMain.handle('sessions:resumable', () => {
   files = files.filter((f) => !liveIds.has(path.basename(f.file, '.jsonl')));
   files.sort((a2, b2) => b2.at - a2.at);
   const total = files.length;
-  const all = files.slice(0, RESUMABLE_CAP).map((f) => ({
-    id: path.basename(f.file, '.jsonl'),
-    name: sessionNameFromTranscript(f.file, f.at),
-    proj: path.basename(path.dirname(f.file)).replace(/^-Users-[^-]+-/, ''),
-    at: f.at,
-  }));
+  const all = files.slice(0, RESUMABLE_CAP).map((f) => {
+    const n = sessionNamesFromTranscript(f.file, f.at);
+    return {
+      id: path.basename(f.file, '.jsonl'),
+      name: n.name,
+      was: n.was,
+      proj: path.basename(path.dirname(f.file)).replace(/^-Users-[^-]+-/, ''),
+      at: f.at,
+      size: f.size,
+    };
+  });
   /* NAMED SESSIONS ONLY. Of 593 transcripts here, 384 never wrote an `agent-name` row — those
      could only ever be labelled `project · a3f9c2b1`, which identifies nothing and is 65% of the
      list you have to scroll past to find what you meant. Resuming is an act of recognition, so
@@ -769,18 +792,17 @@ ipcMain.handle('feedback:snapshot', (_e, name: string, text: string) => {
   sweepReportSnapshots();
   try {
     const slug = String(name || 'terminal').replace(/[^a-z0-9-]+/gi, '-').slice(0, 40) || 'terminal';
-    const f = path.join(os.tmpdir(), `aios-report-${slug}-${Date.now()}.txt`);
     /* Review should-fix 12: written ALREADY REDACTED — token shapes, keys, credentials in URLs. The
-       agent still scrubs; the App no longer depends on it. */
-    fs.writeFileSync(f, redactSecrets(String(text ?? '').slice(0, 200_000)), { mode: 0o600 });
-    return f;
+       agent still scrubs; the App no longer depends on it. A private run file (privateRun), like
+       every file a session is told to read. */
+    return writePrivateFile(runDir(), `aios-report-${slug}-${Date.now()}.txt`, redactSecrets(String(text ?? '').slice(0, 200_000)));
   } catch { return ''; }
 });
 /* Snapshots are read once, by the session the report opened. Any older than a day is an orphan
    (a report abandoned, or one dropped because the feedback pane already existed) — remove it. */
 function sweepReportSnapshots(maxAgeMs = 24 * 60 * 60 * 1000): void {
   try {
-    const dir = os.tmpdir();
+    const dir = runDir();
     for (const n of fs.readdirSync(dir)) {
       if (!/^aios-report-.*\.txt$/.test(n)) continue;
       const f = path.join(dir, n);
@@ -936,10 +958,25 @@ ipcMain.handle('task:handoff', (_e, req: { prompt: string; name?: string }) => {
   if (!prompt) return '';
   if (!needsTaskFile(prompt)) return prompt;
   const slug = (String(req?.name ?? 'task').toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'task').slice(0, 40);
-  const file = path.join(os.tmpdir(), `aios-task-${slug}.md`);
-  try { fs.writeFileSync(file, prompt); } catch { return prompt; }  // fall back to inline
-  return taskFileInstruction(file);
+  /* A private run file (privateRun). A failed write is REFUSED, never "fall back to inline": typing
+     a long prompt is the mangling this handoff exists to prevent. The renderer says why. */
+  try { return taskFileInstruction(writePrivateFile(runDir(), `aios-task-${slug}.md`, prompt)); }
+  catch (e) { return { error: (e as Error).message }; }
 });
+/* app#66 — the suggested session name for an Ask AIOS intent: a dated USER.md identity the intent
+   names, else the descriptive ask-… name; letters folded, never a name already running. The Ask
+   dialog shows it in an editable field, so the operator always sees and can change it. */
+/* "Live" = the registry AND this window's open tabs: a tab opened a moment ago may not have
+   registered yet, and a second session under its name is one the bus cannot tell apart. */
+const liveNames = (panes: unknown): string[] => [
+  ...aios.listRunningAgents().map((a) => a.name),
+  ...(Array.isArray(panes) ? panes.filter((x): x is string => typeof x === 'string') : []),
+];
+ipcMain.handle('ask:name', (_e, intent: unknown, panes?: unknown) =>
+  askSessionName(String(intent ?? ''), { identities: aios.primaryNames(), live: liveNames(panes) }));
+/* The FINAL name, after the operator edited it: the same never-a-running-name rule (reviewer,
+   0.12.0 — typing `buddai` while buddai is live started a second one). */
+ipcMain.handle('ask:unique', (_e, name: unknown, panes?: unknown) => uniqueName(String(name ?? ''), liveNames(panes)));
 ipcMain.handle('designer:handoff', (_e, req: { kind: DesignerKind; fields: DesignerFields; mode: 'create' | 'update'; targetPath?: string }) => {
   if (!req || !['agent', 'skill', 'command'].includes(req.kind)) return null;
   const brief = composeBuilderBrief(req.kind, req.fields, {
@@ -950,9 +987,8 @@ ipcMain.handle('designer:handoff', (_e, req: { kind: DesignerKind; fields: Desig
   });
   if (!brief) return null;
   const slug = slugify(req.fields?.name || '') || 'unit';
-  const file = path.join(os.tmpdir(), `aios-designer-${req.kind}-${slug}.md`);
-  try { fs.writeFileSync(file, brief); } catch { return null; }
-  return { file, prompt: taskFileInstruction(file) };
+  try { const file = writePrivateFile(runDir(), `aios-designer-${req.kind}-${slug}.md`, brief); return { file, prompt: taskFileInstruction(file) }; }
+  catch (e) { return { error: (e as Error).message }; }
 });
 ipcMain.handle('designer:brief', (_e, req: { kind: DesignerKind; fields: DesignerFields; mode: 'create' | 'update'; templatePath?: string; targetPath?: string }) => {
   if (!req || !['agent', 'skill', 'command'].includes(req.kind)) return '';
@@ -990,6 +1026,7 @@ ipcMain.handle('onboarding:storePat', async (_e, pat: string): Promise<'verified
 // doctor: headless repair + re-run-the-same-check proof (see aios.repairCheck)
 ipcMain.handle('doctor:repair', (_e, id: string) => aios.repairCheck(String(id)));
 ipcMain.handle('doctor:health', () => aios.computeHealth());
+ipcMain.handle('health:routines', () => aios.routineHealth());   // #27
 // "Having issues?" — one battery + a plan per failing tool → the next ACTION, not a report.
 ipcMain.handle('doctor:triage', () => aios.setupTriage(app.getVersion()));
 

@@ -224,7 +224,7 @@ test('an action that needs setup routes to Setup instead of failing in a termina
   // the remedies are exempt, or the operator could never climb out
   // the remedies stay exempt — and there are three of them now, so assert the set, not one line
   assert.match(app, /login\|logout/, '/login and /logout fix the account');
-  assert.match(app, /--name\\s\+\(aios-setup\|github-help\)/, 'the setup session IS the remedy, and so is the GitHub helper');
+  assert.match(app, /--name\\s\+\(aios-setup\|github-help\|health-help\)/, 'the setup session IS the remedy, and so are the GitHub and health helpers');
   assert.match(app, /cold-start-interview/, 'the interview writes the context the gate wants');
   /* Assert the INTENT, not the argument list. The literal-source version of this broke on
      every refactor of the same working behaviour (three times in one session), which trains
@@ -523,7 +523,7 @@ test('the command an operator sees is the command, not a wall of escape codes', 
   // and if the helper cannot be written, the command must still run
   const aios = fs.readFileSync('src/main/aios.ts', 'utf8');
   assert.match(aios, /export function bannerScript\(/);
-  assert.match(aios, /mode: 0o700/);
+  assert.match(aios, /writePrivateFile\(runDir\('setup'\), 'done\.sh', body, 0o700\)/, 'the verdict script is a private, executable run file');
 });
 
 test('returning to the Setup tab re-verifies it', () => {
