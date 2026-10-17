@@ -26,7 +26,7 @@ fs.writeFileSync(path.join(outside, 'story', 'chapter.mp3'), 'x');
 
 const stat: LinkEnv['stat'] = (abs) => { try { return fs.statSync(abs); } catch { return null; } };
 const env: LinkEnv = {
-  allowed: (abs) => abs === root || abs.startsWith(root + '/'),
+  allowed: (abs) => abs === root || abs.startsWith(root + path.sep),   // native separator: Windows CI
   bases: [root, tmp],
   home: tmp,
   stat,
