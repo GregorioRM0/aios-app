@@ -14,6 +14,16 @@
  * Pure over the filesystem it is handed, so it is tested against real files. */
 import * as path from 'node:path';
 
+/* Reveal-only paths are stat'ed on HOVER, from text anyone could have printed, so a stat must
+   never reach the network: a UNC or device path (`\\host\share`, `//host/x`, `\\?\`) makes
+   Windows authenticate to that host (NTLM), and macOS's `/net/<host>` and `/Network/…` are automounts. Those
+   only ever resolve through the allowed roots, as before. */
+export function isLocalAbsolute(v: string): boolean {
+  if (/^[\\/]{2}/.test(v)) return false;
+  if (/^\/(net|Network)(\/|$)/.test(v)) return false;
+  return path.isAbsolute(v);
+}
+
 export interface LinkEnv {
   allowed: (abs: string) => boolean;
   /** Folders a relative candidate is resolved against, in order (pane cwd, framework, home). */
@@ -48,7 +58,7 @@ export function resolveLinkTargets(cands: unknown, env: LinkEnv): LinkTargets {
         const st = env.stat(abs);
         if (st && st.isFile()) { out.open[c] = abs; break; }
       }
-      if (out.open[c] || !absolute) continue;
+      if (out.open[c] || !absolute || !isLocalAbsolute(v)) continue;
       const st = env.stat(v);
       if (st && (st.isFile() || st.isDirectory())) out.reveal[c] = v;
     } catch { /* skip */ }
@@ -58,6 +68,6 @@ export function resolveLinkTargets(cands: unknown, env: LinkEnv): LinkTargets {
 
 /** Whether `shell:reveal` may show this path: anything absolute that exists. */
 export function canReveal(p: unknown, stat: LinkEnv['stat']): boolean {
-  if (typeof p !== 'string' || !path.isAbsolute(p)) return false;
+  if (typeof p !== 'string' || !isLocalAbsolute(p)) return false;
   return stat(p) !== null;
 }

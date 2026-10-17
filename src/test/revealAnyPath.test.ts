@@ -68,6 +68,21 @@ test('a path that does not exist is no link at all', () => {
   assert.deepEqual(resolveLinkTargets([path.join(outside, 'nope.mp3'), '/no/such/dir'], env), { open: {}, reveal: {} });
 });
 
+test('a network path is never stat\'ed for a reveal link — hovering text must not reach a host', () => {
+  /* Windows authenticates to a UNC host on stat (an NTLM hash, from text anyone could print);
+     macOS automounts /net and /Network. The stat itself is the leak, so assert it never runs. */
+  const seen: string[] = [];
+  const spy: LinkEnv = { ...env, stat: (abs) => { seen.push(abs); return stat(abs); } };
+  const net = ['\\\\evil\\share\\x.png', '//evil/share/x', '\\\\?\\UNC\\evil\\x', '/net/evil/x', '/Network/Servers/evil'];
+  assert.deepEqual(resolveLinkTargets(net, spy), { open: {}, reveal: {} });
+  /* On POSIX a backslash string is RELATIVE and may resolve inside the roots as a local name, as
+     it always did; what must never happen is a stat of the network path itself. */
+  const reached = () => seen.filter((s) => net.includes(s) || /^\/(net|Network)\//.test(s));
+  assert.deepEqual(reached(), [], 'no network path reached stat');
+  for (const p of net) assert.equal(canReveal(p, spy.stat), false, p);
+  assert.deepEqual(reached(), []);
+});
+
 test('shell:reveal accepts any absolute path that exists, and nothing else', () => {
   assert.equal(canReveal(path.join(outside, 'story'), stat), true);
   assert.equal(canReveal(path.join(outside, 'nope'), stat), false);
