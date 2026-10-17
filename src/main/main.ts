@@ -15,7 +15,7 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { pathToFileURL } from 'url';   // main builds the file:// URL itself — see shell:openPathExternal
 import { classifyForRead } from './preview';   // the fs:read gate (#39)
-import { resolveLinkTargets, canReveal } from './pathLinks';   // terminal links: open vs reveal
+import { resolveLinkTargets, revealable } from './pathLinks';   // terminal links: open vs reveal
 import * as pty from 'node-pty';
 import { PanelHost, setPanelLog } from './panelHost';
 import { installMenu } from './menu';
@@ -713,7 +713,7 @@ ipcMain.handle('html:toPng', async (_e, filePath: string) => {
 /* Reveal reads nothing, so it is not held to the allowed roots: an absolute path that exists is
    enough (a relative one still resolves inside them, as the explorer's callers expect). */
 ipcMain.handle('shell:reveal', (_e, p: string) => {
-  const abs = canReveal(p, statOrNull) ? p : resolveIn(p);
+  const abs = revealable(p, statOrNull) ?? resolveIn(p);
   if (abs) shell.showItemInFolder(abs);
   return true;
 });

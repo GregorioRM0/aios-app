@@ -18,10 +18,13 @@ import * as path from 'node:path';
    never reach the network: a UNC or device path (`\\host\share`, `//host/x`, `\\?\`) makes
    Windows authenticate to that host (NTLM), and macOS's `/net/<host>` and `/Network/…` are automounts. Those
    only ever resolve through the allowed roots, as before. */
-export function isLocalAbsolute(v: string): boolean {
-  if (/^[\\/]{2}/.test(v)) return false;
-  if (/^\/(net|Network)(\/|$)/.test(v)) return false;
-  return path.isAbsolute(v);
+export function localAbsolute(v: string): string | null {
+  const net = (x: string) => /^[\\/]{2}/.test(x) || /^\/(net|network)(\/|$)/i.test(x);
+  if (!path.isAbsolute(v) || net(v)) return null;
+  /* Checked again AFTER normalizing, and the normalized form is what gets stat'ed: `/./net`,
+     `/a/../net` and `/NET` (APFS ignores case) are all /net. */
+  const n = path.resolve(v);
+  return net(n) ? null : n;
 }
 
 export interface LinkEnv {
@@ -58,16 +61,17 @@ export function resolveLinkTargets(cands: unknown, env: LinkEnv): LinkTargets {
         const st = env.stat(abs);
         if (st && st.isFile()) { out.open[c] = abs; break; }
       }
-      if (out.open[c] || !absolute || !isLocalAbsolute(v)) continue;
-      const st = env.stat(v);
-      if (st && (st.isFile() || st.isDirectory())) out.reveal[c] = v;
+      const local = out.open[c] || !absolute ? null : localAbsolute(v);
+      if (!local) continue;
+      const st = env.stat(local);
+      if (st && (st.isFile() || st.isDirectory())) out.reveal[c] = local;
     } catch { /* skip */ }
   }
   return out;
 }
 
-/** Whether `shell:reveal` may show this path: anything absolute that exists. */
-export function canReveal(p: unknown, stat: LinkEnv['stat']): boolean {
-  if (typeof p !== 'string' || !isLocalAbsolute(p)) return false;
-  return stat(p) !== null;
+/** What `shell:reveal` may show: the normalized form of a local absolute path that exists. */
+export function revealable(p: unknown, stat: LinkEnv['stat']): string | null {
+  const local = typeof p === 'string' ? localAbsolute(p) : null;
+  return local && stat(local) !== null ? local : null;
 }

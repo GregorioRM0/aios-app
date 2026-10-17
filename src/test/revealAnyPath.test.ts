@@ -14,7 +14,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { resolveLinkTargets, canReveal, type LinkEnv } from '../main/pathLinks';
+import { resolveLinkTargets, revealable, type LinkEnv } from '../main/pathLinks';
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'aios-links-')));
 const root = path.join(tmp, 'aios');            // stands in for the allowed roots
@@ -43,7 +43,7 @@ test('a folder becomes a reveal link, inside the roots or out', () => {
   const r = resolveLinkTargets([inside, out + '/'], env);
   assert.deepEqual(r.open, {}, 'the viewer never gets a folder');
   assert.equal(r.reveal[inside], inside);
-  assert.equal(r.reveal[out + '/'], out + '/', 'a trailing slash still resolves');
+  assert.equal(r.reveal[out + '/'], out, 'a trailing slash still resolves (to the normalized path)');
 });
 
 test('a file outside the roots is reveal-only: Finder may show it, the viewer may not read it', () => {
@@ -73,21 +73,23 @@ test('a network path is never stat\'ed for a reveal link — hovering text must 
      macOS automounts /net and /Network. The stat itself is the leak, so assert it never runs. */
   const seen: string[] = [];
   const spy: LinkEnv = { ...env, stat: (abs) => { seen.push(abs); return stat(abs); } };
-  const net = ['\\\\evil\\share\\x.png', '//evil/share/x', '\\\\?\\UNC\\evil\\x', '/net/evil/x', '/Network/Servers/evil'];
+  const net = ['\\\\evil\\share\\x.png', '//evil/share/x', '\\\\?\\UNC\\evil\\x', '/net/evil/x', '/Network/Servers/evil',
+               '/NET/evil/x', '/./net/evil/x', '/tmp/../net/evil/x'];
   assert.deepEqual(resolveLinkTargets(net, spy), { open: {}, reveal: {} });
   /* On POSIX a backslash string is RELATIVE and may resolve inside the roots as a local name, as
      it always did; what must never happen is a stat of the network path itself. */
-  const reached = () => seen.filter((s) => net.includes(s) || /^\/(net|Network)\//.test(s));
+  const reached = () => seen.filter((s) => net.includes(s) || /^\/(net|network)\//i.test(s));
   assert.deepEqual(reached(), [], 'no network path reached stat');
-  for (const p of net) assert.equal(canReveal(p, spy.stat), false, p);
+  for (const p of net) assert.equal(revealable(p, spy.stat), null, p);
   assert.deepEqual(reached(), []);
 });
 
 test('shell:reveal accepts any absolute path that exists, and nothing else', () => {
-  assert.equal(canReveal(path.join(outside, 'story'), stat), true);
-  assert.equal(canReveal(path.join(outside, 'nope'), stat), false);
-  assert.equal(canReveal('story', stat), false, 'relative paths fall back to the roots-resolved path');
-  assert.equal(canReveal(undefined, stat), false);
+  assert.equal(revealable(path.join(outside, 'story'), stat), path.join(outside, 'story'));
+  assert.equal(revealable(path.join(outside, 'story', '.', '..', 'story'), stat), path.join(outside, 'story'), 'normalized');
+  assert.equal(revealable(path.join(outside, 'nope'), stat), null);
+  assert.equal(revealable('story', stat), null, 'relative paths fall back to the roots-resolved path');
+  assert.equal(revealable(undefined, stat), null);
 });
 
 const app = fs.readFileSync('renderer/app.js', 'utf8');
