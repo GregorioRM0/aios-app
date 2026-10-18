@@ -14,7 +14,7 @@ import { ResumeIndex } from './resumeIndex';
 import { supersededName, supersededBody, SUPERSEDED_SUFFIX, SUPERSEDED_KEEP_MS } from '../core/supersede';
 import { resolveSessionName, resolveFormerName, sessionKey } from '../core/nameMatch';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
-import { parseKillExpect, killVerdict } from '../core/killGuard';
+import { decideKill, KILL_EXPECT_CAPABILITY } from '../core/killGuard';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
@@ -220,7 +220,7 @@ function healPresence(appVersion: string): void {
     if (presenceVerdict(rec, root, pidAlive) === 'leave') return;   // healthy — someone alive owns it
     if (rec?.pid === root && readPresence() !== undefined) return;  // already ours; do not churn the file
     fs.mkdirSync(path.dirname(presenceFile()), { recursive: true });
-    const body = { surface: MY_SURFACE, pid: root, at: Date.now(), version: appVersion };
+    const body = presenceBody(root, appVersion);
     fs.writeFileSync(presenceFile(), JSON.stringify(body, null, 2) + '\n');
     log(`presence re-claimed: ${MY_SURFACE} root pid ${root} (record named ${rec?.pid === undefined ? 'nobody' : `dead pid ${rec.pid}`})`);
   } catch { /* non-fatal — the next tick tries again */ }
@@ -251,6 +251,13 @@ function healPresence(appVersion: string): void {
  * the other assigns. So the incumbent is left alone while it is alive, and healPresence below
  * closes the remaining orderings (and the crash case, which has no retract at all).
  */
+/* The presence record both writers (announce and heal) emit. `capabilities` lets a writer confirm,
+   against a LIVE pid, what this surface honours beyond the contract — `kill-expect`
+   (core/killGuard): a surface without it ignores `expect` and kills unconditionally. */
+function presenceBody(root: number, appVersion: string): Record<string, unknown> {
+  return { surface: MY_SURFACE, pid: root, at: Date.now(), version: appVersion, capabilities: [KILL_EXPECT_CAPABILITY] };
+}
+
 function announcePresence(appVersion: string): void {
   /* PACKAGED BUILDS ONLY, and this is not tidiness — it prevents a dev instance from corrupting
    * the record the real App depends on. Observed 2026-08-14: a dev App launched from a terminal
@@ -276,7 +283,7 @@ function announcePresence(appVersion: string): void {
       log(`presence left to pid ${rec?.pid} — it is still running, and ours (${root}) must not displace a live surface`);
       return;
     }
-    const body = { surface: MY_SURFACE, pid: root, at: Date.now(), version: appVersion };
+    const body = presenceBody(root, appVersion);
     fs.writeFileSync(path.join(dir, `${MY_SURFACE}.json`), JSON.stringify(body, null, 2) + '\n');
     log(`announced presence: ${MY_SURFACE} root pid ${root}${root === process.pid ? '' : ` (self ${process.pid})`}`);
   } catch (e) {
@@ -904,14 +911,11 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
       const renamed = t ? undefined : resolveFormerName(req.name, aios.listRunningAgents());
       if (!t && renamed) t = targetByName(renamed);
       /* A conditional kill (core/killGuard): the writer said what it saw, and a session that no
-         longer matches is left running. Checked here, immediately before the SIGTERM, because
-         this is the only moment that closes the window between the writer's check and the kill. */
-      let body: Record<string, unknown> = {};
-      try { body = JSON.parse(fs.readFileSync(heldPath, 'utf8')) as Record<string, unknown>; } catch { /* parsed once already */ }
-      const ex = parseKillExpect(body);
-      if (!ex.ok) { markUndelivered(heldPath, req, `kill refused — ${ex.reason}; nothing was killed`); return; }
-      const verdict = killVerdict(ex.expect, t, () => (t ? readTranscript(t.sessionId) : ''));
-      if (!verdict.kill) { markUndelivered(heldPath, req, `kill refused by expect — ${verdict.reason}; the session was left running`); return; }
+         longer matches is left running. Checked here, immediately before the SIGTERM, which
+         narrows the window between the writer's check and the kill (it does not remove it).
+         decideKill refuses on ANY failure, re-reading the request included. */
+      const verdict = decideKill(() => fs.readFileSync(heldPath, 'utf8'), t, () => (t ? readTranscript(t.sessionId) : ''));
+      if (!verdict.kill) { markUndelivered(heldPath, req, verdict.reason); return; }
       if (t) { try { process.kill(t.pid, 'SIGTERM'); } catch { /* already gone */ } }
       emit(win(), 'closeByName', { name: t ? t.name : req.name });
       log(`kill '${req.name}'${t ? `${renamed ? ` → renamed '${t.name}'` : ''} (pid ${t.pid})`
