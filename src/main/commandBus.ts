@@ -14,6 +14,7 @@ import { ResumeIndex } from './resumeIndex';
 import { supersededName, supersededBody, SUPERSEDED_SUFFIX, SUPERSEDED_KEEP_MS } from '../core/supersede';
 import { resolveSessionName, resolveFormerName, sessionKey } from '../core/nameMatch';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
+import { parseKillExpect, killVerdict } from '../core/killGuard';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
@@ -902,6 +903,15 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
       let t = targetByName(req.name);
       const renamed = t ? undefined : resolveFormerName(req.name, aios.listRunningAgents());
       if (!t && renamed) t = targetByName(renamed);
+      /* A conditional kill (core/killGuard): the writer said what it saw, and a session that no
+         longer matches is left running. Checked here, immediately before the SIGTERM, because
+         this is the only moment that closes the window between the writer's check and the kill. */
+      let body: Record<string, unknown> = {};
+      try { body = JSON.parse(fs.readFileSync(heldPath, 'utf8')) as Record<string, unknown>; } catch { /* parsed once already */ }
+      const ex = parseKillExpect(body);
+      if (!ex.ok) { markUndelivered(heldPath, req, `kill refused — ${ex.reason}; nothing was killed`); return; }
+      const verdict = killVerdict(ex.expect, t, () => (t ? readTranscript(t.sessionId) : ''));
+      if (!verdict.kill) { markUndelivered(heldPath, req, `kill refused by expect — ${verdict.reason}; the session was left running`); return; }
       if (t) { try { process.kill(t.pid, 'SIGTERM'); } catch { /* already gone */ } }
       emit(win(), 'closeByName', { name: t ? t.name : req.name });
       log(`kill '${req.name}'${t ? `${renamed ? ` → renamed '${t.name}'` : ''} (pid ${t.pid})`

@@ -107,6 +107,10 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
 
     { "action": "kill", "name": "designer" }
 
+- **Conditional kill** (\`expect\`, AIOS App): say what you saw when you decided the session was done, and the App checks it immediately before killing. If the session changed since, it is **left running** and the request is dead-lettered naming what changed (\`kill refused by expect — …\`). Keys, each optional but at least one: \`sessionId\` (the registry's), \`status\` (normally \`idle\`), \`idleSince\` (ISO timestamp of the last user/assistant record you saw; a newer one in the transcript refuses). An unknown key or unusable value refuses the request too: a guard is never dropped silently. A surface without this check kills unconditionally, as before.
+
+      { "action": "kill", "name": "designer", "expect": { "sessionId": "<uuid>", "status": "idle", "idleSince": "2026-01-01T09:00:00.000Z" } }
+
 **Contract 4 — optional fields** (verbs unchanged; a contract-3 request behaves exactly as before):
 
 - \`from\` (send, resume) — the registry name of the session that wrote the request. A claim, never an identity: it is recorded with the delivery so the receiver can see who sent it, and an unusable value is ignored.
