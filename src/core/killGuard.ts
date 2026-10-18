@@ -104,18 +104,36 @@ export function parseKillExpect(body: Record<string, unknown>): KillExpectParse 
   return { ok: true, expect: out };
 }
 
+/** The fields of a held kill that decide what it does. The rest is the fulfillers' bookkeeping. */
+const DECIDING = ['action', 'name', 'surface', 'expect'];
+
+/* JSON with sorted keys, so two bodies compare by content rather than by key order. */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(',')}}`;
+  }
+  return v === undefined ? 'undefined' : JSON.stringify(v);
+}
+
 /**
- * Re-read the held request and parse its guard. ANY failure — the file gone, unreadable, not JSON,
- * not an object — refuses: the request was parsed once already, so a failure here means it changed
- * or vanished, and an unreadable request may be one that carried `expect`.
+ * Re-read the held request and confirm it is still the one that was claimed: the same `action`,
+ * `name`, `surface` and `expect`, compared in depth. The guard itself never comes from this read —
+ * it comes from the body parsed when the request was claimed — because a request rewritten in
+ * between (down to `{}`) would otherwise parse as "no guard" and authorise the very kill the writer
+ * guarded. ANY failure — the file gone, unreadable, not JSON, not an object, changed — refuses.
  */
-export function guardFromHeld(readRaw: () => string): KillExpectParse {
+export function heldUnchanged(original: Record<string, unknown>, readRaw: () => string): { ok: true } | { ok: false; reason: string } {
   let raw: string;
   try { raw = readRaw(); } catch (e) { return { ok: false, reason: `the held request could not be re-read (${(e as Error)?.message ?? e})` }; }
   let body: unknown;
   try { body = JSON.parse(raw); } catch { return { ok: false, reason: 'the held request is no longer valid JSON' }; }
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, reason: 'the held request is not a JSON object' };
-  return parseKillExpect(body as Record<string, unknown>);
+  const now = body as Record<string, unknown>;
+  const changed = DECIDING.filter((k) => canonical(original[k]) !== canonical(now[k]));
+  if (changed.length) return { ok: false, reason: `the held request changed since it was claimed (${changed.join(', ')})` };
+  return { ok: true };
 }
 
 export type LastTurn = { ok: true; at: number } | { ok: false; reason: string };
@@ -184,17 +202,21 @@ export function killVerdict(
 }
 
 /**
- * The whole decision the dispatcher makes for a kill: re-read the held request, parse its guard,
- * compare. The dispatcher sends the SIGTERM only on `{ kill: true }`, so every failure on the way
- * — including one reading the request itself — ends in a refusal.
+ * The whole decision the dispatcher makes for a kill. `original` is the request body as it was
+ * parsed when this surface claimed it, and the guard comes from there; the held file is re-read
+ * only to confirm it has not changed. The dispatcher sends the SIGTERM only on `{ kill: true }`,
+ * so every failure on the way ends in a refusal.
  */
 export function decideKill(
+  original: Record<string, unknown>,
   readHeld: () => string,
   target: { status: string; sessionId: string } | undefined,
   transcript: () => string,
 ): KillVerdict {
-  const ex = guardFromHeld(readHeld);
+  const ex = parseKillExpect(original);
   if (!ex.ok) return { kill: false, reason: `kill refused — ${ex.reason}; nothing was killed` };
+  const same = heldUnchanged(original, readHeld);
+  if (!same.ok) return { kill: false, reason: `kill refused — ${same.reason}; nothing was killed` };
   const v = killVerdict(ex.expect, target, transcript);
   return v.kill ? v : { kill: false, reason: `kill refused by expect — ${v.reason}; the session was left running` };
 }

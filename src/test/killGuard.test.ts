@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import {
-  parseKillExpect, killVerdict, lastTurnAt, parseZonedIso, guardFromHeld, decideKill,
+  parseKillExpect, killVerdict, lastTurnAt, parseZonedIso, heldUnchanged, decideKill,
   presenceHonoursExpect, KILL_EXPECT_CAPABILITY,
 } from '../core/killGuard';
 
@@ -22,13 +22,15 @@ const transcript = [
 ].join('\n') + '\n';
 const idle = { status: 'idle', sessionId: SID };
 const held = (o: unknown) => () => JSON.stringify(o);
+const GUARDED = { action: 'kill', name: 'w', surface: 'app', expect: { status: 'idle' } };
 
 /* ---------- 1. the re-read of the held request ---------- */
 
 test('no expect → no guard: a plain kill behaves exactly as before', () => {
   assert.deepEqual(parseKillExpect({ action: 'kill', name: 'w' }), { ok: true });
   assert.deepEqual(killVerdict(undefined, { status: 'busy', sessionId: SID }, () => ''), { kill: true });
-  assert.deepEqual(decideKill(held({ action: 'kill', name: 'w' }), { status: 'busy', sessionId: SID }, () => ''), { kill: true });
+  const plain = { action: 'kill', name: 'w' };
+  assert.deepEqual(decideKill(plain, held(plain), { status: 'busy', sessionId: SID }, () => ''), { kill: true });
 });
 
 test('a held request that cannot be re-read NEVER reaches the kill', () => {
@@ -42,16 +44,16 @@ test('a held request that cannot be re-read NEVER reaches the kill', () => {
     () => '"kill"',
   ];
   for (const r of reads) {
-    const v = decideKill(r, idle, () => transcript);
+    const v = decideKill(GUARDED, r, idle, () => transcript);
     assert.equal(v.kill, false, `must refuse when the re-read gives ${(() => { try { return JSON.stringify(r()); } catch (e) { return String(e); } })()}`);
     assert.match((v as { reason: string }).reason, /^kill refused — /);
   }
   // control: the same request, readable, kills
-  assert.deepEqual(decideKill(held({ action: 'kill', name: 'w', expect: { status: 'idle' } }), idle, () => transcript), { kill: true });
+  assert.deepEqual(decideKill(GUARDED, held(GUARDED), idle, () => transcript), { kill: true });
 });
 
-test('guardFromHeld reports the failure instead of an empty guard', () => {
-  const g = guardFromHeld(() => { throw new Error('gone'); });
+test('heldUnchanged reports the failure instead of passing', () => {
+  const g = heldUnchanged(GUARDED, () => { throw new Error('gone'); });
   assert.equal(g.ok, false);
   assert.match((g as { reason: string }).reason, /could not be re-read \(gone\)/);
 });
@@ -67,6 +69,49 @@ test('the dispatcher sends the SIGTERM only after decideKill, and has no other p
   assert.match(branch.slice(guard, sigterm), /if \(!verdict\.kill\) \{ markUndelivered\([^)]*\); return; \}/, 'a refusal dead-letters and returns');
   assert.equal((src.match(/process\.kill\(t\.pid, 'SIGTERM'\)/g) || []).length, 1, 'one SIGTERM site');
   assert.doesNotMatch(branch, /catch \{ \/\* parsed once already \*\/ \}/, 'the swallowed re-read is gone');
+});
+
+/* Second review: the guard comes from the request as CLAIMED. A held file rewritten between the
+   claim and the kill — without expect, down to {} — used to parse as "no guard" and authorise the
+   SIGTERM on a live, busy session. Every rewrite below must leave that session running. */
+test('a held request rewritten after the claim never reaches the kill, whatever it says now', () => {
+  const busy = { status: 'busy', sessionId: SID };   // live, and NOT what the writer saw
+  const rewrites: Array<[string, unknown]> = [
+    ['replaced by {}', {}],
+    ['expect removed', { action: 'kill', name: 'w', surface: 'app' }],
+    ['expect weakened', { action: 'kill', name: 'w', surface: 'app', expect: { sessionId: SID } }],
+    ['expect widened to the live status', { action: 'kill', name: 'w', surface: 'app', expect: { status: 'busy' } }],
+    ['name changed', { action: 'kill', name: 'other', surface: 'app', expect: { status: 'idle' } }],
+    ['surface dropped', { action: 'kill', name: 'w', expect: { status: 'idle' } }],
+    ['action changed', { action: 'send', name: 'w', surface: 'app', expect: { status: 'idle' } }],
+  ];
+  for (const [what, now] of rewrites) {
+    const v = decideKill(GUARDED, held(now), busy, () => transcript);
+    assert.equal(v.kill, false, `${what}: must not kill`);
+    assert.match((v as { reason: string }).reason, /^kill refused — the held request changed since it was claimed \(/, what);
+  }
+  // control: the guard from the claim still decides when the file is untouched — busy ≠ idle
+  assert.match((decideKill(GUARDED, held(GUARDED), busy, () => transcript) as { reason: string }).reason, /^kill refused by expect — /);
+  // control: the fulfillers' own bookkeeping on the held file is not a change
+  const stamped = { ...GUARDED, _claim: { surface: 'app', pid: 1, at: 1 }, _queuedAt: 1, _tried: ['app:1'], _releases: 1 };
+  assert.deepEqual(decideKill(GUARDED, held(stamped), idle, () => transcript), { kill: true });
+  // control: key order is not a change
+  assert.deepEqual(decideKill(GUARDED, held({ expect: { status: 'idle' }, surface: 'app', name: 'w', action: 'kill' }), idle, () => transcript), { kill: true });
+});
+
+test('a request claimed WITHOUT expect and rewritten to add one is a change too', () => {
+  const plain = { action: 'kill', name: 'w' };
+  assert.equal(decideKill(plain, held({ ...plain, expect: { status: 'idle' } }), idle, () => transcript).kill, false);
+});
+
+test('the dispatcher takes the guard from the claimed body, not from the re-read', () => {
+  const src = fs.readFileSync('src/main/commandBus.ts', 'utf8');
+  assert.match(src, /const verdict = decideKill\(body, \(\) => fs\.readFileSync\(heldPath, 'utf8'\), t,/, 'decideKill gets the claimed body first');
+  assert.match(src, /function runImmediate\(.*, body: Record<string, unknown>\): void \{/, 'runImmediate requires the body');
+  assert.match(src, /return \{ heldPath, req, at, body: bodyForTried \};/, 'claim hands back the body it parsed');
+  assert.equal((src.match(/runImmediate\(win, [^)]*\);/g) || []).length, 2, 'both callers');
+  assert.match(src, /runImmediate\(win, held\.heldPath, held\.req, held\.body\);/);
+  assert.match(src, /runImmediate\(win, p, real, body\);/);
 });
 
 /* ---------- 2. the transcript must be verifiable ---------- */
@@ -160,7 +205,7 @@ test('a guard the surface cannot honour refuses the request instead of being dro
     { expect: { status: 42 } },
   ]) {
     assert.equal(parseKillExpect(bad as Record<string, unknown>).ok, false, `must refuse ${JSON.stringify(bad)}`);
-    assert.equal(decideKill(held(bad), idle, () => transcript).kill, false);
+    assert.equal(decideKill(bad as Record<string, unknown>, held(bad), idle, () => transcript).kill, false);
   }
 });
 

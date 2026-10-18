@@ -887,7 +887,7 @@ function contract4Args(req: BusRequest): { args: string[] } | { error: string } 
   return { args: settingsToFile(contract4LaunchArgs({ effort: req.effort, advisorModel: advisorModelFor(req.advisor, req.advisorRung) })) };
 }
 
-function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
+function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest, body: Record<string, unknown>): void {
   try {
     if (req.fieldError) {
       /* Contract 4: a field we cannot honour is dead-lettered NAMING it, never silently dropped —
@@ -913,8 +913,10 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
       /* A conditional kill (core/killGuard): the writer said what it saw, and a session that no
          longer matches is left running. Checked here, immediately before the SIGTERM, which
          narrows the window between the writer's check and the kill (it does not remove it).
+         The guard comes from `body`, the request as claimed; the held file is re-read only to
+         confirm it did not change, so a rewrite without `expect` cannot turn into a plain kill.
          decideKill refuses on ANY failure, re-reading the request included. */
-      const verdict = decideKill(() => fs.readFileSync(heldPath, 'utf8'), t, () => (t ? readTranscript(t.sessionId) : ''));
+      const verdict = decideKill(body, () => fs.readFileSync(heldPath, 'utf8'), t, () => (t ? readTranscript(t.sessionId) : ''));
       if (!verdict.kill) { markUndelivered(heldPath, req, verdict.reason); return; }
       if (t) { try { process.kill(t.pid, 'SIGTERM'); } catch { /* already gone */ } }
       emit(win(), 'closeByName', { name: t ? t.name : req.name });
@@ -957,7 +959,7 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
  * RENAME out of the watch glob, stamping who holds it. Returns undefined when we
  * deliberately left it alone.
  */
-function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number } | undefined {
+function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number; body: Record<string, unknown> } | undefined {
   let raw: string;
   try { raw = fs.readFileSync(fsPath, 'utf8'); } catch { return undefined; } // gone / mid-write
   let ageMs = 0;
@@ -995,7 +997,7 @@ function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number 
     fs.writeFileSync(fsPath, JSON.stringify(body, null, 2) + '\n');
     fs.renameSync(fsPath, heldPath);   // atomic: exactly one surface can win
   } catch { return undefined; }        // lost the race, or it vanished — either is fine
-  return { heldPath, req, at };
+  return { heldPath, req, at, body: bodyForTried };
 }
 
 /** Set by initCommandBus so the parse-grace re-check can reach the same pipeline. */
@@ -1014,7 +1016,7 @@ function consume(win: () => BrowserWindow | undefined, fsPath: string): void {
   if (!held0) return;
   const held = { ...held0, req: withRealName(held0.req) };
   if (held.req.action === 'send') void runSend(win, held.heldPath, held.req, held.at);
-  else runImmediate(win, held.heldPath, held.req);
+  else runImmediate(win, held.heldPath, held.req, held.body);
 }
 
 /** Recover `.holding` files left by a crash — but never steal a live sibling's hold. */
@@ -1060,7 +1062,7 @@ function adoptHolds(win: () => BrowserWindow | undefined, dir: string): void {
     try { fs.writeFileSync(p, JSON.stringify(body, null, 2) + '\n'); } catch { /* keep going */ }
     const real = withRealName(req);
     if (real.action === 'send') void runSend(win, p, real, Date.now());
-    else runImmediate(win, p, real);
+    else runImmediate(win, p, real, body);
   }
 }
 
