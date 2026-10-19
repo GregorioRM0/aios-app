@@ -6414,7 +6414,8 @@ const paneOf = (name, id) => {
 window.glassShell.onIntent(async (m) => {
   switch (m.kind) {
     case 'terminal':
-      await createPane({ name: m.name || 'terminal', cmd: m.cmd, background: busBackground(m) });
+      // cwd: a bus request's validated directory (main/busCwd); absent = the framework root.
+      await createPane({ name: m.name || 'terminal', cmd: m.cmd, cwd: typeof m.cwd === 'string' ? m.cwd : undefined, background: busBackground(m) });
       return;
     case 'spawnWorker': void spawnWorkerFlow(); return;
     case 'launchPrimary': { const c = await window.glassShell.shellConfig(); launchPrimary(c.primary || 'aios'); return; }

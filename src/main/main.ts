@@ -19,6 +19,7 @@ import * as pty from 'node-pty';
 import { PanelHost, setPanelLog } from './panelHost';
 import { installMenu } from './menu';
 import { initCommandBus, appLog } from './commandBus';
+import { isBusCwdGranted } from './busCwd';
 setPanelLog(appLog);   // panel notes land in the bus trail (see panelHost)
 import * as caffeine from './caffeinate';
 import { composeBuilderBrief, slugify, type DesignerKind, type DesignerFields } from '../core/designer';
@@ -243,7 +244,9 @@ ipcMain.handle('pty:spawn', (e, opts: { cols: number; rows: number; cmd?: string
     if (!d) return false;
     try { return fs.statSync(d).isDirectory(); } catch { return false; }
   };
-  const requested = opts.cwd && inAllowed(opts.cwd) ? opts.cwd : undefined;
+  /* A bus request's `cwd` is validated where it arrives (main/busCwd: absolute, a directory, inside
+     home) and granted there; it may be outside the explorer's roots, which is the point of it. */
+  const requested = opts.cwd && (inAllowed(opts.cwd) || isBusCwdGranted(opts.cwd)) ? opts.cwd : undefined;
   const cwd = [requested, aios.frameworkRoot(), os.homedir()].find(usable) as string;
   const p = pty.spawn(shell, loginArgs(shell, !!opts.noProfile), {
     name: 'xterm-256color',

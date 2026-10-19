@@ -305,7 +305,8 @@ test('a terminal never spawns into a directory that does not exist', () => {
     'first candidate that EXISTS wins, and $HOME always does');
   assert.doesNotMatch(main, /const fallback = path\.join\(os\.homedir\(\), 'aios'\)/, 'the unchecked fallback is gone');
   // the requested cwd is still confined to the allowed roots
-  assert.match(main, /const requested = opts\.cwd && inAllowed\(opts\.cwd\) \? opts\.cwd : undefined;/);
+  // (or one the command bus validated and granted — main/busCwd: absolute, a directory, inside home)
+  assert.match(main, /const requested = opts\.cwd && \(inAllowed\(opts\.cwd\) \|\| isBusCwdGranted\(opts\.cwd\)\) \? opts\.cwd : undefined;/);
 });
 
 test('setup is TWO phases, and the second only appears once Claude runs', () => {

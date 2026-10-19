@@ -50,6 +50,10 @@ export interface BusRequest {
      which is the honest default — silently spawning would hand back a fresh SOMETHING when the
      caller asked for the same SOMEONE, and that substitution is the whole point of the verb. */
   fallback?: 'spawn';
+  /* spawn/resume: the directory the session's terminal opens in, AS WRITTEN. Validated (absolute,
+     existing, a directory, inside home) by the main side, which has the filesystem — a value it
+     cannot honour is dead-lettered naming the field. Absent = the framework root, as before. */
+  cwd?: string;
   /* Contract 4 (AI-198) — optional, decided by core/contract4 (shared with Glass). */
   from?: string;                // send/resume: the writer's registry name — a claim, not an identity
   effort?: string;              // spawn/resume: low · medium · high · xhigh · max
@@ -126,6 +130,9 @@ export function parseRequest(raw: string): BusRequest | null {
        to, so a future second fallback does not need a second field — and an unrecognised value
        means no fallback rather than a guessed one. */
     fallback: j.fallback === 'spawn' ? 'spawn' : undefined,
+    /* A non-string is kept (stringified) rather than dropped, so it reaches validation and is
+       refused by name instead of quietly opening the session somewhere else. */
+    cwd: j.cwd === undefined || j.cwd === null ? undefined : (typeof j.cwd === 'string' ? j.cwd : JSON.stringify(j.cwd)),
     ...contract4Of(j, action),
   };
 }
@@ -145,6 +152,17 @@ function contract4Of(j: Record<string, unknown>, action: BusAction): Partial<Bus
 export function needsTaskFile(task: string | undefined): boolean {
   if (!task) return false;
   return task.includes('\n') || task.length > 240;
+}
+
+/**
+ * The spawn a `resume` with `"fallback":"spawn"` falls back to. A resume carries its first message
+ * in `prompt`; a spawn reads `task`. Handing the resume request to the spawn path unchanged opened
+ * the fresh session with the generic bootstrap ("Start session") and lost the caller's message —
+ * the one thing the request existed to deliver. Everything else (name, model, tier, cwd, contract-4
+ * fields) carries over as written.
+ */
+export function fallbackSpawnRequest(req: BusRequest): BusRequest {
+  return { ...req, action: 'spawn', task: req.task ?? req.prompt };
 }
 
 /** POSIX single-quote (mirrors renderer app.js:1869 `shq`). */
