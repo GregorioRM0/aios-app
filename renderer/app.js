@@ -6881,6 +6881,44 @@ const RENDERER_KEYS = [
   { group: 'menu.file', label: 'shortcut.save', accel: 'CmdOrCtrl+S' },          // codeedit onSave
 ];
 
+/* ── INSIDE A SESSION ──────────────────────────────────────────────────────────
+   The third half of the sheet, and the one operators actually asked for: the two lists above
+   answer "what can I press in the APP", and nothing answered "what can I press in the SESSION" —
+   how to insert a newline without sending, reach the start of the line, get back a word you
+   deleted. These are Claude Code's own keys (glass, not engine: the App neither implements nor
+   remaps them, except the two ⌘ rows marked macOnly, which attachCustomKeyEventHandler translates
+   for people who come from an editor rather than a terminal).
+   Hand-listed, like RENDERER_KEYS, because nothing can derive them: they live in another program.
+   So the list carries the Claude Code version it was read against, and the sheet prints it, so a
+   row that stops being true is at least dated rather than silently wrong. Verified against
+   https://code.claude.com/docs/en/interactive-mode — the link the sheet offers as the full story.
+   NOT listed on purpose: Ctrl+J, Ctrl+K and Ctrl+P. They are real Claude Code keys, but the pane's
+   key handler swallows ⌘/Ctrl + k/p/j as app shortcuts before xterm sees them, so promising them
+   here would be the sheet lying about the terminal it sits next to (sessionKeys.test.ts guards
+   that). Shift+Enter is not listed either: xterm delivers it as a plain Enter, so it SENDS. */
+const SESSION_KEYS_VERIFIED = '2.1.308';
+const SESSION_KEYS_DOCS = 'https://code.claude.com/docs/en/interactive-mode';
+const SESSION_KEYS = [
+  { label: 'shortcut.sessionNewline', accel: 'Option+Enter / \\+Enter' },
+  { label: 'shortcut.sessionLineEdges', accel: 'Ctrl+A / Ctrl+E' },
+  { label: 'shortcut.sessionLineEdgesMac', accel: '⌘← / ⌘→', macOnly: true },   // ptyWrite \x01 / \x05
+  { label: 'shortcut.sessionWord', accel: 'Option+B / Option+F' },
+  { label: 'shortcut.sessionDeleteWord', accel: 'Ctrl+W' },
+  { label: 'shortcut.sessionDeleteToStart', accel: 'Ctrl+U' },
+  { label: 'shortcut.sessionClearLineMac', accel: 'CmdOrCtrl+Backspace', macOnly: true }, // ptyWrite \x15
+  { label: 'shortcut.sessionUndo', accel: 'Ctrl+_' },
+  { label: 'shortcut.sessionYank', accel: 'Ctrl+Y' },
+  { label: 'shortcut.sessionHistory', accel: 'Ctrl+R' },
+  { label: 'shortcut.sessionInterrupt', accel: 'Esc' },
+  { label: 'shortcut.sessionRewind', accel: 'esc esc' },   // prose stays as written; lower-case to match the single `esc` glyph
+  { label: 'shortcut.sessionMode', accel: 'Shift+Tab' },
+  { label: 'shortcut.sessionEditor', accel: 'Ctrl+G' },
+  { label: 'shortcut.sessionImage', accel: 'Ctrl+V' },
+  { label: 'shortcut.sessionTranscript', accel: 'Ctrl+O' },
+  { label: 'shortcut.sessionCopy', accel: '/copy' },
+  { label: 'shortcut.sessionHelp', accel: '?' },
+];
+
 /** `CmdOrCtrl+Shift+T` → `⌘⇧T` on macOS, `Ctrl+Shift+T` elsewhere.
     TOKENISED, not a chain of replaces. The chained version turned `CmdOrCtrl+Plus` into `⌘` — it
     mapped `Plus` to a literal `+` and then a later step stripped `+` after a modifier glyph,
@@ -6949,6 +6987,24 @@ async function renderShortcuts(wrap) {
     wrap.appendChild(grid);
   }
   if (!rows.length) wrap.appendChild(el('div', 'thint', t('shortcut.none')));
+  /* The session group comes LAST and is never empty: it does not depend on the menu being
+     installed, so it renders even when the app's own rows could not be reported. */
+  const mac = navigator.platform.toLowerCase().includes('mac');
+  wrap.appendChild(el('div', 'ttitle', t('shortcuts.inSession')));
+  const sgrid = el('div', 'kgrid');
+  for (const k of SESSION_KEYS) {
+    if (k.macOnly && !mac) continue;
+    const row = el('div', 'krow');
+    row.appendChild(el('kbd', '', prettyAccel(k.accel)));
+    row.appendChild(el('span', 'klabel', t(k.label)));
+    sgrid.appendChild(row);
+  }
+  wrap.appendChild(sgrid);
+  const hint = el('div', 'thint', t('shortcuts.inSessionHint', { version: SESSION_KEYS_VERIFIED }) + ' ');
+  const docs = el('button', 'chip', t('shortcuts.inSessionDocs'));   // a chip, not a .pbtn: this is a link out, not a panel action
+  docs.addEventListener('click', () => void window.glassShell.openExternal(SESSION_KEYS_DOCS));
+  hint.appendChild(docs);
+  wrap.appendChild(hint);
 }
 
 /* ── Home: the human front door (greeting + big actions) ──────────────────── */
