@@ -36,6 +36,7 @@ const body = `${banner}
     var s = (loc || '').toLowerCase();
     if (s.indexOf('es') === 0) return 'es';
     if (s.indexOf('pt') === 0) return 'pt-br';
+    if (s.indexOf('el') === 0) return 'el';
     return 'en';
   }
   function setLocale(loc) { current = normalize(loc); return current; }

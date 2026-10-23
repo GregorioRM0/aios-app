@@ -287,7 +287,7 @@ async function speakAnswer(p, paneId) {
   /* The ANSWER's language picks the voice (a Spanish answer in an English voice is noise); the
      App's language only when the guess is unsure. */
   const loc = (res.lang === 'pt' ? 'pt-br' : res.lang) || (window.i18n && window.i18n.getLocale()) || 'en';
-  const lang = loc === 'es' ? 'es-MX' : loc === 'pt-br' ? 'pt-BR' : 'en-US';
+  const lang = loc === 'es' ? 'es-MX' : loc === 'pt-br' ? 'pt-BR' : loc === 'el' ? 'el-GR' : 'en-US';
   const u = new SpeechSynthesisUtterance(text);
   u.lang = lang;
   const voice = window.speechSynthesis.getVoices().find((v) => v.lang === lang) || window.speechSynthesis.getVoices().find((v) => v.lang.startsWith(lang.slice(0, 2)));

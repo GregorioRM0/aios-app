@@ -12,9 +12,10 @@
 import en from './locales/en.json';
 import es from './locales/es.json';
 import ptbr from './locales/pt-br.json';
+import el from './locales/el.json';
 
-export type Locale = 'en' | 'es' | 'pt-br';
-export const LOCALES: Locale[] = ['en', 'es', 'pt-br'];
+export type Locale = 'en' | 'es' | 'pt-br' | 'el';
+export const LOCALES: Locale[] = ['en', 'es', 'pt-br', 'el'];
 
 /** A user's stored language preference: a concrete locale, or `auto` (follow the OS). */
 export type LocalePref = 'auto' | Locale;
@@ -24,6 +25,7 @@ const bundles: Record<Locale, Record<string, string>> = {
   en: en as unknown as Record<string, string>,
   es: es as unknown as Record<string, string>,
   'pt-br': ptbr as unknown as Record<string, string>,
+  el: el as unknown as Record<string, string>,
 };
 
 export function localeMeta(): { code: Locale; name: string; nativeName: string }[] {
@@ -45,6 +47,7 @@ export function normalizeLocale(loc: string | undefined | null): Locale {
   const s = (loc || '').toLowerCase();
   if (s.startsWith('es')) return 'es';
   if (s.startsWith('pt')) return 'pt-br';
+  if (s.startsWith('el')) return 'el';
   return 'en';
 }
 
@@ -52,7 +55,7 @@ export function normalizeLocale(loc: string | undefined | null): Locale {
 export function normalizeLocalePref(v: string | undefined | null): LocalePref {
   const s = (v || '').toLowerCase();
   if (s === 'auto' || s === '') return 'auto';
-  if (s === 'en' || s === 'es') return s;
+  if (s === 'en' || s === 'es' || s === 'el') return s;
   if (s.startsWith('pt')) return 'pt-br';
   if (s.startsWith('es')) return 'es';
   return 'auto';
