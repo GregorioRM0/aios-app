@@ -15,6 +15,28 @@ const IS_WIN = !!(window.glassShell && window.glassShell.platform === 'win32');
 /* macOS specifically, not "not Windows" — Linux is neither, and the one place this decides is
    whether a ⌘ can stand for "shortcuts". It cannot anywhere else. */
 const IS_MAC = !!(window.glassShell && window.glassShell.platform === 'darwin');
+/* WHAT A Ctrl+C / Ctrl+V KEYDOWN MEANS IN A TERMINAL, off macOS. Returns 'copy', 'paste', or
+   null — null meaning "not ours": the key goes on exactly as before this existed.
+   Windows Terminal and VS Code's terminal conventions, because that is what an operator on
+   Windows/Linux reaches for first:
+     Ctrl+C / Ctrl+Shift+C with a selection → copy it. Ctrl+C WITHOUT one stays ^C (SIGINT) —
+       that is how Claude Code and every shell get interrupted, so it must never be swallowed.
+       Ctrl+Shift+C without one stays null too: on these platforms it is the menu's Run command.
+     Ctrl+V / Ctrl+Shift+V → paste. Without this xterm turned Ctrl+V into a raw ^V (0x16) for the
+       pty and the clipboard never arrived. That also broke Windows clipboard history: picking an
+       older Win+V entry makes Windows SYNTHESIZE a Ctrl+V into the focused window, so it landed
+       as the same stray ^V.
+   Matched on keyCode, which is what xterm itself uses to produce ^C (keyCode - 64): matching on
+   the same field means the copy check and the SIGINT path can never disagree about which key was
+   pressed, whatever the keyboard layout. AltGr arrives as Ctrl+Alt on Windows, so requiring
+   !altKey keeps AltGr characters out of this. Alt+C / Alt+V are not touched — they still reach
+   the session as ESC-prefixed keys. macOS keeps its ⌘ handling and never comes through here. */
+function termClipboardKey(e, mac, hasSelection) {
+  if (mac || e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.metaKey) return null;
+  if (e.keyCode === 86) return 'paste';
+  if (e.keyCode === 67 && hasSelection) return 'copy';
+  return null;
+}
 /* WAS THIS PROFILE EMPTY WHEN WE LAUNCHED? Captured at script load, before anything in this file
    can write a key, because that is the only moment able to tell a FIRST-EVER launch from a launch
    that merely predates a feature. Asked later it is always false, since we will have written
@@ -3873,6 +3895,23 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
     if ((e.metaKey || e.ctrlKey) && ['k', 'p', 'j'].includes(e.key.toLowerCase())) return false; // app shortcuts win
     /* AI-77 — Option types the character your keyboard makes, when it makes a plain one. */
     if (e.type === 'keydown') { const ch = optionComposedChar(e); if (ch) { e.preventDefault(); window.glassShell.ptyWrite(id, ch); return false; } }   // preventDefault: no second copy via keypress
+    const clip = termClipboardKey(e, IS_MAC, term.hasSelection());
+    if (clip === 'copy') {
+      // preventDefault so the keystroke stays handled: no ^C for the pty, and on Ctrl+Shift+C
+      // no Run command picker opening over the copy.
+      e.preventDefault();
+      void window.glassShell.copyText(term.getSelection());
+      term.clearSelection();
+      return false;
+    }
+    /* PASTE BY NOT HANDLING THE KEY — the same path ⌘V takes on macOS (see the note below).
+       Returning false keeps xterm from turning it into ^V, and deliberately does NOT
+       preventDefault: Chromium's own Ctrl+V then fires the native `paste` event on xterm's
+       textarea, and xterm's paste handler writes it ONCE, bracketed when the session asked for
+       bracketed paste. A hand-rolled readText()+write here would be a second writer racing that
+       one — the double-paste bug ⌘V already had once. Measured in Electron with the real xterm:
+       Ctrl+V and Ctrl+Shift+V each produce exactly one `ESC[200~…ESC[201~` write and no 0x16. */
+    if (clip === 'paste') return false;
     if (e.type !== 'keydown' || !e.metaKey || e.altKey) return true;
     // ⌘ conventions every macOS terminal user expects — and that a non-technical operator
     // will try first. Without these, ⌘C sent nothing and ⌘←/→ did nothing at all.
