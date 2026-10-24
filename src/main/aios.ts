@@ -1320,7 +1320,7 @@ export function dailyNotePath(iso: string): string | undefined {
 
 // ── shell settings (.glass/shell.json — synced beside state.json) ───────────
 
-export interface ShellSettings { claudeCmd: string; showHints: boolean; showNudges: boolean; showMemory: boolean; theme: string; termFontSize: number; chatFontFamily: string; chatFontSize: number; appFontSize: number; hiddenCards: string[]; showHidden: boolean; fileIcons: boolean; autoReveal: boolean; autoOpenExports: boolean; showWeekNumbers: boolean; killBehavior: 'ask' | 'kill' | 'capture'; terminalMode: 'auto' | 'ask'; caffeinate: CaffeinateMode; lidAwake: boolean; lidAsked: boolean; openNotesIn: 'rendered' | 'source'; ignorePaths: string[]; locale: LocalePref; attention: NotifyLevel; busFocus: 'stay' | 'follow'; }
+export interface ShellSettings { claudeCmd: string; showHints: boolean; showNudges: boolean; showMemory: boolean; theme: string; termFontSize: number; chatFontFamily: string; chatFontSize: number; chatViewDefault: boolean; appFontSize: number; hiddenCards: string[]; showHidden: boolean; fileIcons: boolean; autoReveal: boolean; autoOpenExports: boolean; showWeekNumbers: boolean; killBehavior: 'ask' | 'kill' | 'capture'; terminalMode: 'auto' | 'ask'; caffeinate: CaffeinateMode; lidAwake: boolean; lidAsked: boolean; openNotesIn: 'rendered' | 'source'; ignorePaths: string[]; locale: LocalePref; attention: NotifyLevel; busFocus: 'stay' | 'follow'; }
 
 /** Operator-defined names/globs the explorer hides AND git status ignores
  *  (no pending-commit bubble) — the desktop analog of VS Code's `files.exclude`
@@ -1355,6 +1355,9 @@ export function shellSettings(): ShellSettings {
     // conversation unreadable or the composer overflow
     chatFontFamily: typeof raw.chatFontFamily === 'string' ? raw.chatFontFamily.trim().slice(0, 200) : '',
     chatFontSize: Math.min(28, Math.max(10, Number(raw.chatFontSize) || 14)),
+    // new terminal tabs open in the chat skin instead of the raw terminal. Opt-in: only a literal
+    // `true` turns it on, so a hand-edit or an older file lands on the terminal everyone knows.
+    chatViewDefault: raw.chatViewDefault === true,
     // interface scale, in the same "font size" language as the terminal's — 13 is 100%.
     // Applied as a real zoom factor (crisp text) rather than restyling every rule.
     appFontSize: Math.min(18, Math.max(10, Number(raw.appFontSize) || 13)),

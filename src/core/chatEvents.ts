@@ -1,12 +1,9 @@
 /**
- * Chat view — the PURE half of the main-process bridge (no electron, no fs).
- *
- * Three jobs, all of them string/number shaping that must be testable without a window:
- *  (a) translate the messages of a Claude Code session (Agent SDK `query()` output, or the lines of
- *      `claude -p --output-format stream-json`, which are the same objects) into the ChatEvent
- *      contract the renderer consumes;
- *  (b) mergeStatus — build the usage bar's ChatStatus, preferring what the live session said;
- *  (c) parseStatuslinePayload — read the payload Claude Code's statusline dumps to disk.
+ * Chat skin — the small pure helpers the usage bar and the tool lines share (no electron, no fs):
+ *  (a) parseStatuslinePayload — read the payload Claude Code's statusline dumps to disk;
+ *  (b) mergeStatus — build the usage bar's ChatStatus from one or more sources;
+ *  (c) summarizeTool — one line saying what a tool call is about.
+ * The conversation itself comes from the transcript (core/transcriptChat.ts), not from here.
  *
  * THE RULE FOR EVERY NUMBER HERE: an absent field stays `undefined`. A bar that shows "0%" because
  * a field was missing is a fabricated reading, and the operator would trust it. Nothing in this
@@ -27,24 +24,6 @@ export interface ChatStatus {
 
 /** A ChatStatus without its provenance — what one source can contribute on its own. */
 export type StatusFields = Omit<ChatStatus, 'source'>;
-
-export type ChatEventBody =
-  | { type: 'ready'; sessionId?: string; model?: string }
-  | { type: 'turn-start'; turnId: string }
-  /** Incremental text; the renderer concatenates. */
-  | { type: 'delta'; turnId: string; text: string }
-  /** The complete text of the assistant block — replaces whatever the deltas built. */
-  | { type: 'turn-end'; turnId: string; text: string }
-  | { type: 'tool'; turnId?: string; name: string; summary: string }
-  | { type: 'permission'; requestId: string; toolName: string; summary: string; input: unknown }
-  | { type: 'permission-resolved'; requestId: string; allow: boolean }
-  | { type: 'result'; isError: boolean; interrupted?: boolean }
-  | { type: 'status'; status: ChatStatus }
-  /** `code` is stable so the renderer can translate it through i18n; `message` is the raw detail. */
-  | { type: 'error'; code: string; message: string }
-  | { type: 'exit' };
-
-export type ChatEvent = { id: number } & ChatEventBody;
 
 // ── small, defensive readers ────────────────────────────────────────────────
 
@@ -77,7 +56,7 @@ function firstPresent(o: unknown, paths: string[]): unknown {
   return undefined;
 }
 
-// ── (c) the statusline payload ──────────────────────────────────────────────
+// ── (a) the statusline payload ──────────────────────────────────────────────
 
 /**
  * Read `~/.claude/statusline-payload.json` (already read to a string, or parsed). Field paths and
@@ -125,7 +104,7 @@ export function parseStatuslinePayload(input: unknown): StatusFields {
   return out;
 }
 
-// ── (b) merging the two sources ─────────────────────────────────────────────
+// ── (b) merging sources ─────────────────────────────────────────────
 
 const FIELDS = ['fiveHourPct', 'sevenDayPct', 'contextPct', 'model', 'effort'] as const;
 
@@ -152,7 +131,7 @@ export function mergeStatus(sdk: StatusFields | undefined, file: StatusFields | 
   return out;
 }
 
-// ── (a) message → event translation ─────────────────────────────────────────
+// ── (c) one line per tool call ──────────────────────────────────────────────
 
 /** One line saying what a tool call is about — enough to recognise it, not to audit it. */
 export function summarizeTool(name: string, input: unknown): string {
@@ -179,183 +158,4 @@ export function summarizeTool(name: string, input: unknown): string {
   if (s === undefined) { try { s = JSON.stringify(input) ?? ''; } catch { s = ''; } }
   s = s.replace(/\s+/g, ' ').trim();
   return s.length > 160 ? s.slice(0, 159) + '…' : s;
-}
-
-export interface ChatTranslator {
-  /** Feed one SDK message; get the events it produces (possibly none). Never throws. */
-  push(msg: unknown): ChatEvent[];
-  /** Same, for a raw stream-json line (the CLI fallback). Blank or unparseable lines yield []. */
-  pushLine(line: string): ChatEvent[];
-  /** Tell the translator the operator interrupted, so the next `result` is flagged as such. */
-  noteInterrupt(): void;
-  /** What the live session has said about itself so far (model, context). */
-  sdkStatus(): StatusFields;
-  sessionId(): string | undefined;
-}
-
-/** Which of `modelUsage`'s entries describes the model in use. Keys may carry a `[1m]` suffix the
- *  message's own model id lacks, and the map also holds helper models, so match loosely. */
-function usageFor(modelUsage: unknown, model: string | undefined): Obj | undefined {
-  if (!isObj(modelUsage)) return undefined;
-  const keys = Object.keys(modelUsage);
-  const base = (k: string): string => k.replace(/\[.*\]$/, '');
-  if (model) {
-    const k = keys.find((x) => x === model) ?? keys.find((x) => base(x) === base(model));
-    if (k && isObj(modelUsage[k])) return modelUsage[k] as Obj;
-  }
-  return keys.length === 1 && isObj(modelUsage[keys[0]]) ? (modelUsage[keys[0]] as Obj) : undefined;
-}
-
-export function createChatTranslator(id: number): ChatTranslator {
-  let turnSeq = 0;
-  let open: { turnId: string; text: string } | undefined;   // a text block that is streaming right now
-  let interrupted = false;
-  let sessionId: string | undefined;
-  let announcedModel: string | undefined;
-  let announcedSession: string | undefined;
-  const st: StatusFields = {};
-  let lastCtxTokens: number | undefined;
-  let ctxWindow: number | undefined;
-
-  const ev = (b: ChatEventBody): ChatEvent => ({ id, ...b }) as ChatEvent;
-  const newTurn = (): string => `t${++turnSeq}`;
-
-  function recomputeContext(): void {
-    if (lastCtxTokens !== undefined && ctxWindow !== undefined && ctxWindow > 0) {
-      st.contextPct = Math.round(clampPct((lastCtxTokens / ctxWindow) * 100));
-    }
-  }
-
-  function closeOpen(out: ChatEvent[]): void {
-    if (!open) return;
-    out.push(ev({ type: 'turn-end', turnId: open.turnId, text: open.text }));
-    open = undefined;
-  }
-
-  function onStreamEvent(m: Obj, out: ChatEvent[]): void {
-    if (m.parent_tool_use_id) return;              // a subagent's chatter is not the operator's conversation
-    const e = m.event;
-    if (!isObj(e) || e.type !== 'content_block_delta' || !isObj(e.delta)) return;
-    if (e.delta.type !== 'text_delta') return;     // thinking / tool-input deltas are not shown
-    const text = typeof e.delta.text === 'string' ? e.delta.text : '';
-    if (!text) return;
-    // The turn opens on the first text, not on message_start: an assistant message that only calls
-    // tools would otherwise leave an empty bubble behind.
-    if (!open) {
-      open = { turnId: newTurn(), text: '' };
-      out.push(ev({ type: 'turn-start', turnId: open.turnId }));
-    }
-    open.text += text;
-    out.push(ev({ type: 'delta', turnId: open.turnId, text }));
-  }
-
-  function onAssistant(m: Obj, out: ChatEvent[]): void {
-    if (m.parent_tool_use_id) return;
-    const msg = isObj(m.message) ? m.message : {};
-    const model = str(msg.model);
-    if (model && model !== '<synthetic>') st.model = model;
-    const usage = isObj(msg.usage) ? msg.usage : undefined;
-    if (usage) {
-      const parts = [usage.input_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].map(num);
-      // only trust it when the input side is actually reported; a lone output count is not "context"
-      if (parts.some((p) => p !== undefined) && parts[0] !== undefined) {
-        lastCtxTokens = parts.reduce<number>((a, p) => a + (p ?? 0), 0);
-        recomputeContext();
-      }
-    }
-    const content = Array.isArray(msg.content) ? msg.content : [];
-    const texts: string[] = [];
-    const tools: { name: string; input: unknown }[] = [];
-    for (const b of content) {
-      if (!isObj(b)) continue;
-      if (b.type === 'text' && typeof b.text === 'string') texts.push(b.text);
-      else if (b.type === 'tool_use') tools.push({ name: str(b.name) ?? 'tool', input: b.input });
-    }
-    const text = texts.join('');
-    let turnId: string | undefined;
-    if (text.trim()) {
-      if (open) { turnId = open.turnId; open = undefined; }
-      else { turnId = newTurn(); out.push(ev({ type: 'turn-start', turnId })); }   // streaming was off
-      out.push(ev({ type: 'turn-end', turnId, text }));
-    } else if (open) {
-      // streamed text that the final message did not echo (should not happen) — still finalise it
-      closeOpen(out);
-    }
-    for (const t of tools) out.push(ev({ type: 'tool', ...(turnId ? { turnId } : {}), name: t.name, summary: summarizeTool(t.name, t.input) }));
-    if (m.error) out.push(ev({ type: 'error', code: 'turn-failed', message: String(m.error) }));
-  }
-
-  function onSystem(m: Obj, out: ChatEvent[]): void {
-    if (m.subtype !== 'init') return;
-    sessionId = str(m.session_id) ?? sessionId;
-    const model = str(m.model);
-    if (model) st.model = model;
-    // the SDK repeats init every turn; only tell the renderer when something actually changed
-    if (sessionId !== announcedSession || st.model !== announcedModel) {
-      announcedSession = sessionId; announcedModel = st.model;
-      out.push(ev({ type: 'ready', ...(sessionId ? { sessionId } : {}), ...(st.model ? { model: st.model } : {}) }));
-    }
-  }
-
-  function onResult(m: Obj, out: ChatEvent[]): void {
-    closeOpen(out);
-    const wasInterrupted = interrupted;
-    interrupted = false;
-    const u = usageFor(m.modelUsage, st.model);
-    const win = u ? num(u.contextWindow) : undefined;
-    if (win !== undefined && win > 0) { ctxWindow = win; recomputeContext(); }
-    const isError = m.is_error === true && !wasInterrupted;
-    if (isError) {
-      const errs = Array.isArray(m.errors) ? (m.errors as unknown[]).filter((x) => typeof x === 'string').join('; ') : '';
-      out.push(ev({ type: 'error', code: 'turn-failed', message: errs || str(m.result) || str(m.subtype) || 'turn failed' }));
-    }
-    out.push(ev({ type: 'result', isError, ...(wasInterrupted ? { interrupted: true } : {}) }));
-  }
-
-  /**
-   * Plan usage as the live session reports it. MEASURED against a real session: `utilization` is a
-   * FRACTION (0.77 = 77%), and the event carries both windows under `unifiedWindows`, so one event
-   * refreshes the 5-hour and the weekly reading together. It is also fresher than the statusline
-   * file, which is only rewritten when some terminal session repaints its status line.
-   */
-  function onRateLimit(m: Obj): void {
-    const info = isObj(m.rate_limit_info) ? m.rate_limit_info : undefined;
-    if (!info) return;
-    const frac = (v: unknown): number | undefined => { const n = num(v); return n === undefined ? undefined : Math.round(clampPct(n * 100)); };
-    const w = isObj(info.unifiedWindows) ? info.unifiedWindows : undefined;
-    const five = frac(isObj(w?.five_hour) ? (w?.five_hour as Obj).utilization : undefined)
-      ?? (info.rateLimitType === 'five_hour' ? frac(info.utilization) : undefined);
-    const seven = frac(isObj(w?.seven_day) ? (w?.seven_day as Obj).utilization : undefined)
-      ?? (info.rateLimitType === 'seven_day' ? frac(info.utilization) : undefined);
-    if (five !== undefined) st.fiveHourPct = five;
-    if (seven !== undefined) st.sevenDayPct = seven;
-  }
-
-  function push(msg: unknown): ChatEvent[] {
-    const out: ChatEvent[] = [];
-    try {
-      if (!isObj(msg)) return out;
-      switch (msg.type) {
-        case 'stream_event': onStreamEvent(msg, out); break;
-        case 'assistant': onAssistant(msg, out); break;
-        case 'system': onSystem(msg, out); break;
-        case 'result': onResult(msg, out); break;
-        case 'rate_limit_event': onRateLimit(msg); break;
-        default: break;
-      }
-    } catch { /* a malformed message must not take the conversation down */ }
-    return out;
-  }
-
-  return {
-    push,
-    pushLine(line: string): ChatEvent[] {
-      const s = line.trim();
-      if (!s) return [];
-      try { return push(JSON.parse(s)); } catch { return []; }
-    },
-    noteInterrupt(): void { interrupted = true; },
-    sdkStatus(): StatusFields { return { ...st }; },
-    sessionId(): string | undefined { return sessionId; },
-  };
 }

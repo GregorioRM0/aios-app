@@ -1,5 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { ChatEvent, ChatStatus } from '../core/chatEvents';   // types only: nothing from core is bundled into the preload
+// types only: nothing from core is bundled into the preload
+import type { ChatStatus } from '../core/chatEvents';
+import type { ChatItem } from '../core/transcriptChat';
+import type { TuiPromptKind } from '../core/tuiPrompt';
 
 /** One row of the Connectors card. Mirrors main/connectors.ts ConnectorRow. */
 type ConnRow = {
@@ -9,6 +12,18 @@ type ConnRow = {
   canConnect: boolean; hint?: string; pending: string[]; custom: boolean; tracked: boolean; docs?: string;
 };
 type ConnResult = { ok: boolean; error?: string; row?: ConnRow };
+
+/** Events on 'chatSkin:event'. `reset` empties the view (before a backfill or on a file change);
+ *  `items` upserts by uuid; `prompt` with kind null means the terminal dialog is gone. */
+type ChatSkinEvent = { paneId: number } & (
+  | { type: 'reset' }
+  | { type: 'items'; items: ChatItem[] }
+  | { type: 'turn'; open: boolean }
+  | { type: 'usage'; contextTokens?: number; model?: string }
+  | { type: 'prompt'; kind: TuiPromptKind | null; hint?: string }
+  | { type: 'missing' }
+  | { type: 'error'; code: string }
+);
 
 
 /** The renderer's window into the shell — PTY now; pickers/watchers/state next. */
@@ -34,15 +49,13 @@ contextBridge.exposeInMainWorld('glassShell', {
   },
   updaterCheck: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
   updaterInstall: (): Promise<unknown> => ipcRenderer.invoke('updater:quitAndInstall'),
-  /* CHAT VIEW — a Claude Code session driven through the Agent SDK in main (chatSession.ts), as
-     structured events instead of a terminal screen. Event and status shapes: core/chatEvents.ts. */
-  chatStart: (opts: { startSession?: boolean }): Promise<{ ok: true; id: number } | { ok: false; error: string }> => ipcRenderer.invoke('chat:start', opts),
-  chatSend: (id: number, text: string): Promise<void> => ipcRenderer.invoke('chat:send', id, text),
-  chatInterrupt: (id: number): Promise<void> => ipcRenderer.invoke('chat:interrupt', id),
-  chatPermission: (id: number, requestId: string, allow: boolean): Promise<void> => ipcRenderer.invoke('chat:permission', id, requestId, allow),
-  chatClose: (id: number): Promise<void> => ipcRenderer.invoke('chat:close', id),
+  /* CHAT SKIN — a chat view over a terminal tab. The tab's pty stays the only session; main follows
+     its transcript file live and reports what the TUI is waiting on. `paneId` is the pty id.
+     chatStatus is the usage bar: the last statusline payload ANY session wrote (global, not per tab). */
+  chatSkinWatch: (paneId: number, sessionId: string): Promise<{ ok: true; file: string } | { ok: false; error: string }> => ipcRenderer.invoke('chatSkin:watch', paneId, sessionId),
+  chatSkinUnwatch: (paneId: number): Promise<void> => ipcRenderer.invoke('chatSkin:unwatch', paneId),
+  onChatSkinEvent: (cb: (ev: ChatSkinEvent) => void): void => { ipcRenderer.on('chatSkin:event', (_e, ev) => cb(ev)); },
   chatStatus: (): Promise<ChatStatus> => ipcRenderer.invoke('chat:status'),
-  onChatEvent: (cb: (ev: ChatEvent) => void): void => { ipcRenderer.on('chat:event', (_e, ev) => cb(ev)); },
   ptyWrite: (id: number, data: string) => ipcRenderer.send('pty:write', { id, data }),
   programStatus: (sessionId: string, data: string, at: number) => ipcRenderer.send('pty:programStatus', { sessionId, data, at }),
   paneSessions: (ids: string[]) => ipcRenderer.send('panes:sessions', ids),

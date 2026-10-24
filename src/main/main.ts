@@ -2,7 +2,9 @@ import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, session, n
 import { markQuitting, isQuitting, closeShouldHide } from './quitState';
 import { installWebPermissionPolicy } from './webPermissions';
 import { withDefaultLocale } from './termLocale';
-import { createChatManager } from './chatSession';
+import { createTranscriptTail, isSessionId } from './transcriptTail';
+import { createPromptMonitor, type PromptMonitor } from '../core/tuiPrompt';
+import { mergeStatus, parseStatuslinePayload } from '../core/chatEvents';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
 import { plainText } from '../core/plainText';
 import { askSessionName, uniqueName } from '../core/sessionName';
@@ -254,8 +256,11 @@ ipcMain.handle('pty:spawn', (e, opts: { cols: number; rows: number; cmd?: string
   });
   const id = nextId++;
   ptys.set(id, p);
-  p.onData((data) => { if (!e.sender.isDestroyed()) e.sender.send('pty:data', { id, data }); });
-  p.onExit(({ exitCode }) => { ptys.delete(id); if (!e.sender.isDestroyed()) e.sender.send('pty:exit', { id, exitCode }); });
+  p.onData((data) => {
+    if (!e.sender.isDestroyed()) e.sender.send('pty:data', { id, data });
+    skins.get(id)?.monitor.push(data);   // chat skin only: is the TUI waiting on a dialog? (no-op for every other pane)
+  });
+  p.onExit(({ exitCode }) => { ptys.delete(id); void endSkin(id, true); if (!e.sender.isDestroyed()) e.sender.send('pty:exit', { id, exitCode }); });
   /* THE COMMAND IS NOT WRITTEN HERE ANY MORE — see `pty:run`.
      It used to run right at spawn, while the pty was still at the hardcoded 80×24 the renderer
      passes before it has measured anything. A shell prompt survives that (it reflows), but a
@@ -275,34 +280,59 @@ ipcMain.handle('pty:run', (_e, { id, cmd }: { id: number; cmd: string }) => {
 });
 ipcMain.on('pty:write', (_e, { id, data }: { id: number; data: string }) => ptys.get(id)?.write(data));
 ipcMain.on('pty:resize', (_e, { id, cols, rows }: { id: number; cols: number; rows: number }) => ptys.get(id)?.resize(cols, rows));
-ipcMain.on('pty:kill', (_e, { id }: { id: number }) => { ptys.get(id)?.kill(); ptys.delete(id); });
+ipcMain.on('pty:kill', (_e, { id }: { id: number }) => { ptys.get(id)?.kill(); ptys.delete(id); void endSkin(id, false); });
 
-/* ── CHAT VIEW BRIDGE ────────────────────────────────────────────────────────────────────────────
-   A chat tab is a persistent Claude Code session driven through the Agent SDK (chatSession.ts),
-   not a pty. This is the whole IPC surface; the manager itself knows nothing about electron.
-   A session starts where a primary terminal would (vault root, else ~/aios) and gets the SAME
-   environment as a terminal — termEnv with the primary session's name — so the vault's
-   Mandatory First Action and the transcript-persistence flags behave identically. */
-const chat = createChatManager({
-  cwd: () => aios.vaultRoot() ?? path.join(os.homedir(), 'aios'),
-  env: () => termEnv(undefined, aios.primaryName()),
-  claudeCmd: () => aios.shellSettings().claudeCmd,
-  statuslinePath: () => path.join(aios.claudeConfigDir(), 'statusline-payload.json'),
-});
-ipcMain.handle('chat:start', async (e, opts: { startSession?: boolean } | undefined) => {
+/* ── CHAT SKIN ───────────────────────────────────────────────────────────────────────────────────
+   The chat view is a SKIN over a terminal pane, not a second session. The pty and the `claude`
+   process inside it stay the only source of truth; the chat reads along in two ways:
+     · the session's transcript file, followed live (transcriptTail → core/transcriptChat), which
+       gives the conversation, tool lines, the turn state and the context size;
+     · the tail of the pty's own output, only to notice that the TUI is waiting on a dialog the
+       transcript cannot show (permission, folder trust, a picker, a question — core/tuiPrompt).
+   The chat never types for the operator and never answers a dialog; it points at the terminal.
+   `paneId` IS the pty id: pty:spawn returns it, the renderer keys its `panes` Map and ptyWrite by
+   it, and `ptys` is keyed by it here — one number all the way through. */
+interface Skin { sender: Electron.WebContents; monitor: PromptMonitor; onGone: () => void; }
+const skins = new Map<number, Skin>();
+const tail = createTranscriptTail();
+
+async function endSkin(paneId: number, flush: boolean): Promise<void> {
+  const k = skins.get(paneId);
+  if (!k) return;
+  skins.delete(paneId);
+  k.monitor.dispose();
+  try { k.sender.removeListener('destroyed', k.onGone); } catch { /* sender already gone */ }
+  if (flush) await tail.finish(paneId).catch(() => tail.unwatch(paneId));   // a session's last lines land just before it exits
+  else tail.unwatch(paneId);
+}
+
+ipcMain.handle('chatSkin:watch', async (e, paneId: number, sessionId: string): Promise<{ ok: true; file: string } | { ok: false; error: 'not-found' | 'bad-id' }> => {
+  const id = Number(paneId);
+  if (!Number.isInteger(id) || id < 0 || !isSessionId(sessionId)) return { ok: false, error: 'bad-id' };
+  await endSkin(id, false);                       // one watch per pane: a new session id replaces the old one
   const sender = e.sender;
-  const r = await chat.start({ startSession: !!opts?.startSession }, (ev) => {
-    if (!sender.isDestroyed()) sender.send('chat:event', ev);
+  const send = (ev: unknown): void => { if (!sender.isDestroyed()) sender.send('chatSkin:event', ev); };
+  const monitor = createPromptMonitor({
+    onChange: (kind, hint) => send({ paneId: id, type: 'prompt', kind, ...(hint ? { hint } : {}) }),
   });
-  // A reload or closed window must not leave the claude child running with nobody listening.
-  if (r.ok) sender.once('destroyed', () => chat.close(r.id));
-  return r;
+  const onGone = (): void => { void endSkin(id, false); };
+  sender.once('destroyed', onGone);               // a closed or reloaded window must not leave a watcher behind
+  skins.set(id, { sender, monitor, onGone });
+  return tail.watch(id, sessionId, (ev) => {
+    // a finished tool or a new operator message proves the dialog that was open has been answered
+    if (ev.type === 'items' && ev.items.some((it) => it.role === 'user' || (it.tool && it.tool.status !== 'running'))) monitor.clear();
+    send(ev);
+  });
 });
-ipcMain.handle('chat:send', (_e, id: number, text: string) => { chat.sendText(Number(id), String(text ?? '')); });
-ipcMain.handle('chat:interrupt', (_e, id: number) => chat.interrupt(Number(id)));
-ipcMain.handle('chat:permission', (_e, id: number, requestId: string, allow: boolean) => { chat.permission(Number(id), String(requestId), !!allow); });
-ipcMain.handle('chat:close', (_e, id: number) => { chat.close(Number(id)); });
-ipcMain.handle('chat:status', () => chat.fileStatus());
+ipcMain.handle('chatSkin:unwatch', (_e, paneId: number) => endSkin(Number(paneId), false));
+/* The usage bar. ~/.claude/statusline-payload.json is the LAST payload ANY Claude Code session on this
+   machine wrote, so it describes the most recently active session, not necessarily this tab: the
+   renderer prefers the transcript's own context/model for the tab and uses this for the account-wide
+   numbers (5-hour, weekly). An absent field stays absent — nothing here defaults a percentage to 0. */
+ipcMain.handle('chat:status', async () => {
+  try { return mergeStatus(undefined, parseStatuslinePayload(await fs.promises.readFile(path.join(aios.claudeConfigDir(), 'statusline-payload.json'), 'utf8'))); }
+  catch { return mergeStatus(undefined, {}); }   // no file yet, or unreadable: the bar just has fewer fields
+});
 
 let host: PanelHost | undefined;
 
@@ -1197,7 +1227,7 @@ ipcMain.handle('claude:set', (_e, key: 'model' | 'effort' | 'advisor' | 'mode' |
   aios.setClaudeConfig(key, value);
   return aios.claudeConfig();
 });
-ipcMain.handle('shell:setSetting', (_e, key: 'claudeCmd' | 'showHints' | 'showNudges' | 'showMemory' | 'theme' | 'termFontSize' | 'chatFontFamily' | 'chatFontSize' | 'showHidden' | 'fileIcons' | 'autoReveal' | 'autoOpenExports' | 'showWeekNumbers' | 'killBehavior' | 'terminalMode' | 'openNotesIn' | 'appFontSize' | 'hiddenCards' | 'ignorePaths' | 'locale' | 'caffeinate' | 'attention' | 'busFocus' | 'lidAsked', value: unknown) => {
+ipcMain.handle('shell:setSetting', (_e, key: 'claudeCmd' | 'showHints' | 'showNudges' | 'showMemory' | 'theme' | 'termFontSize' | 'chatFontFamily' | 'chatFontSize' | 'showHidden' | 'fileIcons' | 'autoReveal' | 'autoOpenExports' | 'showWeekNumbers' | 'killBehavior' | 'terminalMode' | 'openNotesIn' | 'appFontSize' | 'hiddenCards' | 'ignorePaths' | 'locale' | 'caffeinate' | 'attention' | 'busFocus' | 'lidAsked' | 'chatViewDefault', value: unknown) => {
   aios.setShellSetting(key, value);
   /* AI-132: changing the RULE retires any override — otherwise you switch manual→auto and watch
      auto not follow sessions, with nothing on screen explaining why. Applies immediately rather
@@ -1343,7 +1373,7 @@ app.whenReady().then(() => {
      so the common case — roots that already exist — costs nothing after the first tick. */
   const rootPoll = setInterval(() => { if (!win.isDestroyed()) rewireForRoots(win); }, 4000);
   win.on('closed', () => clearInterval(rootPoll));
-  win.on('closed', () => chat.closeAll());   // macOS hides the window instead of closing it, so this is a real teardown
+  win.on('closed', () => { tail.unwatchAll(); for (const id of [...skins.keys()]) void endSkin(id, false); });   // macOS hides the window instead of closing it, so this is a real teardown
   win.on('closed', () => { host?.dispose(); host = undefined; for (const w of explorerWatchers.splice(0)) { try { w.close(); } catch { /* ignore */ } } });
   if (EVAL) {
     const expr = EVAL.slice('--eval='.length);
@@ -1855,7 +1885,7 @@ app.whenReady().then(() => {
 /* Every real quit passes through here first, so the close handler above lets the windows go. */
 app.on('before-quit', markQuitting);
 /* The chat sessions are child processes of this app; closing them here keeps a quit from orphaning them. */
-app.on('before-quit', () => chat.closeAll());
+app.on('before-quit', () => { tail.unwatchAll(); for (const id of [...skins.keys()]) void endSkin(id, false); });
 /* The Dock icon brings the hidden window back. */
 app.on('activate', () => {
   if (mainWin && !mainWin.isDestroyed()) { mainWin.show(); mainWin.focus(); }
