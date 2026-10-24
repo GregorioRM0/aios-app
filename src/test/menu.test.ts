@@ -721,3 +721,15 @@ test("what's new opens once after an update, and its copy cannot describe the la
   assert.doesNotMatch(app2, /el\('(?:div|button)', 'hcard'[^\n]*whatsnew/, 'informational cards are not buttons');
   assert.match(css, /\.wncard \{/, 'they have their own card class that mirrors Home\'s tokens');
 });
+
+test('the Start button opens ANOTHER primary session; the menu item still reveals', () => {
+  /* Operators run several primary sessions at once, one per topic, by typing the primary's name
+     in a terminal again. The Start button used to reveal the first live one and do nothing else,
+     so with one already open it looked dead and a second session needed a shell. */
+  assert.match(app, /launch\.addEventListener\('click', \(\) => launchPrimary\(primary, \{ fresh: true \}\)\)/,
+    'the Start button asks for a fresh session');
+  assert.match(app, /if \(!fresh && hit && !panes\.get\(hit\[0\]\)\.exited\) \{ setActive\(hit\[0\]\); return; \}/,
+    'reveal-or-create only applies when fresh is not asked for');
+  assert.match(app, /case 'launchPrimary': \{ const c = await window\.glassShell\.shellConfig\(\); launchPrimary\(c\.primary \|\| 'aios'\); return; \}/,
+    'the menu item keeps reveal-or-create');
+});

@@ -966,7 +966,7 @@ function renderActionCards(m) {
   // a vault with no Identity row falls back to 'aios' — render it as the brand, not a
   // lowercase handle, so the button never reads "Launch aios"
   const launch = el('button', 'pbtn primary'); launch.textContent = t('pulse.launch', { name: primary === 'aios' ? 'AIOS' : primary });
-  launch.addEventListener('click', () => launchPrimary(primary));
+  launch.addEventListener('click', () => launchPrimary(primary, { fresh: true }));
   const resume = el('button', 'pbtn'); resume.textContent = t('pulse.resume');
   /* RESUME OPENS THE SELECTOR, not Claude's TUI picker. Three reasons: our list is ordered by
      recency and multi-select, it EXCLUDES sessions already open (the TUI happily offers to resume
@@ -8956,10 +8956,16 @@ function openDesignerTab() {
   });
 }
 
-/* Launch (or reveal) the primary session — no trailing prompt. */
-function launchPrimary(primary) {
+/* Launch (or reveal) the primary session — no trailing prompt.
+   `fresh` is the Start button: it always opens ANOTHER primary session, the same as typing the
+   primary's name in a terminal again. Operators run several primary sessions side by side, one
+   per topic, and a button that only ever revealed the first one made the second one reachable
+   only from a shell. Same-named panes are already a supported state (`ambiguous()` guards every
+   name-addressed action), and rituals still land in the first one via `runInPrimary`. The menu
+   item keeps reveal-or-create: "open my primary session" reads as go-to, not add-another. */
+function launchPrimary(primary, { fresh = false } = {}) {
   const hit = byName(primary);
-  if (hit && !panes.get(hit[0]).exited) { setActive(hit[0]); return; }
+  if (!fresh && hit && !panes.get(hit[0]).exited) { setActive(hit[0]); return; }
   void createPane({ name: primary, cmd: CLAUDE + ' --name ' + primary + ' ' + shq(RITUAL_BOOTSTRAP) });
 }
 
