@@ -1529,3 +1529,95 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .pane.restorecard { display: flex; align-items: center; justify-content: center; }
 .restoremsg { color: var(--subtle); font-size: 12px; }
 
+/* ═══ Chat skin — a view over a terminal pane (see "CHAT SKIN" in app.js) ═══════════
+   Everything is a token. The overlay covers the pane; the xterm underneath keeps its box (only
+   `visibility` changes, never `display`) so the pty's geometry never moves because of the skin.
+   Font and size arrive as --chat-font / --chat-size set on the overlay by app.js.
+   NEVER write `visibility: visible` on a child here: a pane hidden by `.panehidden` hides its
+   children by inheritance, and an explicit `visible` would punch through it. */
+.pane.termcard.view-chat .twrap { visibility: hidden; }
+.pane.termcard.view-chat.cs-strip .twrap { visibility: inherit; }   /* a dialog is up: the real terminal shows through below the bubbles */
+.chatskin { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; min-height: 0;
+            background: var(--surface); border-radius: inherit; --chat-font: inherit; --chat-size: 14; }
+.chatskin[hidden], .chatskin [hidden] { display: none !important; }
+.pane.cs-strip > .chatskin { bottom: var(--cs-strip-h, 62%); min-height: 120px; border-bottom: 1px solid var(--line-strong); border-radius: 12px 12px 0 0; }
+.pane.cs-strip > .chatskin .chat-usage, .pane.cs-strip > .chatskin .chat-compose, .pane.cs-strip > .chatskin .cs-working { display: none; }
+.cs-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.cs-fill { flex: 1; }
+.cs-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.cs-sw { background: transparent; border: 0; color: var(--subtle); font-family: var(--font); font-size: 11.5px; padding: 4px 12px; cursor: pointer; }
+.cs-sw:hover, .cs-sw:focus-visible { color: var(--ink); outline: none; }
+.cs-sw[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); box-shadow: inset 0 -1.5px 0 var(--accent); }
+.tab .tview { display: inline-flex; align-items: center; color: var(--faint); border-radius: 4px; padding: 1px; cursor: pointer; }
+.tab .tview:hover, .tab .tview:focus-visible { color: var(--accent-ink); outline: none; }
+.tab .tview.on { color: var(--accent-ink); }
+.tab .tview[hidden] { display: none; }
+.cs-working { display: flex; align-items: center; gap: 7px; padding: 4px 16px; flex: 0 0 auto; font-size: 11.5px; color: var(--subtle); }
+.cs-working::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--st-busy); animation: chatpulse 1.1s ease-in-out infinite; }
+.cs-alert { --sc: var(--st-warn); display: flex; align-items: center; gap: 12px; padding: 8px 14px; flex: 0 0 auto; color: var(--ink); font-size: 12.5px;
+            background: color-mix(in srgb, var(--sc) 10%, var(--surface)); border-top: 1px solid color-mix(in srgb, var(--sc) 42%, transparent); }
+.cs-alert.prompt { --sc: var(--st-input); }   /* waiting on the operator: the same hue as everywhere else in the app */
+.cs-alert-text { flex: 1; min-width: 0; }
+.chat-tool { align-self: flex-start; max-width: 100%; color: var(--chat-tool-ink); font-family: var(--mono); font-size: .8em;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; }
+.chat-tool::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--faint); vertical-align: middle; }
+.chat-tool.running::before { background: var(--st-busy); }
+.chat-tool.ok::before { background: var(--st-ok); }
+.chat-tool.error::before { background: var(--st-error); }
+@media (prefers-reduced-motion: reduce) { .cs-working::before { animation: none; } }
+.chat-pick { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 7px;
+             font-family: var(--font); font-size: 11.5px; padding: 3px 6px; max-width: 150px; cursor: pointer; }
+.chat-pick:hover, .chat-pick:focus-visible { border-color: var(--accent); outline: none; }
+.chat-usage { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 6px 16px; border-bottom: 1px solid var(--line);
+              flex: 0 0 auto; font-size: 10.5px; color: var(--subtle); font-family: var(--mono); }
+.chat-usage .cu { display: inline-flex; gap: 5px; white-space: nowrap; }
+.chat-usage .cu-k { letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+.chat-usage .cu-v { color: var(--ink); }
+.chat-usage .cu-v.mid { color: var(--st-warn-ink); }
+.chat-usage .cu-v.hi { color: var(--st-error-ink); }
+.chat-usage .cu-v.none { color: var(--faint); }
+
+.chat-log { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+            user-select: text; font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px); line-height: 1.55; }
+.chat-row { display: flex; flex-direction: column; gap: 3px; max-width: min(78ch, 88%); }
+.chat-row.who-user { align-self: flex-end; align-items: flex-end; }
+.chat-row.who-claude { align-self: flex-start; align-items: flex-start; }
+.chat-who { font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--faint);
+            font-family: var(--font); }
+.chat-bubble { border-radius: 12px; padding: 8px 12px; border: 1px solid var(--chat-claude-line); color: var(--ink);
+               background: var(--chat-claude-bg); max-width: 100%; overflow-wrap: anywhere; box-shadow: var(--edge); }
+.who-user .chat-bubble { background: var(--chat-user-bg); border-color: var(--chat-user-line); border-top-right-radius: 4px;
+                         white-space: pre-wrap; }
+.who-claude .chat-bubble { border-top-left-radius: 4px; }
+.chat-md > :first-child { margin-top: 0; }
+.chat-md > :last-child { margin-bottom: 0; }
+.chat-md p, .chat-md ul, .chat-md ol, .chat-md blockquote, .chat-md pre, .chat-md table { margin: 0 0 .7em; }
+.chat-md ul, .chat-md ol { padding-left: 1.4em; }
+.chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4 { margin: .9em 0 .4em; line-height: 1.25; }
+.chat-md h1 { font-size: 1.3em; } .chat-md h2 { font-size: 1.18em; } .chat-md h3, .chat-md h4 { font-size: 1.05em; }
+.chat-md a { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.chat-md blockquote { border-left: 2px solid var(--line-strong); padding-left: 10px; color: var(--subtle); }
+.chat-md code { font-family: var(--mono); font-size: .88em; background: var(--chat-code-bg); border-radius: 4px; padding: 1px 4px; }
+.chat-md pre { background: var(--chat-code-bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; overflow-x: auto; }
+.chat-md pre code { background: none; padding: 0; font-size: .86em; }
+.chat-md table { border-collapse: collapse; }
+.chat-md th, .chat-md td { border: 1px solid var(--line-strong); padding: 3px 8px; }
+.chat-md hr { border: 0; border-top: 1px solid var(--line-strong); }
+@keyframes chatpulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+.chat-note { align-self: center; color: var(--subtle); font-size: .85em; text-align: center; padding: 2px 8px; }
+.chat-note.error { color: var(--st-error-ink); }
+.chat-note.busy::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%;
+                          background: var(--st-busy); vertical-align: middle; animation: chatpulse 1.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .chat-note.busy::before { animation: none; } }
+
+.chat-compose { display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); flex: 0 0 auto; }
+.chat-input { flex: 1; resize: none; box-sizing: border-box; min-height: 38px; max-height: 40vh; background: var(--surface-2);
+              color: var(--ink); border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 11px;
+              font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px); line-height: 1.45; user-select: text; }
+.chat-input:focus { outline: none; border-color: var(--accent); }
+.chat-input::placeholder { color: var(--faint); }
+.chat-compose .vbtn { height: 38px; padding: 0 16px; flex: 0 0 auto; }
+.chat-compose .vbtn.primary { padding: 0 18px; font-size: 12.5px; }
+.chat-compose .vbtn:disabled, .chat-compose .vbtn.primary:disabled { background: var(--surface-2); color: var(--faint); border-color: var(--line); cursor: default; }
+.chat-compose .vbtn[hidden] { display: none; }

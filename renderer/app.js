@@ -1770,6 +1770,8 @@ function adoptUnidentified() {
       if (!real || !real.id || !p || p.sessionId) continue;
       p.sessionId = real.id;
       p.isSession = true;
+      /* (no chat-skin call here: sessionRestore.test.ts runs this function in isolation, and chatSkinTick
+         reconciles every pane's session within a tick anyway) */
       /* confirmedName is what the liveness pass above keys on to notice a session ENDING, so an
          adopted pane needs it too — taken from the registry, the same authority as the id. */
       if (!p.confirmedName && real.name) p.confirmedName = real.name;
@@ -1820,6 +1822,8 @@ function renderPulseRunning(m) {
       const was = pane.confirmedName;
       pane.confirmedName = null;
       pane.sessionId = null;
+      pane.chatEnded = true;   // Claude is gone and a shell is left: the chat view has nothing to show
+      chatSkinSessionChanged(pid, pane);
       renamePane(pid, t('tab.endedSession', { name: was }));
     }
   }
@@ -3152,7 +3156,12 @@ function setActive(id) {
   setVisible(z);
   // keep the active tab reachable when the strip has scrolled past the window
   try { p.tab.scrollIntoView({ inline: 'nearest', block: 'nearest' }); } catch { /* older engines */ }
-  if (p.kind === 'term') { p.fit.fit(); p.term.focus(); }
+  if (p.kind === 'term') {
+    p.fit.fit();
+    /* In chat view the caret belongs in the composer; the xterm is only focused when a dialog has
+       brought it forward (chatSkinPrompt). A hidden xterm cannot take focus anyway. */
+    if (p.view === 'chat' && !(p.chatSkin && p.chatSkin.promptKind)) chatSkinFocus(p); else p.term.focus();
+  }
   // auto-reveal: the explorer follows the active file tab (skips synthetic ::tabs)
   if (p.kind === 'view' && p.path && EXPLORER.autoReveal && !String(p.path).startsWith('::')) void revealPath(p.path);
   /* COMING BACK TO SETUP RE-VERIFIES IT. The re-verify that is supposed to follow a setup command
@@ -3481,6 +3490,7 @@ function makeTab(id, name, iconName) {
     /* AI-169 read-aloud is HIDDEN for now (operator decision, 0.11.0): it returns with two-way voice.
        The code stays; flipping READ_ALOUD brings the menu row back. */
     if (READ_ALOUD && pane.kind === 'term' && (pane.isSession || pane.sessionId)) items.push({ label: t(pane.readAloud ? 'tab.readAloudOff' : 'tab.readAloudOn'), value: 'readAloud' });   // AI-169
+    if (pane.kind === 'term' && (chatSkinEligible(pane) || pane.view === 'chat')) items.push({ label: t(pane.view === 'chat' ? 'chat.skin.toTerminal' : 'chat.skin.toChat'), value: 'chatView' });
     items.push({ label: '-', value: '-' }, { label: t('tab.close'), value: 'close' });
     /* A NATIVE menu, not the app's listModal. That picker carries a filter box because it was
        built for long searchable lists (sessions, skills, commands), and on four rows the operator
@@ -3492,6 +3502,7 @@ function makeTab(id, name, iconName) {
       else if (pick === 'unsplit') unsplitZone(z);
       else if (pick === 'close') void requestClosePane(id);
       else if (pick === 'report') void reportThis(id);
+      else if (pick === 'chatView') chatSkinToggle(id);
       else if (pick === 'readAloud') setReadAloud(id, !pane.readAloud);
       else if (pick === 'copyAnswer') void window.glassShell.copyLastAnswer(pane.sessionId).then((n) => toast(t(n > 0 ? 'term.copiedAnswer' : 'term.noAnswer')));
       else if (pick === 'rename') {
@@ -3760,6 +3771,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
   const p = { kind: 'term', name, el, tab, term, fit, exited: false, cmd, cwd: cwd || '', isSession: paneIsClaude(cmd) };
   panes.set(id, p);
   attachPaneDropTarget(p, id);   // AI-82: any pane is a split drop target
+  chatSkinMountToggle(id, p);    // the Terminal/Chat switch on the tab (shown for Claude panes only)
   const snap = background ? snapshotFocus() : null;
   homePane(id, p, { fresh: !background });
   // raw tty fills the pane — type straight into the session; drag with the mouse
@@ -3958,6 +3970,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
        decided from this, never from the label — see the pulse handler. */
     p.sessionId = hit.id || null;
     persistSessions();
+    chatSkinSessionChanged(id, p);
     /* …and when the name is AMBIGUOUS, the title cannot tell us which session this is. Two live
        sessions may share a name (`spawn ingest` twice), and `.find()` hands both panes the same
        entry — after which every per-session display mirrors one session onto two tabs.
@@ -3971,6 +3984,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
         if (!real || !real.id) return;
         p.sessionId = real.id;
         persistSessions();
+        chatSkinSessionChanged(id, p);   // the chat view follows the corrected id
         if (real.name && real.name !== p.confirmedName) { p.confirmedName = real.name; renamePane(id, real.name); }
       }).catch(() => { /* ps unavailable — keep the name-matched guess */ });
     }
@@ -3987,6 +4001,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
      Plain-text copy lives on the session TAB as "Copy last answer", read from the transcript —
      no selection needed. A plain terminal keeps select-to-copy. */
   paintRunning(); // reflect the new terminal in the RUNNING card immediately
+  void chatSkinMaybeDefault(id, p);   // chatViewDefault: a new Claude session opens straight in chat view
   return id;
 }
 
@@ -4046,6 +4061,7 @@ function closePane(id) {
   const z = zoneOf(p);
   if (p.ro) { try { p.ro.disconnect(); } catch { /* already gone */ } }
   if (p.gl) { try { p.gl.dispose(); } catch { /* already gone */ } }
+  chatSkinTeardown(id, p);   // stop tailing the transcript before the pane (and its id) goes away
   if (p.kind === 'term' && !p.exited) window.glassShell.ptyKill(id);
   stopSpeaking(id);   // review nit: a closed pane's answer stops being read aloud
   p.el.remove();
@@ -4127,6 +4143,7 @@ function fitTerms() {
 window.glassShell.onPtyData((m) => {
   const p = panes.get(m.id);
   if (!p || p.kind !== 'term') return;
+  p.lastPtyAt = Date.now();   // the chat view's "working" indicator and stalled-transcript check read this
   p.term.write(m.data);
   if (p.scheduleAtlasClear) p.scheduleAtlasClear((m.data || '').length);   // volume-gated; see its definition
   // pty-grade theater: tail the latest meaningful output line into the ticker
@@ -4138,7 +4155,7 @@ window.glassShell.onPtyData((m) => {
 });
 window.glassShell.onPtyExit((m) => {
   const p = panes.get(m.id);
-  if (p && p.kind === 'term') { p.exited = true; p.term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n'); paintRunning(); }
+  if (p && p.kind === 'term') { p.exited = true; p.term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n'); chatSkinOnExit(m.id, p); paintRunning(); }
   /* A guided connect/add session just closed — re-read rather than waiting for focus or the poll.
      Same shape as the Health card's fix panes: run the check that found the problem to prove the
      fix, never trust that the work happened. */
@@ -4889,6 +4906,7 @@ async function materializeRestore(id) {
        new pane would have no sessionId, and a quit in that window would drop it from the list. */
     np.sessionId = ph.sessionId;
     np.isSession = true;
+    chatSkinSessionChanged(newId, np);
     if (ph.manualName) np.manualName = true;
   }
   const z = np ? zoneOf(np) : zoneOf(ph);
@@ -6417,6 +6435,7 @@ window.glassShell.onIntent(async (m) => {
     case 'terminal':
       await createPane({ name: m.name || 'terminal', cmd: m.cmd, background: busBackground(m) });
       return;
+    case 'toggleChatView': chatSkinToggleFocused(); return;
     case 'spawnWorker': void spawnWorkerFlow(); return;
     case 'launchPrimary': { const c = await window.glassShell.shellConfig(); launchPrimary(c.primary || 'aios'); return; }
     case 'shortcuts': openShortcutsTab(); return;
@@ -7004,6 +7023,721 @@ function openHomeTab() {
   });
 }
 
+/* ═══ CHAT SKIN (a view over a terminal pane, never a pane of its own) ═══════
+   A Claude Code session already lives in a 'term' pane: a real pty running the real `claude`.
+   The chat skin is a second way of LOOKING at that same pane — bubbles built from the session's
+   transcript, and a text box that writes to the same pty. It adds fields (p.view, p.chatSkin) and
+   DOM nodes inside p.el and nothing else, so everything that finds a pane by id, name or
+   sessionId (byName, ambiguous, resume, the bus, runInPrimary, closing, restoring, read-aloud)
+   keeps working untouched while the skin is up.
+
+   Three rules this block is built on:
+   1. THE XTERM IS HIDDEN, NEVER DETACHED OR DISPLAY:NONE'D. A zero-size container makes the fit
+      addon compute 0 columns, and the resulting resize tears the TUI. The overlay covers the
+      terminal instead (and `.twrap` goes `visibility:hidden`, which keeps its box), so the pty's
+      geometry never moves because of the skin. This block therefore never calls fit() while the
+      skin is up; the only fit is the one that hands the terminal back.
+   2. THE CHAT CANNOT REPRESENT EVERY DIALOG. Trust prompts, permission lists and pickers are
+      drawn by the TUI. When main reports one (a `prompt` event) the REAL xterm is un-hidden in a
+      strip under the bubbles and takes the focus, with a visible, announced notice. A session
+      must never sit blocked on something the operator cannot see.
+   3. EVERY SUBMIT GOES THROUGH submitToPty (see its note: text and CR are two writes), and the
+      only other thing the skin ever writes to the pty is a lone ESC to cut a running turn.
+
+   The data comes from the main process (glassShell.chatSkinWatch tails the session's transcript
+   and emits onChatSkinEvent: reset · items · turn · usage · prompt · missing · error). */
+const CHAT_FONTS = [
+  { key: 'inherit', stack: '', label: 'chat.font.inherit' },
+  { key: 'sans', stack: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", label: 'chat.font.sans' },
+  { key: 'serif', stack: "'Iowan Old Style', Georgia, 'Times New Roman', serif", label: 'chat.font.serif' },
+  { key: 'mono', stack: "'JetBrains Mono', 'SF Mono', Menlo, monospace", label: 'chat.font.mono' },
+  { key: 'inter', stack: "Inter, -apple-system, 'Segoe UI', sans-serif", label: 'chat.font.inter' },
+];
+const CHAT_SIZES = [12, 13, 14, 15, 16, 18, 20];
+const CHAT_DEFAULT_SIZE = 14;
+const CHAT_PROMPT_KINDS = ['permission', 'trust', 'select', 'question', 'model', 'other'];
+const CS_WORKING_MS = 3000;   // pty output this recent, inside an open turn, reads as "Claude is working"
+const CS_SUBMIT_MS = 4000;    // …and a message just sent counts as work before the first event comes back
+const CS_STALL_MS = 20000;    // open turn + live pty + a silent transcript for this long → offer the terminal
+const CS_TICK_MS = 750;
+const CS_STATUS_MS = 20000;
+/* One preference pair for every chat view: changing the font in one conversation changing it in
+   the others is what "my chat font" means. Seeded from shellConfig on each entry. */
+const chatPrefs = { family: '', size: CHAT_DEFAULT_SIZE };
+
+/* ── markdown, without ever injecting the model's raw HTML ───────────────────
+   Model output is untrusted text: a reply that quotes a web page, an email or a file can carry
+   `<img onerror=…>` or `<script>`, and this renderer holds the full glassShell bridge. So the
+   markdown goes through TWO independent guards: (1) a private marked instance whose `html`
+   renderer escapes raw HTML tokens instead of emitting them (a private instance, because
+   marked.use() on the global would also change how the operator's vault notes render), and
+   (2) a DOM pass over an inert <template> that keeps only a short tag allowlist, drops every
+   attribute but a vetted href, and unwraps anything else. Either guard alone would be enough
+   for today's marked; both exist because a parser upgrade is exactly when a guard goes missing
+   unnoticed. */
+let chatMd = null;
+const chatEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function chatMarkdown() {
+  if (chatMd) return chatMd;
+  chatMd = new marked.Marked({ gfm: true, breaks: true });
+  chatMd.use({ renderer: {
+    // marked >= 12 passes a token object, older majors a string — accept both
+    html(tok) { return chatEscape(typeof tok === 'string' ? tok : (tok && tok.text) || ''); },
+  } });
+  return chatMd;
+}
+const CHAT_TAGS = new Set(['P', 'BR', 'STRONG', 'EM', 'DEL', 'CODE', 'PRE', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'A',
+  'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD']);
+const CHAT_DROP = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM', 'TEMPLATE', 'SVG', 'MATH']);
+function chatSanitize(html) {
+  const tpl = document.createElement('template');   // inert: no script runs and no image loads until adopted
+  tpl.innerHTML = html;
+  const walk = (node) => {
+    for (const child of [...node.childNodes]) {
+      if (child.nodeType === 3) continue;
+      if (child.nodeType !== 1) { child.remove(); continue; }
+      const tag = child.tagName;
+      if (CHAT_DROP.has(tag)) { child.remove(); continue; }
+      if (tag === 'IMG') {   // a remote image would phone home on render; show its alt text instead
+        child.replaceWith(document.createTextNode(child.getAttribute('alt') || ''));
+        continue;
+      }
+      walk(child);
+      const href = tag === 'A' ? (child.getAttribute('href') || '') : '';
+      if (!CHAT_TAGS.has(tag) || (tag === 'A' && !/^(https?:|mailto:)/i.test(href))) {
+        child.replaceWith(...child.childNodes);   // keep the words, lose the element
+        continue;
+      }
+      const cls = tag === 'CODE' ? child.getAttribute('class') : null;
+      for (const a of [...child.attributes]) child.removeAttribute(a.name);
+      if (tag === 'A') { child.setAttribute('href', href); child.setAttribute('rel', 'noreferrer noopener'); }
+      if (cls && /^language-[\w+#.-]+$/.test(cls)) child.setAttribute('class', cls);
+    }
+  };
+  walk(tpl.content);
+  return tpl.content;
+}
+function chatHighlight(root) {
+  if (!window.hljs) return;
+  for (const code of root.querySelectorAll('pre code[class^="language-"]')) {
+    const lang = code.className.slice('language-'.length);
+    if (!window.hljs.getLanguage(lang)) continue;
+    try {
+      code.innerHTML = window.hljs.highlight(code.textContent, { language: lang, ignoreIllegal: true }).value;
+      code.classList.add('hljs');
+    } catch { /* leave the plain text */ }
+  }
+}
+/* Transcript messages are complete (never a moving target), so every render is the final one and
+   gets highlighted. */
+function chatRender(target, text) {
+  let frag;
+  try { frag = chatSanitize(chatMarkdown().parse(String(text || ''), { async: false })); }
+  catch { target.textContent = String(text || ''); return; }
+  chatHighlight(frag);
+  target.replaceChildren(frag);
+}
+
+/* ── preferences: font + size ─────────────────────────────────────────────── */
+function chatApplyPrefs() {
+  for (const p of panes.values()) if (p.chatSkin) chatStyleSkin(p.chatSkin);
+}
+function chatStyleSkin(cs) {
+  cs.root.style.setProperty('--chat-font', chatPrefs.family || 'inherit');   // '' = follow the app's own font
+  cs.root.style.setProperty('--chat-size', String(chatPrefs.size));
+  if (cs.fontSel) {
+    if (![...cs.fontSel.options].some((o) => o.value === chatPrefs.family)) {
+      // a stack saved by hand in the config: keep it selectable rather than silently replacing it
+      const o = document.createElement('option'); o.value = chatPrefs.family; o.textContent = chatPrefs.family; cs.fontSel.appendChild(o);
+    }
+    cs.fontSel.value = chatPrefs.family;
+  }
+  if (cs.sizeSel) {
+    if (![...cs.sizeSel.options].some((o) => Number(o.value) === chatPrefs.size)) {
+      const o = document.createElement('option'); o.value = String(chatPrefs.size); o.textContent = String(chatPrefs.size); cs.sizeSel.appendChild(o);
+    }
+    cs.sizeSel.value = String(chatPrefs.size);
+  }
+}
+function chatReadPrefs(c) {
+  if (!c) return;
+  if (typeof c.chatFontFamily === 'string') chatPrefs.family = c.chatFontFamily;
+  const n = Number(c.chatFontSize);
+  if (Number.isFinite(n) && n >= 8 && n <= 40) chatPrefs.size = n;
+}
+
+/* ── usage bar ────────────────────────────────────────────────────────────── */
+const CHAT_USAGE_FIELDS = [
+  ['fiveHourPct', 'chat.usage.fiveHour', 'pct'],
+  ['sevenDayPct', 'chat.usage.sevenDay', 'pct'],
+  ['contextPct', 'chat.usage.context', 'pct'],
+  ['model', 'chat.usage.model', 'text'],
+  ['effort', 'chat.usage.effort', 'text'],
+];
+const chatTokens = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n)));
+/* chatStatus() is the statusline payload, which is GLOBAL: whichever session wrote it last, not
+   necessarily this one. So it only fills what this session's own usage event cannot say, and the
+   per-session numbers (model, context tokens) win whenever they exist. */
+function chatApplyStatus(cs, s) {
+  if (!s || typeof s !== 'object') return;
+  /* MERGE, don't replace: an absent value is simply never written, so it stays '—' — never 0. */
+  for (const [k] of CHAT_USAGE_FIELDS) if (s[k] !== undefined && s[k] !== null && s[k] !== '') cs.status[k] = s[k];
+  chatPaintUsage(cs);
+}
+function chatPaintUsage(cs) {
+  for (const [k, , kind] of CHAT_USAGE_FIELDS) {
+    const out = cs.usageVals[k];
+    out.className = 'cu-v';
+    out.removeAttribute('title');
+    if (k === 'contextPct' && Number.isFinite(cs.ctxTokens)) {
+      out.textContent = chatTokens(cs.ctxTokens);
+      out.title = t('chat.usage.contextTokens');
+      continue;
+    }
+    const v = k === 'model' && cs.model ? cs.model : cs.status[k];
+    if (kind === 'pct') {
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        out.textContent = Math.round(v) + '%';
+        if (v >= 90) out.classList.add('hi'); else if (v >= 70) out.classList.add('mid');
+      } else { out.textContent = '—'; out.classList.add('none'); }
+    } else if (v) { out.textContent = String(v); }
+    else { out.textContent = '—'; out.classList.add('none'); }
+  }
+}
+function chatSkinRefreshStatus(cs) {
+  const gs = window.glassShell;
+  if (typeof gs.chatStatus !== 'function') return;
+  cs.statusAt = Date.now();
+  Promise.resolve(gs.chatStatus()).then((s) => { chatApplyStatus(cs, s); }).catch(() => { /* the bar keeps its dashes */ });
+}
+
+/* ── eligibility ──────────────────────────────────────────────────────────── */
+/* Only a pane that runs Claude has a transcript to show. A plain shell, a viewer or an ended
+   session gets no toggle (and one that ends while in chat view is handed back to the terminal). */
+function chatSkinEligible(p) {
+  return !!p && p.kind === 'term' && !p.exited && !!(p.isSession || p.sessionId || (paneIsClaude(p.cmd) && !p.chatEnded));
+}
+const chatSkinWorking = (p, now = Date.now()) => {
+  const cs = p.chatSkin;
+  if (!cs) return false;
+  return (cs.turnOpen && now - (p.lastPtyAt || 0) < CS_WORKING_MS) || now - (cs.lastSubmitAt || 0) < CS_SUBMIT_MS;
+};
+
+/* ── building the overlay (once per pane, on first entry) ────────────────── */
+function chatSkinBuild(id, p) {
+  if (p.chatSkin) return p.chatSkin;
+  const root = el('div', 'chatskin');
+  root.hidden = true;
+  root.setAttribute('role', 'region');
+  root.setAttribute('aria-label', t('chat.skin.logLabel'));
+
+  const head = el('div', 'cs-head');
+  const sw = el('div', 'cs-switch');
+  sw.setAttribute('role', 'group');
+  sw.setAttribute('aria-label', t('chat.skin.switchLabel'));
+  const swTerm = el('button', 'cs-sw', t('chat.skin.terminalTab'));
+  swTerm.title = t('chat.skin.toTerminal');
+  const swChat = el('button', 'cs-sw on', t('chat.skin.chatTab'));
+  swChat.setAttribute('aria-pressed', 'true');
+  swTerm.setAttribute('aria-pressed', 'false');
+  sw.append(swTerm, swChat);
+  const fontSel = el('select', 'chat-pick');
+  fontSel.title = t('chat.font.label'); fontSel.setAttribute('aria-label', t('chat.font.label'));
+  for (const f of CHAT_FONTS) { const o = el('option', '', t(f.label)); o.value = f.stack; fontSel.appendChild(o); }
+  const sizeSel = el('select', 'chat-pick');
+  sizeSel.title = t('chat.size.label'); sizeSel.setAttribute('aria-label', t('chat.size.label'));
+  for (const s of CHAT_SIZES) { const o = el('option', '', String(s)); o.value = String(s); sizeSel.appendChild(o); }
+  head.append(sw, el('span', 'cs-fill'), fontSel, sizeSel);
+
+  const usageEl = el('div', 'chat-usage');
+  usageEl.setAttribute('aria-label', t('chat.usage.label'));
+  const usageVals = {};
+  for (const [k, label] of CHAT_USAGE_FIELDS) {
+    const cell = el('span', 'cu');
+    const v = el('span', 'cu-v none', '—');
+    cell.append(el('span', 'cu-k', t(label)), v);
+    usageEl.appendChild(cell);
+    usageVals[k] = v;
+  }
+
+  const log = el('div', 'chat-log');
+  log.setAttribute('role', 'log');
+  log.setAttribute('aria-live', 'polite');
+  const stateEl = el('div', 'chat-note cs-state');   // connecting · waiting · empty · error — one line, first in the log
+  log.appendChild(stateEl);
+
+  const workEl = el('div', 'cs-working', t('chat.skin.working'));
+  workEl.hidden = true;
+  workEl.setAttribute('role', 'status');
+
+  const alertEl = el('div', 'cs-alert');
+  alertEl.hidden = true;
+  alertEl.setAttribute('role', 'alert');
+  const alertText = el('span', 'cs-alert-text');
+  const alertBtn = el('button', 'vbtn primary', t('chat.skin.showTerminal'));
+  alertEl.append(alertText, alertBtn);
+
+  const compose = el('div', 'chat-compose');
+  const input = el('textarea', 'chat-input');
+  input.rows = 1;
+  input.placeholder = t('chat.placeholder');
+  input.title = t('chat.inputHint');   // the key hints live in the tooltip: a long placeholder wraps and clips in a narrow dock
+  const sendBtn = el('button', 'vbtn primary', t('chat.send'));
+  const stopBtn = el('button', 'vbtn', t('chat.stop'));
+  stopBtn.title = t('chat.stopHint');
+  stopBtn.hidden = true;
+  compose.append(input, sendBtn, stopBtn);
+
+  root.append(head, usageEl, log, workEl, alertEl, compose);
+  p.el.appendChild(root);
+
+  const cs = {
+    id, root, log, stateEl, workEl, alertEl, alertText, alertBtn, input, sendBtn, stopBtn, fontSel, sizeSel, usageEl, usageVals,
+    swTerm, swChat,
+    items: new Map(),            // transcript uuid -> { node, role, … }
+    status: {}, model: '', ctxTokens: undefined, statusAt: 0,
+    watched: null,               // the sessionId main is tailing for this pane, or null
+    gen: 0,                      // bumps on every watch/unwatch so a late reply can tell it is stale
+    state: 'connecting',         // connecting · waiting · live · error
+    errorCode: '',
+    turnOpen: false, lastEventAt: 0, lastSubmitAt: 0, stick: true,
+    promptKind: null, promptHint: '', stalled: false, idCheckedAt: 0, idChecks: 0, watchedAt: 0,
+  };
+  p.chatSkin = cs;
+  chatStyleSkin(cs);
+  chatPaintUsage(cs);
+
+  // follow the tail unless the operator scrolled up to read — and resume once they return to it
+  log.addEventListener('scroll', () => { cs.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48; });
+  // links never navigate this window: they open in the system browser
+  log.addEventListener('click', (e) => {
+    const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    e.preventDefault();
+    void window.glassShell.openExternal(a.getAttribute('href'));
+  });
+  input.addEventListener('input', () => { chatSkinAutosize(cs); chatSkinControls(p); });
+  input.addEventListener('keydown', (e) => {
+    // Enter sends, Shift+Enter breaks the line. During IME composition Enter confirms the
+    // candidate, so it must never send (keyCode 229 covers engines that clear isComposing early).
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    chatSkinSendNow(id, p);
+  });
+  // Esc anywhere in the overlay cuts the running turn — the same key the TUI itself answers to
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.isComposing || cs.promptKind) return;
+    e.preventDefault(); e.stopPropagation();
+    chatSkinInterrupt(id, p);
+  });
+  sendBtn.addEventListener('click', () => chatSkinSendNow(id, p));
+  stopBtn.addEventListener('click', () => chatSkinInterrupt(id, p));
+  swTerm.addEventListener('click', () => chatSkinSetView(id, 'term'));
+  alertBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
+  fontSel.addEventListener('change', () => {
+    chatPrefs.family = fontSel.value;
+    chatApplyPrefs();
+    void Promise.resolve(window.glassShell.setSetting('chatFontFamily', chatPrefs.family)).catch(() => {});
+  });
+  sizeSel.addEventListener('change', () => {
+    const v = Number(sizeSel.value);
+    if (!Number.isFinite(v)) return;
+    chatPrefs.size = v;
+    chatApplyPrefs();
+    void Promise.resolve(window.glassShell.setSetting('chatFontSize', v)).catch(() => {});
+  });
+  return cs;
+}
+
+/* ── the switch itself ───────────────────────────────────────────────────── */
+/* The ONLY place the view changes. It creates no pane, spawns no pty and never touches the
+   pane's id, name or session — it flips a class, shows or hides the overlay, and (un)watches the
+   transcript. Leaving chat view re-fits the terminal once it is handed back (and only then). */
+function chatSkinSetView(id, view) {
+  const p = panes.get(id);
+  if (!p || p.kind !== 'term') return false;
+  if (view === 'chat' && !chatSkinEligible(p)) { toast(t('chat.skin.notClaude')); return false; }
+  const cur = p.view === 'chat' ? 'chat' : 'term';
+  if (cur === view) return true;
+  p.view = view;
+  if (view === 'chat') {
+    const cs = chatSkinBuild(id, p);
+    cs.promptKind = null; cs.promptHint = ''; cs.stalled = false;
+    cs.lastEventAt = Date.now();
+    try { p.term.blur(); } catch { /* disposed */ }
+    void Promise.resolve(window.glassShell.shellConfig()).then((c) => { chatReadPrefs(c); chatApplyPrefs(); }).catch(() => {});
+    chatSkinRefreshStatus(cs);
+  }
+  chatSkinSync(id, p);
+  chatSkinLayout(p);
+  chatSkinPaintToggle(p);
+  if (view === 'chat') chatSkinFocus(p);
+  else chatSkinHandBack(id, p);
+  return true;
+}
+function chatSkinToggle(id) {
+  const p = panes.get(id);
+  if (!p) return;
+  chatSkinSetView(id, p.view === 'chat' ? 'term' : 'chat');
+}
+/* The menu/shortcut path: the pane the operator is looking at, preferring the one holding focus. */
+function chatSkinToggleFocused() {
+  const inFocus = [...panes.entries()].find(([, p]) => p.kind === 'term' && p.el.contains(document.activeElement));
+  const pick = inFocus
+    || (active.term !== null && panes.get(active.term)?.kind === 'term' ? [active.term, panes.get(active.term)] : null)
+    || (active.main !== null && panes.get(active.main)?.kind === 'term' ? [active.main, panes.get(active.main)] : null);
+  if (!pick) { toast(t('chat.skin.notClaude')); return; }
+  chatSkinToggle(pick[0]);
+}
+/* Give the terminal back: re-fit ONCE (the only fit this block performs, and only after the
+   overlay is gone), push the geometry if it moved, and put the caret where the operator expects. */
+function chatSkinHandBack(id, p) {
+  requestAnimationFrame(() => {
+    if (!panes.has(id) || p.view === 'chat' || p.exited) return;
+    try { p.fit.fit(); } catch { return; }
+    pushPtyGeom(id, p);
+    repaintTerm(p);
+    if (paneShown(p) && active[zoneOf(p)] === id) p.term.focus();
+  });
+}
+function chatSkinFocus(p) {
+  requestAnimationFrame(() => {
+    const cs = p.chatSkin;
+    if (!cs || p.view !== 'chat' || !paneShown(p) || cs.promptKind) return;
+    try { cs.input.focus({ preventScroll: true }); } catch { /* detached */ }
+  });
+}
+/* Layout state lives on classes of p.el so one stylesheet rule set decides what is visible:
+   `view-chat` hides the xterm host (visibility, box kept) and shows the overlay; `cs-strip`
+   additionally un-hides the xterm in the lower part for a dialog. */
+function chatSkinLayout(p) {
+  const cs = p.chatSkin;
+  if (!cs) return;
+  const on = p.view === 'chat';
+  p.el.classList.toggle('view-chat', on);
+  p.el.classList.toggle('cs-strip', on && !!cs.promptKind);
+  cs.root.hidden = !on;
+  cs.input.disabled = !!cs.promptKind || !!p.exited;
+  chatSkinControls(p);
+  chatSkinPaintAlert(p);
+  chatSkinPaintState(p);
+}
+function chatSkinControls(p) {
+  const cs = p.chatSkin;
+  if (!cs) return;
+  const working = chatSkinWorking(p);
+  cs.stopBtn.hidden = !working;
+  cs.sendBtn.hidden = working && !cs.input.value.trim();
+  cs.sendBtn.disabled = !cs.input.value.trim() || !!cs.promptKind || !!p.exited;
+  cs.workEl.hidden = !working || !!cs.promptKind;
+}
+function chatSkinPaintAlert(p) {
+  const cs = p.chatSkin;
+  let text = '';
+  if (cs.promptKind) text = t('chat.skin.prompt.' + cs.promptKind);
+  else if (cs.stalled) text = t('chat.skin.stalled');
+  cs.alertEl.hidden = !text;
+  cs.alertText.textContent = text;
+  cs.alertEl.classList.toggle('prompt', !!cs.promptKind);
+  cs.alertEl.title = cs.promptHint || '';
+  cs.alertBtn.hidden = !!cs.promptKind;   // under a dialog the terminal is already in front; the header switch is still there
+}
+function chatSkinPaintState(p) {
+  const cs = p.chatSkin;
+  let text = '';
+  if (cs.state === 'error') text = t('chat.skin.error', { code: cs.errorCode || '?' });
+  else if (!cs.watched) text = t('chat.connecting');
+  else if (cs.state === 'waiting') text = t('chat.skin.waiting');
+  else if (cs.state === 'live' && cs.items.size === 0) text = t('chat.skin.empty');
+  cs.stateEl.hidden = !text;
+  cs.stateEl.textContent = text;
+  cs.stateEl.classList.toggle('error', cs.state === 'error');
+}
+/* The toggle on the tab (plus the header switch inside the overlay). Shown for panes that run
+   Claude only; pressed state mirrors the view. */
+function chatSkinPaintToggle(p) {
+  const on = p.view === 'chat';
+  const eligible = chatSkinEligible(p);
+  if (p.viewBtn) {
+    p.viewBtn.hidden = !eligible && !on;
+    p.viewBtn.classList.toggle('on', on);
+    p.viewBtn.setAttribute('aria-pressed', String(on));
+    const label = t(on ? 'chat.skin.toTerminal' : 'chat.skin.toChat');
+    p.viewBtn.title = label;
+    p.viewBtn.setAttribute('aria-label', label);
+  }
+  const cs = p.chatSkin;
+  if (cs) {
+    cs.swTerm.setAttribute('aria-pressed', String(!on));
+    cs.swChat.setAttribute('aria-pressed', String(on));
+  }
+}
+function chatSkinMountToggle(id, p) {
+  const b = el('span', 'tview');
+  b.setAttribute('role', 'button');
+  b.tabIndex = -1;   // a focusable control inside a <button> tab is an a11y trap; the keyboard path is the menu item (⌘⇧L)
+  b.innerHTML = icon('chat', 12);
+  const go = (e) => { e.preventDefault(); e.stopPropagation(); setActive(id); chatSkinToggle(id); };
+  b.addEventListener('click', go);
+  b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); });
+  p.tab.insertBefore(b, p.tab.querySelector('.tx'));
+  p.viewBtn = b;
+  chatSkinPaintToggle(p);
+}
+
+/* ── watching the transcript ─────────────────────────────────────────────── */
+/* Reconcile WHAT IS BEING WATCHED with WHAT THE PANE IS. Called after every change that could move
+   the answer (view switched, sessionId adopted/changed/cleared, pty exited), so it is idempotent:
+   the same inputs do nothing. A session id that changes (/clear, resume) is an unwatch + re-watch,
+   and a pane whose session is not known yet shows "connecting" until adoption calls this again. */
+function chatSkinSync(id, p) {
+  const cs = p && p.chatSkin;
+  if (!cs) return;
+  const gs = window.glassShell;
+  const want = p.view === 'chat' && !p.exited && p.sessionId ? String(p.sessionId) : null;
+  if (cs.watched === want) return;
+  if (cs.watched) {
+    cs.gen++;
+    if (typeof gs.chatSkinUnwatch === 'function') Promise.resolve(gs.chatSkinUnwatch(id)).catch(() => { /* already gone */ });
+  }
+  cs.watched = want;
+  cs.turnOpen = false; cs.stalled = false; cs.watchedAt = Date.now(); cs.idChecks = 0;
+  if (!want) { chatSkinLayout(p); return; }
+  cs.state = 'waiting'; cs.errorCode = '';
+  const gen = ++cs.gen;
+  if (typeof gs.chatSkinWatch !== 'function') { cs.state = 'error'; cs.errorCode = 'unavailable'; chatSkinPaintState(p); return; }
+  Promise.resolve(gs.chatSkinWatch(id, want)).then((r) => {
+    if (gen !== cs.gen || p.chatSkin !== cs) return;   // a newer watch or a closed pane owns the answer now
+    if (!r || !r.ok) { cs.state = 'error'; cs.errorCode = (r && r.error) || '?'; chatSkinPaintState(p); }
+  }).catch((e) => {
+    if (gen !== cs.gen || p.chatSkin !== cs) return;
+    cs.state = 'error'; cs.errorCode = String((e && e.message) || e).slice(0, 60); chatSkinPaintState(p);
+  });
+  chatSkinPaintState(p);
+}
+/* Called wherever app.js learns, changes or forgets a pane's session. */
+function chatSkinSessionChanged(id, p) {
+  if (!p || p.kind !== 'term') return;
+  if (p.sessionId) p.chatEnded = false;   // a session was (re)adopted after an ending
+  chatSkinPaintToggle(p);
+  if (p.view === 'chat' && !chatSkinEligible(p)) { chatSkinSetView(id, 'term'); return; }   // the Claude behind it is gone
+  chatSkinSync(id, p);
+}
+/* Closing the pane (closePane) or losing the pty (onPtyExit) ends the watch. */
+function chatSkinTeardown(id, p) {
+  const cs = p && p.chatSkin;
+  if (!cs) return;
+  cs.gen++;
+  if (cs.watched || p.view === 'chat') {
+    if (typeof window.glassShell.chatSkinUnwatch === 'function') Promise.resolve(window.glassShell.chatSkinUnwatch(id)).catch(() => { /* already gone */ });
+  }
+  cs.watched = null;
+}
+function chatSkinOnExit(id, p) {
+  if (!p.chatSkin) { chatSkinPaintToggle(p); return; }
+  chatSkinTeardown(id, p);
+  if (p.view === 'chat') chatSkinSetView(id, 'term');   // show "[session ended]" instead of a dead composer
+  chatSkinPaintToggle(p);
+}
+/* A new Claude pane opens straight in chat view when the preference says so — including panes
+   restored at launch and resumed ones, since both come through createPane with a claude command.
+   Read fresh from the config each time: the toggle in Settings applies to the very next session. */
+async function chatSkinMaybeDefault(id, p) {
+  if (!paneIsClaude(p.cmd)) return;
+  let want = false;
+  try { want = (await window.glassShell.shellConfig()).chatViewDefault === true; } catch { want = false; }
+  if (want && panes.get(id) === p && !p.exited) chatSkinSetView(id, 'chat');
+}
+
+/* ── painting the transcript ─────────────────────────────────────────────── */
+function chatSkinScroll(cs) { if (cs.stick) cs.log.scrollTop = cs.log.scrollHeight; }
+function chatSkinAutosize(cs) {
+  cs.input.style.height = 'auto';
+  cs.input.style.height = Math.min(cs.input.scrollHeight + 2, Math.round(window.innerHeight * 0.4)) + 'px';
+}
+function chatSkinMakeItem(role) {
+  if (role === 'user' || role === 'assistant') {
+    const row = el('div', 'chat-row who-' + (role === 'user' ? 'user' : 'claude'));
+    const bubble = el('div', 'chat-bubble');
+    row.append(el('div', 'chat-who', t(role === 'user' ? 'chat.you' : 'chat.claude')), bubble);
+    const body = role === 'assistant' ? el('div', 'chat-md') : bubble;
+    if (role === 'assistant') bubble.appendChild(body);
+    return { node: row, body, role };
+  }
+  if (role === 'tool') {
+    const node = el('div', 'chat-tool');
+    return { node, body: node, role };
+  }
+  const node = el('div', 'chat-note');
+  return { node, body: node, role: 'system' };
+}
+function chatSkinUpsert(cs, item) {
+  if (!item || typeof item !== 'object' || !item.uuid) return;
+  let rec = cs.items.get(item.uuid);
+  if (!rec) {
+    rec = chatSkinMakeItem(item.role);
+    cs.items.set(item.uuid, rec);
+    cs.log.appendChild(rec.node);
+  }
+  const text = typeof item.text === 'string' ? item.text : '';
+  if (rec.role === 'assistant') {
+    if (rec.text !== text) { chatRender(rec.body, text); rec.text = text; }
+    rec.node.hidden = !text.trim();   // a tool-only message leaves no empty bubble
+  } else if (rec.role === 'user') {
+    if (rec.text !== text) { rec.body.textContent = text; rec.text = text; }   // textContent: the operator's text is never parsed as HTML either
+    rec.node.hidden = !text.trim();
+  } else if (rec.role === 'tool') {
+    const tl = item.tool || {};
+    const status = tl.status === 'ok' || tl.status === 'error' ? tl.status : 'running';
+    const line = String(tl.name || '') + (tl.summary ? ' · ' + String(tl.summary) : '');
+    rec.node.className = 'chat-tool ' + status;
+    rec.node.textContent = line;
+    rec.node.title = line + ' — ' + t('chat.skin.tool.' + status);
+  } else {
+    rec.body.textContent = text;
+    rec.node.hidden = !text.trim();
+  }
+}
+function chatSkinHandleEvent(ev) {
+  if (!ev || ev.paneId === undefined || ev.paneId === null) return;
+  const id = ev.paneId;
+  const p = panes.get(id);
+  if (!p || !p.chatSkin || p.view !== 'chat') return;
+  const cs = p.chatSkin;
+  switch (ev.type) {
+    case 'reset':
+      cs.items.clear();
+      cs.log.replaceChildren(cs.stateEl);
+      cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true;
+      break;
+    case 'items':
+      if (Array.isArray(ev.items)) for (const it of ev.items) chatSkinUpsert(cs, it);
+      cs.state = 'live'; cs.lastEventAt = Date.now(); cs.stalled = false;
+      chatSkinScroll(cs);
+      break;
+    case 'turn':
+      cs.turnOpen = !!ev.open; cs.lastEventAt = Date.now(); cs.stalled = false;
+      if (!ev.open) cs.lastSubmitAt = 0;
+      break;
+    case 'usage':
+      if (Number.isFinite(ev.contextTokens)) cs.ctxTokens = ev.contextTokens;
+      if (typeof ev.model === 'string' && ev.model) cs.model = ev.model;
+      chatPaintUsage(cs);
+      return;
+    case 'prompt':
+      chatSkinPrompt(id, p, ev);
+      return;
+    case 'missing':
+      if (cs.state !== 'live') cs.state = 'waiting';   // the transcript file does not exist yet; main keeps retrying
+      break;
+    case 'error':
+      cs.state = 'error'; cs.errorCode = String(ev.code || '?').slice(0, 60);
+      break;
+    default: return;
+  }
+  chatSkinControls(p);
+  chatSkinPaintAlert(p);
+  chatSkinPaintState(p);
+}
+if (window.glassShell && typeof window.glassShell.onChatSkinEvent === 'function') window.glassShell.onChatSkinEvent(chatSkinHandleEvent);
+
+/* ── dialogs the chat cannot draw ────────────────────────────────────────── */
+/* A `prompt` event with a kind means the TUI is showing something only it can render. The real
+   xterm comes forward in a strip under the bubbles and takes the keys, with an announced notice;
+   a null kind puts the bubbles back and returns the caret to the composer. If the pane is not the
+   one in front, the operator is told the ordinary ways too (an unseen mark on the tab, a toast) —
+   a dialog that blocks the session must never wait unnoticed. */
+function chatSkinPrompt(id, p, ev) {
+  const cs = p.chatSkin;
+  const kind = ev.kind ? (CHAT_PROMPT_KINDS.includes(ev.kind) ? ev.kind : 'other') : null;
+  cs.promptHint = kind && typeof ev.hint === 'string' ? ev.hint.slice(0, 200) : '';
+  if (kind === cs.promptKind) { chatSkinPaintAlert(p); return; }
+  cs.promptKind = kind;
+  cs.stalled = false;
+  chatSkinLayout(p);
+  if (kind) {
+    const inFront = paneShown(p) && active[zoneOf(p)] === id && !document.hidden;
+    requestAnimationFrame(() => {
+      if (p.view !== 'chat' || !cs.promptKind) return;
+      repaintTerm(p);
+      if (paneShown(p) && active[zoneOf(p)] === id) { try { p.term.focus(); } catch { /* disposed */ } }
+    });
+    if (!inFront) { markActivity(id); toast(t('chat.skin.needsYou', { name: p.name })); }
+  } else {
+    try { p.term.blur(); } catch { /* disposed */ }
+    chatSkinFocus(p);
+  }
+}
+
+/* ── actions ──────────────────────────────────────────────────────────────── */
+function chatSkinSendNow(id, p) {
+  const cs = p.chatSkin;
+  if (!cs || p.exited || cs.promptKind) return;
+  const text = cs.input.value.replace(/\r\n?/g, '\n').replace(/\s+$/, '');
+  if (!text.trim()) return;
+  cs.input.value = '';
+  chatSkinAutosize(cs);
+  cs.lastSubmitAt = Date.now();
+  cs.stick = true;
+  submitToPty(id, text);   // the one chokepoint: text, then CR as a separate write (slash commands go the same way)
+  // /clear and /resume swap the session under this pty: look again shortly after, so the view follows it
+  if (text.startsWith('/')) setTimeout(() => { if (panes.get(id) === p && p.view === 'chat') { p.chatSkin.idChecks = 0; chatSkinRecheckId(id, p); } }, 2500);
+  chatSkinControls(p);
+}
+/* Esc cuts a running turn, exactly as in the terminal. Only while something is running: an idle
+   Esc is not harmless in Claude Code (a second one opens the rewind menu). */
+function chatSkinInterrupt(id, p) {
+  if (p.exited || !chatSkinWorking(p)) return;
+  window.glassShell.ptyWrite(id, '\x1b');
+}
+
+/* Best effort: a session replaced under the same pty (/clear, a resume that forks) has a new id
+   that the transcript being tailed will never reach. The process tree knows the live one, so ask
+   it — throttled, and it only ever CORRECTS p.sessionId with the same authority the other
+   adoption sites use (session:under), then the normal unwatch + re-watch follows. This is the one
+   place the skin writes an identity field. */
+function chatSkinRecheckId(id, p) {
+  const cs = p.chatSkin;
+  const now = Date.now();
+  if (!cs || cs.idChecks >= 3 || now - (cs.idCheckedAt || 0) < CS_STALL_MS / 2) return;   // bounded: an idle new session has no transcript yet and must not poll `ps` forever
+  cs.idCheckedAt = now; cs.idChecks++;
+  void window.glassShell.sessionUnder([id]).then((map) => {
+    const real = map && map[id];
+    if (real && real.id && real.id !== p.sessionId && panes.get(id) === p) {
+      p.sessionId = real.id;
+      persistSessions();
+      chatSkinSessionChanged(id, p);
+    }
+  }).catch(() => { /* ps unavailable — the next check retries */ });
+}
+
+/* One timer for the whole window, doing nothing unless a pane is in chat view. It owns the things
+   no event announces: the working indicator going quiet, the stalled-transcript safety net, and a
+   gentle refresh of the global usage numbers. */
+function chatSkinTick() {
+  if (document.hidden) return;
+  const now = Date.now();
+  for (const [id, p] of panes) {
+    if (p.kind !== 'term') continue;
+    /* Reconcile sessions learned by a path that does not call chatSkinSessionChanged itself
+       (adoptUnidentified, or an assignment added later): idempotent, no DOM work when nothing moved. */
+    const ok = chatSkinEligible(p);
+    if (ok !== p.csEligible) { p.csEligible = ok; chatSkinSessionChanged(id, p); }
+    else if (p.view === 'chat') chatSkinSync(id, p);
+    const cs = p.chatSkin;
+    if (p.view !== 'chat' || !cs) continue;
+    chatSkinControls(p);
+    const quiet = now - cs.lastEventAt;
+    const stalled = !cs.promptKind && cs.turnOpen && now - (p.lastPtyAt || 0) < CS_WORKING_MS * 2 && quiet > CS_STALL_MS;
+    if (stalled !== cs.stalled) { cs.stalled = stalled; chatSkinPaintAlert(p); }
+    // a transcript that stays silent (stalled, or never appearing) may belong to a session that was replaced
+    if (stalled || (cs.state === 'waiting' && cs.watched && now - cs.watchedAt > CS_STALL_MS / 2)) chatSkinRecheckId(id, p);
+    if (now - cs.statusAt > CS_STATUS_MS) chatSkinRefreshStatus(cs);
+  }
+}
+setInterval(chatSkinTick, CS_TICK_MS);
+/* ═══ END CHAT SKIN ═══ */
+
 /* ── tool tabs: Settings + Setup (synthetic viewer panes) ─────────────────── */
 /* `rebuild: true` re-runs `build` every time the tab is re-opened or re-shown.
    Settings needs it: it MIRRORS Claude's own config, and `build` ran exactly once per pane — so a
@@ -7318,6 +8052,16 @@ function openSettingsTab() {
     // Live now, like ⌘+/− in a terminal: every open terminal changes, and new ones match.
     fontIn.addEventListener('change', () => setTermFont(Number(fontIn.value) || TERM_FONT_DEFAULT));
     row(wrap, t('settings.termFont'), fontIn, t('settings.termFontHint'));
+
+    /* New Claude sessions open as chat. Read fresh by chatSkinMaybeDefault on every new pane, so
+       there is nothing renderer-side to update when it flips. */
+    const chatDefToggle = document.createElement('input');
+    chatDefToggle.type = 'checkbox'; chatDefToggle.className = 'ttoggle'; chatDefToggle.checked = cfg.chatViewDefault === true;
+    chatDefToggle.addEventListener('change', async () => {
+      await window.glassShell.setSetting('chatViewDefault', chatDefToggle.checked);
+      toast(t('settings.saved'));
+    });
+    row(wrap, t('settings.chatViewDefault'), chatDefToggle, t('settings.chatViewDefaultHint'));
 
     // interface scale — the UI's counterpart to terminal font size, applied live
     const appFontIn = document.createElement('input');

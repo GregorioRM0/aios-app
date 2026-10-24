@@ -90,6 +90,11 @@ export function installMenu(getWin: () => BrowserWindow | undefined): void {
         { label: t('menu.checkUpdates'), click: () => intent('checkUpdates') },
         { type: 'separator' },
         { label: t('menu.newTerminal'), accelerator: 'CmdOrCtrl+T', click: () => intent('terminal', { name: 'terminal' }) },
+        /* ⌘⇧L: flips the focused Claude tab between its terminal and its chat view. A switch on a
+           surface that already exists rather than a picker, but every free plain-⌘ letter is taken,
+           so it sits in the ⌘⇧ family. The letter was checked against every accelerator in this
+           menu and the renderer-owned chords (menu.test.ts rejects duplicates). */
+        { label: t('menu.chatView'), accelerator: 'CmdOrCtrl+Shift+L', click: () => intent('toggleChatView') },
         { type: 'separator' },
         { label: t('menu.openFile'), accelerator: 'CmdOrCtrl+P', click: () => intent('quickOpen') },
         { label: t('menu.todayNote'), accelerator: 'CmdOrCtrl+Shift+Y', click: () => intent('openToday') },
