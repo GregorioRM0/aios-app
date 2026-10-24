@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import type { ChatEvent, ChatStatus } from '../core/chatEvents';   // types only: nothing from core is bundled into the preload
 
 /** One row of the Connectors card. Mirrors main/connectors.ts ConnectorRow. */
 type ConnRow = {
@@ -33,6 +34,15 @@ contextBridge.exposeInMainWorld('glassShell', {
   },
   updaterCheck: (): Promise<unknown> => ipcRenderer.invoke('updater:check'),
   updaterInstall: (): Promise<unknown> => ipcRenderer.invoke('updater:quitAndInstall'),
+  /* CHAT VIEW — a Claude Code session driven through the Agent SDK in main (chatSession.ts), as
+     structured events instead of a terminal screen. Event and status shapes: core/chatEvents.ts. */
+  chatStart: (opts: { startSession?: boolean }): Promise<{ ok: true; id: number } | { ok: false; error: string }> => ipcRenderer.invoke('chat:start', opts),
+  chatSend: (id: number, text: string): Promise<void> => ipcRenderer.invoke('chat:send', id, text),
+  chatInterrupt: (id: number): Promise<void> => ipcRenderer.invoke('chat:interrupt', id),
+  chatPermission: (id: number, requestId: string, allow: boolean): Promise<void> => ipcRenderer.invoke('chat:permission', id, requestId, allow),
+  chatClose: (id: number): Promise<void> => ipcRenderer.invoke('chat:close', id),
+  chatStatus: (): Promise<ChatStatus> => ipcRenderer.invoke('chat:status'),
+  onChatEvent: (cb: (ev: ChatEvent) => void): void => { ipcRenderer.on('chat:event', (_e, ev) => cb(ev)); },
   ptyWrite: (id: number, data: string) => ipcRenderer.send('pty:write', { id, data }),
   programStatus: (sessionId: string, data: string, at: number) => ipcRenderer.send('pty:programStatus', { sessionId, data, at }),
   paneSessions: (ids: string[]) => ipcRenderer.send('panes:sessions', ids),

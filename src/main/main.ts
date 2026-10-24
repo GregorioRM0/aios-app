@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, clipboard, Menu, session, n
 import { markQuitting, isQuitting, closeShouldHide } from './quitState';
 import { installWebPermissionPolicy } from './webPermissions';
 import { withDefaultLocale } from './termLocale';
+import { createChatManager } from './chatSession';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
 import { plainText } from '../core/plainText';
 import { askSessionName, uniqueName } from '../core/sessionName';
@@ -275,6 +276,33 @@ ipcMain.handle('pty:run', (_e, { id, cmd }: { id: number; cmd: string }) => {
 ipcMain.on('pty:write', (_e, { id, data }: { id: number; data: string }) => ptys.get(id)?.write(data));
 ipcMain.on('pty:resize', (_e, { id, cols, rows }: { id: number; cols: number; rows: number }) => ptys.get(id)?.resize(cols, rows));
 ipcMain.on('pty:kill', (_e, { id }: { id: number }) => { ptys.get(id)?.kill(); ptys.delete(id); });
+
+/* ── CHAT VIEW BRIDGE ────────────────────────────────────────────────────────────────────────────
+   A chat tab is a persistent Claude Code session driven through the Agent SDK (chatSession.ts),
+   not a pty. This is the whole IPC surface; the manager itself knows nothing about electron.
+   A session starts where a primary terminal would (vault root, else ~/aios) and gets the SAME
+   environment as a terminal — termEnv with the primary session's name — so the vault's
+   Mandatory First Action and the transcript-persistence flags behave identically. */
+const chat = createChatManager({
+  cwd: () => aios.vaultRoot() ?? path.join(os.homedir(), 'aios'),
+  env: () => termEnv(undefined, aios.primaryName()),
+  claudeCmd: () => aios.shellSettings().claudeCmd,
+  statuslinePath: () => path.join(aios.claudeConfigDir(), 'statusline-payload.json'),
+});
+ipcMain.handle('chat:start', async (e, opts: { startSession?: boolean } | undefined) => {
+  const sender = e.sender;
+  const r = await chat.start({ startSession: !!opts?.startSession }, (ev) => {
+    if (!sender.isDestroyed()) sender.send('chat:event', ev);
+  });
+  // A reload or closed window must not leave the claude child running with nobody listening.
+  if (r.ok) sender.once('destroyed', () => chat.close(r.id));
+  return r;
+});
+ipcMain.handle('chat:send', (_e, id: number, text: string) => { chat.sendText(Number(id), String(text ?? '')); });
+ipcMain.handle('chat:interrupt', (_e, id: number) => chat.interrupt(Number(id)));
+ipcMain.handle('chat:permission', (_e, id: number, requestId: string, allow: boolean) => { chat.permission(Number(id), String(requestId), !!allow); });
+ipcMain.handle('chat:close', (_e, id: number) => { chat.close(Number(id)); });
+ipcMain.handle('chat:status', () => chat.fileStatus());
 
 let host: PanelHost | undefined;
 
@@ -1169,7 +1197,7 @@ ipcMain.handle('claude:set', (_e, key: 'model' | 'effort' | 'advisor' | 'mode' |
   aios.setClaudeConfig(key, value);
   return aios.claudeConfig();
 });
-ipcMain.handle('shell:setSetting', (_e, key: 'claudeCmd' | 'showHints' | 'showNudges' | 'showMemory' | 'theme' | 'termFontSize' | 'showHidden' | 'fileIcons' | 'autoReveal' | 'autoOpenExports' | 'showWeekNumbers' | 'killBehavior' | 'terminalMode' | 'openNotesIn' | 'appFontSize' | 'hiddenCards' | 'ignorePaths' | 'locale' | 'caffeinate' | 'attention' | 'busFocus' | 'lidAsked', value: unknown) => {
+ipcMain.handle('shell:setSetting', (_e, key: 'claudeCmd' | 'showHints' | 'showNudges' | 'showMemory' | 'theme' | 'termFontSize' | 'chatFontFamily' | 'chatFontSize' | 'showHidden' | 'fileIcons' | 'autoReveal' | 'autoOpenExports' | 'showWeekNumbers' | 'killBehavior' | 'terminalMode' | 'openNotesIn' | 'appFontSize' | 'hiddenCards' | 'ignorePaths' | 'locale' | 'caffeinate' | 'attention' | 'busFocus' | 'lidAsked', value: unknown) => {
   aios.setShellSetting(key, value);
   /* AI-132: changing the RULE retires any override — otherwise you switch manual→auto and watch
      auto not follow sessions, with nothing on screen explaining why. Applies immediately rather
@@ -1315,6 +1343,7 @@ app.whenReady().then(() => {
      so the common case — roots that already exist — costs nothing after the first tick. */
   const rootPoll = setInterval(() => { if (!win.isDestroyed()) rewireForRoots(win); }, 4000);
   win.on('closed', () => clearInterval(rootPoll));
+  win.on('closed', () => chat.closeAll());   // macOS hides the window instead of closing it, so this is a real teardown
   win.on('closed', () => { host?.dispose(); host = undefined; for (const w of explorerWatchers.splice(0)) { try { w.close(); } catch { /* ignore */ } } });
   if (EVAL) {
     const expr = EVAL.slice('--eval='.length);
@@ -1825,6 +1854,8 @@ app.whenReady().then(() => {
 });
 /* Every real quit passes through here first, so the close handler above lets the windows go. */
 app.on('before-quit', markQuitting);
+/* The chat sessions are child processes of this app; closing them here keeps a quit from orphaning them. */
+app.on('before-quit', () => chat.closeAll());
 /* The Dock icon brings the hidden window back. */
 app.on('activate', () => {
   if (mainWin && !mainWin.isDestroyed()) { mainWin.show(); mainWin.focus(); }
