@@ -171,6 +171,7 @@ const ICONS = {
   wrench: '<path d="M14.6 6.4a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.7-3.7a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9l-3.7 3.7z"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/>',
   sync: '<path d="M21 12a9 9 0 0 0-9-9 9 9 0 0 0-6.4 2.6L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9 9 0 0 0 6.4-2.6L21 16"/><path d="M21 21v-5h-5"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   design: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
 };
 function icon(name, size = 14) {
@@ -2501,7 +2502,10 @@ function restoreFocus(snap, exceptId) {
 }
 let viewSeq = 0;
 
-const zoneOf = (p) => (split && (p.kind === 'term' || p.kind === 'restore') ? 'term' : 'main');
+/* A chat pane lives with the terminals: it is a conversation with a session, the same family of
+   thing, and the dock is where the operator already looks for those. Listed HERE so every zone
+   question (termZoneHasPanes, homePane, setVisible) agrees with it. */
+const zoneOf = (p) => (split && (p.kind === 'term' || p.kind === 'restore' || p.kind === 'chat') ? 'term' : 'main');
 /* "Is there anything in the terminal zone?" — asked by ZONE, not by kind, and asked in one place.
    It was three copies of `kind === 'term'`, while the editor-zone twin beside the first one already
    asked by zone. The difference was invisible until a second kind could live in that zone: a
@@ -2958,7 +2962,10 @@ function repaintTerm(p) {
 const PANE_HIDDEN = 'panehidden';
 
 function setPaneShown(p, on) {
-  if (p.kind === 'term') {
+  /* A chat pane is hidden like a terminal, by visibility, and for a different reason: `display:none`
+     throws away a scroller's offset, so returning to a long conversation would land at the top
+     instead of where the operator stopped reading. */
+  if (p.kind === 'term' || p.kind === 'chat') {
     p.el.style.display = 'flex';          // always laid out; see the note above
     p.el.classList.toggle(PANE_HIDDEN, !on);
   } else {
@@ -3152,6 +3159,7 @@ function setActive(id) {
   // keep the active tab reachable when the strip has scrolled past the window
   try { p.tab.scrollIntoView({ inline: 'nearest', block: 'nearest' }); } catch { /* older engines */ }
   if (p.kind === 'term') { p.fit.fit(); p.term.focus(); }
+  if (p.kind === 'chat') chatFocus(p);
   // auto-reveal: the explorer follows the active file tab (skips synthetic ::tabs)
   if (p.kind === 'view' && p.path && EXPLORER.autoReveal && !String(p.path).startsWith('::')) void revealPath(p.path);
   /* COMING BACK TO SETUP RE-VERIFIES IT. The re-verify that is supposed to follow a setup command
@@ -4046,6 +4054,7 @@ function closePane(id) {
   if (p.ro) { try { p.ro.disconnect(); } catch { /* already gone */ } }
   if (p.gl) { try { p.gl.dispose(); } catch { /* already gone */ } }
   if (p.kind === 'term' && !p.exited) window.glassShell.ptyKill(id);
+  if (p.kind === 'chat') chatTeardown(p);
   stopSpeaking(id);   // review nit: a closed pane's answer stops being read aloud
   p.el.remove();
   p.tab.remove();
@@ -4166,6 +4175,7 @@ function newTabMenu() {
      menus read alike; new before resume, the familiar "New / Open recent" order. */
   { const sep = document.createElement('div'); sep.className = 'lsep'; newTabMenuEl.appendChild(sep); }
   item(t('newtab.terminal'), () => createPane({ name: 'terminal' }));
+  item(t('newtab.chat'), () => openChatPane());
   item(t('newtab.file'), () => quickOpen());   // the ⌘P dialog — same door as the loupe
   item(t('newtab.browser'), async () => {
     const url = await inputModal(t('newtab.browserTitle'), t('newtab.browserPlaceholder'));
@@ -4185,6 +4195,13 @@ for (const btn of document.querySelectorAll('.newTab')) {
     m.hidden = false;
     anchorMenu(m, btn.getBoundingClientRect());
   });
+}
+
+/* The chat button sits beside each strip's (+): one click, no menu, because the (+) menu is where
+   it is hidden and a feature nobody finds is not shipped. */
+for (const btn of document.querySelectorAll('.newChat')) {
+  btn.innerHTML = icon('chat', 14);
+  btn.addEventListener('click', (ev) => { ev.stopPropagation(); void openChatPane(); });
 }
 
 /* ── viewers ──────────────────────────────────────────────────────────────── */
@@ -6416,6 +6433,7 @@ window.glassShell.onIntent(async (m) => {
     case 'terminal':
       await createPane({ name: m.name || 'terminal', cmd: m.cmd, background: busBackground(m) });
       return;
+    case 'openChat': void openChatPane(); return;
     case 'spawnWorker': void spawnWorkerFlow(); return;
     case 'launchPrimary': { const c = await window.glassShell.shellConfig(); launchPrimary(c.primary || 'aios'); return; }
     case 'shortcuts': openShortcutsTab(); return;
@@ -7001,6 +7019,510 @@ function openHomeTab() {
     // (no "all shortcuts" link — Home renders the complete set; the same sheet is
     //  still reachable from Help → Keyboard shortcuts and ⌘/)
   });
+}
+
+/* ═══ CHAT PANE (kind 'chat') ═══════════════════════════════════════════════
+   A conversation view next to the terminals. The session itself lives in the main process (it
+   speaks the contract exposed on window.glassShell as chatStart/chatSend/chatInterrupt/
+   chatPermission/chatClose/chatStatus/onChatEvent); this half only paints events and forwards
+   the operator's intent. Nothing here parses model output beyond markdown, and nothing here
+   decides a permission — the card only relays the operator's click.
+
+   Pane ids are strings ('c1', 'c2'…) and the main process's chat ids are numbers, kept in a
+   separate map: pty ids are numbers too, so reusing them as `panes` keys could collide. */
+const CHAT_FONTS = [
+  { key: 'inherit', stack: '', label: 'chat.font.inherit' },
+  { key: 'sans', stack: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", label: 'chat.font.sans' },
+  { key: 'serif', stack: "'Iowan Old Style', Georgia, 'Times New Roman', serif", label: 'chat.font.serif' },
+  { key: 'mono', stack: "'JetBrains Mono', 'SF Mono', Menlo, monospace", label: 'chat.font.mono' },
+  { key: 'inter', stack: "Inter, -apple-system, 'Segoe UI', sans-serif", label: 'chat.font.inter' },
+];
+const CHAT_SIZES = [12, 13, 14, 15, 16, 18, 20];
+const CHAT_DEFAULT_SIZE = 14;
+const CHAT_KNOWN_ERRORS = ['sdk-missing', 'spawn-failed', 'turn-failed'];
+const CHAT_FATAL_ERRORS = ['sdk-missing', 'spawn-failed'];
+let chatSeq = 0;
+const chatPanes = new Map();   // main-process chat id -> pane object
+const chatEarly = new Map();   // chat id -> events that arrived before chatStart resolved
+/* One preference pair for every chat pane: changing the font in one conversation changing it in
+   the others is what "my chat font" means. Seeded from shellConfig on each open. */
+const chatPrefs = { family: '', size: CHAT_DEFAULT_SIZE };
+
+/* ── markdown, without ever injecting the model's raw HTML ───────────────────
+   Model output is untrusted text: a reply that quotes a web page, an email or a file can carry
+   `<img onerror=…>` or `<script>`, and this renderer holds the full glassShell bridge. So the
+   markdown goes through TWO independent guards: (1) a private marked instance whose `html`
+   renderer escapes raw HTML tokens instead of emitting them (a private instance, because
+   marked.use() on the global would also change how the operator's vault notes render), and
+   (2) a DOM pass over an inert <template> that keeps only a short tag allowlist, drops every
+   attribute but a vetted href, and unwraps anything else. Either guard alone would be enough
+   for today's marked; both exist because a parser upgrade is exactly when a guard goes missing
+   unnoticed. */
+let chatMd = null;
+const chatEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function chatMarkdown() {
+  if (chatMd) return chatMd;
+  chatMd = new marked.Marked({ gfm: true, breaks: true });
+  chatMd.use({ renderer: {
+    // marked >= 12 passes a token object, older majors a string — accept both
+    html(tok) { return chatEscape(typeof tok === 'string' ? tok : (tok && tok.text) || ''); },
+  } });
+  return chatMd;
+}
+const CHAT_TAGS = new Set(['P', 'BR', 'STRONG', 'EM', 'DEL', 'CODE', 'PRE', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'A',
+  'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD']);
+const CHAT_DROP = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'META', 'BASE', 'FORM', 'TEMPLATE', 'SVG', 'MATH']);
+function chatSanitize(html) {
+  const tpl = document.createElement('template');   // inert: no script runs and no image loads until adopted
+  tpl.innerHTML = html;
+  const walk = (node) => {
+    for (const child of [...node.childNodes]) {
+      if (child.nodeType === 3) continue;
+      if (child.nodeType !== 1) { child.remove(); continue; }
+      const tag = child.tagName;
+      if (CHAT_DROP.has(tag)) { child.remove(); continue; }
+      if (tag === 'IMG') {   // a remote image would phone home on render; show its alt text instead
+        child.replaceWith(document.createTextNode(child.getAttribute('alt') || ''));
+        continue;
+      }
+      walk(child);
+      const href = tag === 'A' ? (child.getAttribute('href') || '') : '';
+      if (!CHAT_TAGS.has(tag) || (tag === 'A' && !/^(https?:|mailto:)/i.test(href))) {
+        child.replaceWith(...child.childNodes);   // keep the words, lose the element
+        continue;
+      }
+      const cls = tag === 'CODE' ? child.getAttribute('class') : null;
+      for (const a of [...child.attributes]) child.removeAttribute(a.name);
+      if (tag === 'A') { child.setAttribute('href', href); child.setAttribute('rel', 'noreferrer noopener'); }
+      if (cls && /^language-[\w+#.-]+$/.test(cls)) child.setAttribute('class', cls);
+    }
+  };
+  walk(tpl.content);
+  return tpl.content;
+}
+/* Highlighting only on the FINAL render: during streaming the text is a moving target, and running
+   hljs on every frame would cost far more than it adds. */
+function chatHighlight(root) {
+  if (!window.hljs) return;
+  for (const code of root.querySelectorAll('pre code[class^="language-"]')) {
+    const lang = code.className.slice('language-'.length);
+    if (!window.hljs.getLanguage(lang)) continue;
+    try {
+      code.innerHTML = window.hljs.highlight(code.textContent, { language: lang, ignoreIllegal: true }).value;
+      code.classList.add('hljs');
+    } catch { /* leave the plain text */ }
+  }
+}
+function chatRender(target, text, final) {
+  let frag;
+  try { frag = chatSanitize(chatMarkdown().parse(String(text || ''), { async: false })); }
+  catch { target.textContent = String(text || ''); return; }
+  if (final) chatHighlight(frag);
+  target.replaceChildren(frag);
+}
+
+/* ── preferences: font + size ─────────────────────────────────────────────── */
+function chatApplyPrefs() {
+  // through `panes`, not chatPanes: a pane still connecting has no chat id yet but must restyle too
+  for (const p of panes.values()) if (p.kind === 'chat') chatStylePane(p);
+}
+function chatStylePane(p) {
+  p.el.style.setProperty('--chat-font', chatPrefs.family || 'inherit');   // '' = follow the app's own font
+  p.el.style.setProperty('--chat-size', String(chatPrefs.size));
+  if (p.fontSel) {
+    if (![...p.fontSel.options].some((o) => o.value === chatPrefs.family)) {
+      // a stack saved by hand in the config: keep it selectable rather than silently replacing it
+      const o = document.createElement('option'); o.value = chatPrefs.family; o.textContent = chatPrefs.family; p.fontSel.appendChild(o);
+    }
+    p.fontSel.value = chatPrefs.family;
+  }
+  if (p.sizeSel) {
+    if (![...p.sizeSel.options].some((o) => Number(o.value) === chatPrefs.size)) {
+      const o = document.createElement('option'); o.value = String(chatPrefs.size); o.textContent = String(chatPrefs.size); p.sizeSel.appendChild(o);
+    }
+    p.sizeSel.value = String(chatPrefs.size);
+  }
+}
+function chatReadPrefs(c) {
+  if (!c) return;
+  if (typeof c.chatFontFamily === 'string') chatPrefs.family = c.chatFontFamily;
+  const n = Number(c.chatFontSize);
+  if (Number.isFinite(n) && n >= 8 && n <= 40) chatPrefs.size = n;
+}
+
+/* ── status bar ───────────────────────────────────────────────────────────── */
+const CHAT_USAGE_FIELDS = [
+  ['fiveHourPct', 'chat.usage.fiveHour', 'pct'],
+  ['sevenDayPct', 'chat.usage.sevenDay', 'pct'],
+  ['contextPct', 'chat.usage.context', 'pct'],
+  ['model', 'chat.usage.model', 'text'],
+  ['effort', 'chat.usage.effort', 'text'],
+];
+function chatApplyStatus(p, s) {
+  if (!s || typeof s !== 'object') return;
+  /* MERGE, don't replace: the main process may report only what changed (a context figure moves
+     every turn, the weekly figure almost never), and replacing would blank the rest. An absent
+     value is simply never written, so it stays '—' — never 0. */
+  for (const [k] of CHAT_USAGE_FIELDS) if (s[k] !== undefined && s[k] !== null && s[k] !== '') p.status[k] = s[k];
+  if (s.source) p.usageEl.title = String(s.source);
+  for (const [k, , kind] of CHAT_USAGE_FIELDS) {
+    const v = p.status[k];
+    const out = p.usageVals[k];
+    out.className = 'cu-v';
+    if (kind === 'pct') {
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        out.textContent = Math.round(v) + '%';
+        if (v >= 90) out.classList.add('hi'); else if (v >= 70) out.classList.add('mid');
+      } else { out.textContent = '—'; out.classList.add('none'); }
+    } else if (v) { out.textContent = String(v); }
+    else { out.textContent = '—'; out.classList.add('none'); }
+  }
+}
+
+/* ── log helpers ──────────────────────────────────────────────────────────── */
+function chatScroll(p) { if (p.stick) p.log.scrollTop = p.log.scrollHeight; }
+function chatPush(p, node) { p.log.appendChild(node); chatScroll(p); return node; }
+function chatNote(p, text, cls) { return chatPush(p, el('div', 'chat-note' + (cls ? ' ' + cls : ''), text)); }
+function chatRow(p, who) {
+  const row = el('div', 'chat-row who-' + who);
+  const label = el('div', 'chat-who', t(who === 'user' ? 'chat.you' : 'chat.claude'));
+  const bubble = el('div', 'chat-bubble');
+  row.append(label, bubble);
+  chatPush(p, row);
+  return { row, bubble };
+}
+function chatTurn(p, turnId) {
+  const key = turnId === undefined || turnId === null ? '_' : turnId;
+  let tr = p.turns.get(key);
+  if (!tr) {
+    const { row, bubble } = chatRow(p, 'claude');
+    row.classList.add('streaming');
+    const md = el('div', 'chat-md');
+    bubble.appendChild(md);
+    tr = { row, md, text: '', raf: 0, done: false };
+    p.turns.set(key, tr);
+  }
+  return tr;
+}
+function chatPaint(p, tr, final) {
+  if (tr.raf) { cancelAnimationFrame(tr.raf); tr.raf = 0; }
+  chatRender(tr.md, tr.text, final);
+  if (final) { tr.done = true; tr.row.classList.remove('streaming'); }
+  chatScroll(p);
+}
+/* The re-render of a streaming bubble is coalesced to one per animation frame: deltas can arrive
+   far faster than 60 per second, and re-parsing the whole reply on each would stall the UI for
+   the length of the answer. */
+function chatSchedule(p, tr) {
+  if (tr.raf || tr.done) return;
+  tr.raf = requestAnimationFrame(() => { tr.raf = 0; chatPaint(p, tr, false); });
+}
+function chatFinishTurns(p) {
+  for (const tr of p.turns.values()) if (!tr.done) chatPaint(p, tr, true);
+}
+function chatExpirePermissions(p) {
+  for (const card of p.perms.values()) if (!card.resolved) card.resolve(null);
+}
+
+/* ── controls state ───────────────────────────────────────────────────────── */
+function chatSync(p) {
+  const live = p.ready && !p.exited && !p.failed;
+  p.sendBtn.hidden = p.busy;
+  p.stopBtn.hidden = !p.busy;
+  p.sendBtn.disabled = !live || p.busy || !p.input.value.trim();
+}
+function chatAutosize(p) {
+  p.input.style.height = 'auto';
+  p.input.style.height = Math.min(p.input.scrollHeight + 2, Math.round(window.innerHeight * 0.4)) + 'px';
+}
+function chatFocus(p) {
+  requestAnimationFrame(() => { if (p.closed || !paneShown(p)) return; try { p.input.focus({ preventScroll: true }); } catch { /* detached */ } });
+}
+function chatFail(p, text) {
+  p.failed = true; p.ready = false; p.busy = false;
+  if (p.connectingEl) { p.connectingEl.remove(); p.connectingEl = null; }
+  chatNote(p, text, 'error');
+  chatSync(p);
+}
+
+/* ── actions ──────────────────────────────────────────────────────────────── */
+function chatSendNow(p) {
+  const text = p.input.value.trim();
+  if (!text || !p.ready || p.busy || p.exited || p.failed || p.chatId === null) return;
+  p.input.value = '';
+  chatAutosize(p);
+  const { bubble } = chatRow(p, 'user');
+  bubble.textContent = text;   // textContent: the operator's own text is also never parsed as HTML
+  p.stick = true; chatScroll(p);
+  /* Busy at once rather than on 'turn-start': between Enter and the first event the composer would
+     otherwise accept a second Enter and send the same message twice. 'result' clears it. */
+  p.busy = true;
+  chatSync(p);
+  Promise.resolve(window.glassShell.chatSend(p.chatId, text)).catch((e) => {
+    p.busy = false;
+    chatNote(p, t('chat.error.generic', { message: String((e && e.message) || e) }), 'error');
+    chatSync(p);
+  });
+}
+function chatInterruptNow(p) {
+  if (!p.busy || p.chatId === null) return;
+  Promise.resolve(window.glassShell.chatInterrupt(p.chatId)).catch(() => { /* the 'result' event is the truth */ });
+}
+function chatTeardown(p) {
+  p.closed = true;
+  for (const tr of p.turns.values()) if (tr.raf) cancelAnimationFrame(tr.raf);
+  if (p.chatId !== null) {
+    chatPanes.delete(p.chatId);
+    chatEarly.delete(p.chatId);
+    const gs = window.glassShell;
+    if (typeof gs.chatClose === 'function') Promise.resolve(gs.chatClose(p.chatId)).catch(() => { /* already gone */ });
+  }
+}
+
+/* ── permission card ──────────────────────────────────────────────────────── */
+function chatAddPermission(p, ev) {
+  if (p.perms.has(ev.requestId)) return;
+  const card = el('div', 'chat-perm');
+  card.appendChild(el('div', 'chat-perm-title', t('chat.perm.title', { tool: String(ev.toolName || '?') })));
+  if (ev.summary) card.appendChild(el('div', 'chat-perm-sum', String(ev.summary)));
+  if (ev.input !== undefined && ev.input !== null) {
+    let raw;
+    try { raw = typeof ev.input === 'string' ? ev.input : JSON.stringify(ev.input, null, 2); } catch { raw = String(ev.input); }
+    const det = el('details');
+    det.appendChild(el('summary', '', t('chat.perm.details')));
+    det.appendChild(el('pre', '', raw.length > 4000 ? raw.slice(0, 4000) + '…' : raw));
+    card.appendChild(det);
+  }
+  const actions = el('div', 'chat-perm-actions');
+  const allow = el('button', 'vbtn primary', t('chat.perm.allow'));
+  const deny = el('button', 'vbtn', t('chat.perm.deny'));
+  const res = el('span', 'chat-perm-res');
+  actions.append(allow, deny, res);
+  card.appendChild(actions);
+  /* allow === null means "no longer pending" (the turn ended or the session went away): the card
+     is disabled and says so, instead of leaving two live buttons that answer nothing. */
+  card.resolved = false;
+  card.resolve = (ok) => {
+    if (card.resolved) return;
+    card.resolved = true;
+    allow.disabled = true; deny.disabled = true;
+    card.classList.add('resolved', ok === true ? 'allowed' : ok === false ? 'denied' : 'expired');
+    res.textContent = t(ok === true ? 'chat.perm.allowed' : ok === false ? 'chat.perm.denied' : 'chat.perm.expired');
+  };
+  const answer = (ok) => {
+    if (card.resolved || p.chatId === null) return;
+    card.resolve(ok);   // optimistic: a double click must not send two answers
+    Promise.resolve(window.glassShell.chatPermission(p.chatId, ev.requestId, ok)).catch((e) => {
+      chatNote(p, t('chat.error.generic', { message: String((e && e.message) || e) }), 'error');
+    });
+  };
+  allow.addEventListener('click', () => answer(true));
+  deny.addEventListener('click', () => answer(false));
+  p.perms.set(ev.requestId, card);
+  chatPush(p, card);
+}
+
+/* ── event router: one subscription for the whole window ─────────────────── */
+function chatHandleEvent(ev) {
+  if (!ev || ev.id === undefined || ev.id === null) return;
+  const p = chatPanes.get(ev.id);
+  if (!p) {
+    // chatStart's promise may resolve AFTER the first events (ready is emitted while the spawn call
+    // is still unwinding), so hold them for the pane that is about to claim this id.
+    let q = chatEarly.get(ev.id);
+    if (!q) { if (chatEarly.size > 16) return; q = []; chatEarly.set(ev.id, q); }
+    if (q.length < 400) q.push(ev);
+    return;
+  }
+  switch (ev.type) {
+    case 'ready':
+      p.ready = true;
+      if (p.connectingEl) { p.connectingEl.remove(); p.connectingEl = null; }
+      if (ev.model) chatApplyStatus(p, { model: ev.model });
+      chatSync(p);
+      chatFocus(p);
+      return;
+    case 'turn-start':
+      p.busy = true;
+      chatTurn(p, ev.turnId);
+      chatSync(p);
+      return;
+    case 'delta': {
+      const tr = chatTurn(p, ev.turnId);
+      if (tr.done) return;
+      tr.text += String(ev.text || '');
+      chatSchedule(p, tr);
+      return;
+    }
+    case 'turn-end': {
+      const tr = chatTurn(p, ev.turnId);
+      // the final text is authoritative: it replaces what the deltas accumulated
+      if (typeof ev.text === 'string') tr.text = ev.text;
+      chatPaint(p, tr, true);
+      return;
+    }
+    case 'tool':
+      chatPush(p, el('div', 'chat-tool', String(ev.name || '') + (ev.summary ? ' · ' + String(ev.summary) : '')));
+      return;
+    case 'permission': chatAddPermission(p, ev); return;
+    case 'permission-resolved': {
+      const card = p.perms.get(ev.requestId);
+      if (card) card.resolve(!!ev.allow);
+      return;
+    }
+    case 'result':
+      chatFinishTurns(p);
+      chatExpirePermissions(p);
+      p.busy = false;
+      if (ev.interrupted) chatNote(p, t('chat.interrupted'));
+      else if (ev.isError) chatNote(p, t('chat.turnError'), 'error');
+      chatSync(p);
+      return;
+    case 'status': chatApplyStatus(p, ev.status); return;
+    case 'error': {
+      const known = CHAT_KNOWN_ERRORS.includes(ev.code);
+      const msg = ev.message ? String(ev.message) : '';
+      const text = known ? t('chat.error.' + ev.code) + (msg ? ' — ' + msg : '') : t('chat.error.generic', { message: msg || String(ev.code || '?') });
+      if (CHAT_FATAL_ERRORS.includes(ev.code)) { chatFail(p, text); return; }
+      /* Not terminal for the turn: the main process can report a failed assistant message and keep
+         going, and it always closes a query with 'result'. Clearing `busy` here would re-enable
+         the composer mid-turn, so the error is shown and 'result' stays the one thing that ends it. */
+      chatNote(p, text, 'error');
+      return;
+    }
+    case 'exit':
+      chatFinishTurns(p);
+      chatExpirePermissions(p);
+      p.exited = true; p.ready = false; p.busy = false;
+      if (p.connectingEl) { p.connectingEl.remove(); p.connectingEl = null; }
+      if (!p.failed) chatNote(p, t('chat.exited'));
+      chatSync(p);
+      return;
+  }
+}
+if (window.glassShell && typeof window.glassShell.onChatEvent === 'function') window.glassShell.onChatEvent(chatHandleEvent);
+
+/* ── opening a chat ───────────────────────────────────────────────────────── */
+async function openChatPane() {
+  const gs = window.glassShell;
+  const id = 'c' + (++viewSeq);
+  const n = ++chatSeq;
+  const name = n === 1 ? t('chat.title') : t('chat.title') + ' ' + n;
+  const root = document.createElement('div');
+  root.className = 'pane chat';
+
+  const head = el('div', 'vhead');
+  const title = el('span', 'vtitle', name);
+  const fontSel = el('select', 'chat-pick');
+  fontSel.title = t('chat.font.label'); fontSel.setAttribute('aria-label', t('chat.font.label'));
+  for (const f of CHAT_FONTS) { const o = el('option', '', t(f.label)); o.value = f.stack; fontSel.appendChild(o); }
+  const sizeSel = el('select', 'chat-pick');
+  sizeSel.title = t('chat.size.label'); sizeSel.setAttribute('aria-label', t('chat.size.label'));
+  for (const s of CHAT_SIZES) { const o = el('option', '', String(s)); o.value = String(s); sizeSel.appendChild(o); }
+  head.append(title, fontSel, sizeSel);
+
+  const usageEl = el('div', 'chat-usage');
+  usageEl.setAttribute('aria-label', t('chat.usage.label'));
+  const usageVals = {};
+  for (const [k, label] of CHAT_USAGE_FIELDS) {
+    const cell = el('span', 'cu');
+    const v = el('span', 'cu-v none', '—');
+    cell.append(el('span', 'cu-k', t(label)), v);
+    usageEl.appendChild(cell);
+    usageVals[k] = v;
+  }
+
+  const log = el('div', 'chat-log');
+  log.setAttribute('role', 'log');
+  log.setAttribute('aria-live', 'polite');
+
+  const compose = el('div', 'chat-compose');
+  const input = el('textarea', 'chat-input');
+  input.rows = 1;
+  input.placeholder = t('chat.placeholder');
+  input.title = t('chat.inputHint');   // the key hints live in the tooltip: a long placeholder wraps and clips in a narrow dock
+  const sendBtn = el('button', 'vbtn primary', t('chat.send'));
+  const stopBtn = el('button', 'vbtn', t('chat.stop'));
+  stopBtn.title = t('chat.stopHint');
+  stopBtn.hidden = true;
+  compose.append(input, sendBtn, stopBtn);
+  root.append(head, usageEl, log, compose);
+
+  const tab = makeTab(id, name, 'chat');
+  const p = {
+    kind: 'chat', name, el: root, tab, chatId: null, log, input, sendBtn, stopBtn, fontSel, sizeSel, usageEl, usageVals,
+    ready: false, busy: false, exited: false, failed: false, closed: false, stick: true,
+    turns: new Map(), perms: new Map(), status: {}, connectingEl: null,
+  };
+  chatStylePane(p);
+
+  // follow the tail unless the operator scrolled up to read — and resume once they return to it
+  log.addEventListener('scroll', () => { p.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48; });
+  // links never navigate this window: they open in the system browser
+  log.addEventListener('click', (e) => {
+    const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
+    if (!a) return;
+    e.preventDefault();
+    void window.glassShell.openExternal(a.getAttribute('href'));
+  });
+  input.addEventListener('input', () => { chatAutosize(p); chatSync(p); });
+  input.addEventListener('keydown', (e) => {
+    // Enter sends, Shift+Enter breaks the line. During IME composition Enter confirms the
+    // candidate, so it must never send (keyCode 229 covers engines that clear isComposing early).
+    if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    chatSendNow(p);
+  });
+  // Esc anywhere in the pane stops the turn — the same gesture the terminal session answers to
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.isComposing || !p.busy) return;
+    e.preventDefault(); e.stopPropagation();
+    chatInterruptNow(p);
+  });
+  sendBtn.addEventListener('click', () => chatSendNow(p));
+  stopBtn.addEventListener('click', () => chatInterruptNow(p));
+  fontSel.addEventListener('change', () => {
+    chatPrefs.family = fontSel.value;
+    chatApplyPrefs();
+    void Promise.resolve(gs.setSetting('chatFontFamily', chatPrefs.family)).catch(() => {});
+  });
+  sizeSel.addEventListener('change', () => {
+    const v = Number(sizeSel.value);
+    if (!Number.isFinite(v)) return;
+    chatPrefs.size = v;
+    chatApplyPrefs();
+    void Promise.resolve(gs.setSetting('chatFontSize', v)).catch(() => {});
+  });
+
+  panes.set(id, p);
+  attachPaneDropTarget(p, id);
+  homePane(id, p, { fresh: true });
+  setActive(id);
+  chatSync(p);
+
+  // preferences and the usage bar fill in when their answers arrive; neither blocks the pane
+  void gs.shellConfig().then((c) => { chatReadPrefs(c); chatApplyPrefs(); }).catch(() => {});
+  if (typeof gs.chatStatus === 'function') void Promise.resolve(gs.chatStatus()).then((s) => { if (!p.closed) chatApplyStatus(p, s); }).catch(() => {});
+
+  if (typeof gs.chatStart !== 'function') { chatFail(p, t('chat.unavailable')); return id; }
+  p.connectingEl = chatNote(p, t('chat.connecting'), 'busy');
+  try {
+    const r = await gs.chatStart({ startSession: true });
+    if (!r || !r.ok) { chatFail(p, t('chat.error.generic', { message: (r && r.error) || '?' })); return id; }
+    if (p.closed) {   // the tab was closed while we were connecting: nobody is left to own this session
+      void Promise.resolve(gs.chatClose(r.id)).catch(() => {});
+      chatEarly.delete(r.id);
+      return id;
+    }
+    p.chatId = r.id;
+    chatPanes.set(r.id, p);
+    const early = chatEarly.get(r.id);
+    chatEarly.delete(r.id);
+    if (early) for (const ev of early) chatHandleEvent(ev);
+  } catch (e) {
+    chatFail(p, t('chat.error.generic', { message: String((e && e.message) || e) }));
+  }
+  return id;
 }
 
 /* ── tool tabs: Settings + Setup (synthetic viewer panes) ─────────────────── */

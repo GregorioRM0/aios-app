@@ -90,6 +90,10 @@ export function installMenu(getWin: () => BrowserWindow | undefined): void {
         { label: t('menu.checkUpdates'), click: () => intent('checkUpdates') },
         { type: 'separator' },
         { label: t('menu.newTerminal'), accelerator: 'CmdOrCtrl+T', click: () => intent('terminal', { name: 'terminal' }) },
+        /* No accelerator on purpose: the chat is a prototype pane, and every free ⌘/⌘⇧ letter is
+           already spoken for by the convention above (menu.test.ts rejects duplicates). It has
+           three doors that need no key: this item, the (+) menu and the button beside it. */
+        { label: t('menu.openChat'), click: () => intent('openChat') },
         { type: 'separator' },
         { label: t('menu.openFile'), accelerator: 'CmdOrCtrl+P', click: () => intent('quickOpen') },
         { label: t('menu.todayNote'), accelerator: 'CmdOrCtrl+Shift+Y', click: () => intent('openToday') },
