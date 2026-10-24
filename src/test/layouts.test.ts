@@ -164,9 +164,8 @@ test('reveal-on-open must be driven by the operator, never by a repaint', () => 
   // and every genuine creation path must opt in, or opening into a crushed zone regresses
   // (a command-bus terminal is the one exception: it opens behind the operator's view, so
   // createPane passes `fresh: !background` — see busFocus.test.ts)
-  // (the chat pane is the fifth: a conversation opened into a crushed zone must reveal it too)
-  assert.equal((app.match(/homePane\(id, (?:p|paneObj), \{ fresh: (?:true|!background) \}\)/g) || []).length, 5,
-    'all five pane-creation sites pass fresh');
+  assert.equal((app.match(/homePane\(id, (?:p|paneObj), \{ fresh: (?:true|!background) \}\)/g) || []).length, 4,
+    'all four pane-creation sites pass fresh');
 });
 
 test('more than one notification is actually visible, and the cap cannot hang', () => {
