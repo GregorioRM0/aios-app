@@ -23,7 +23,8 @@ An earlier prototype (the `feat/chat-view` RFC this document replaces) built a s
 drove Claude through the Agent SDK. That pane was **removed** (§ 8). The pieces worth keeping — bubbles,
 sanitised markdown, the font picker, the usage bar — were moved onto the skin.
 
-It is a prototype: it proves the loop on a real session end to end (§ 10 lists what it does not do).
+It is a prototype: the loop is proved on a real session end to end by a gate in `npm run smoke` (§ 9), and
+§ 10 lists what it does not do.
 
 ## 2. What it does for the operator
 
@@ -70,6 +71,7 @@ that has ended) do not.
                     └────────────────────────────────────────────────────────────┘
 
  renderer ─ submitToPty(id, text) ─► pty:write (text, then CR as a second write) ─► claude
+ renderer ─ chatSkin:screen (what xterm shows, snapshots) ─► PromptMonitor
 ```
 
 **Two inputs, one output, one way back.**
@@ -92,8 +94,8 @@ that has ended) do not.
     watch per pane, a new one replaces the old.
 - *Tracker* (`src/core/transcriptChat.ts`, pure). Turns lines into `ChatItem`s and tracks the turn state
   and the context size. It never throws on a corrupt line.
-- *pty output tail* (`src/core/tuiPrompt.ts`, pure). Only to notice that the TUI is waiting on a dialog
-  (§ 5).
+- *Dialog detector* (`src/core/tuiPrompt.ts`, pure). Reads the pty's output and, once the renderer sends
+  them, snapshots of what its terminal shows. Only to notice that the TUI is waiting on a dialog (§ 5).
 - *Writing back*: **only** `submitToPty(id, text)`, the chokepoint that writes the text and then the CR
   as two separate writes. Claude Code turns on bracketed paste, so a single `text + CR` write arrives as
   one paste, inside which the CR is a literal newline: the message lands in the box and never sends.
@@ -106,7 +108,9 @@ that has ended) do not.
 `panes` Map and `ptyWrite` by it; the skin map in main uses the same number. There is no translation
 layer to drift.
 
-**Lifetime of a watch.** Created by `chatSkin:watch`; ended by `chatSkin:unwatch`, the pty's exit (after
+**Lifetime of a watch.** Created by `chatSkin:watch`, which may be called **without a session id** (`null`:
+"dialogs only", no transcript yet — § 5); a later `chatSkin:watch` with the real id replaces the transcript
+and keeps the same dialog monitor, so a dialog still open is neither forgotten nor announced twice. Ended by `chatSkin:unwatch`, the pty's exit (after
 one last read pass, `finish`, because a session's closing lines land just before it exits), `pty:kill`,
 destruction of the sender, or closing the window / quitting. A `watch` for a pane whose pty has already
 exited is accepted (it shows the history) and lasts until `unwatch` or the window goes.
@@ -148,10 +152,13 @@ Details the renderer relies on:
 - `prompt` is sent only when the kind *changes*; `null` means the dialog is gone.
 - Absent numbers stay absent, never `0`.
 
-IPC surface: `chatSkin:watch(paneId, sessionId) → {ok:true, file} | {ok:false, error:'not-found'|'bad-id'}`
-(`not-found` does not stop the search), `chatSkin:unwatch(paneId)`, the `chatSkin:event` stream, and
+IPC surface: `chatSkin:watch(paneId, sessionId | null) → {ok:true, file} | {ok:false, error:'not-found'|'bad-id'}`
+(`not-found` does not stop the search; with `null` the answer is `{ok:true, file:''}` and only the dialog
+monitor starts), `chatSkin:unwatch(paneId)`, `chatSkin:screen(paneId, text)` (one-way: the terminal's
+screen snapshots, accepted only from the sender that owns the watch), the `chatSkin:event` stream, and
 `chat:status` for the usage bar. The `sessionId` becomes part of a path, so anything not shaped like an id
-(`/^[A-Za-z0-9-]{8,}$/`) is refused before it is joined.
+(`/^[A-Za-z0-9-]{8,}$/`) is refused before it is joined. The renderer treats `not-found` as "waiting", not
+as an error: a new session has no transcript file until its first message.
 
 ## 4. The transcript format, as verified
 
@@ -197,18 +204,50 @@ proceed?", the transcript shows a `tool_use` with no result and says nothing els
 on the screen. The same goes for the folder-trust prompt, `/model`'s picker, an `AskUserQuestion`, and any
 numbered menu. The chat cannot draw them and **does not try to answer them**.
 
-**Detection** (`detectTuiPrompt`, pure; `createPromptMonitor` wraps it). Main feeds the monitor the raw pty
-output of a watched pane (bounded tail of 16 KiB; judged 120 ms after output settles, because a TUI repaints
-a dialog in many small writes). A verdict needs *structure*, not wording, because ordinary answers are full
-of numbered lists and sentences like "Do you want to proceed?":
+**Detection** (`detectTuiPrompt`, pure; `createPromptMonitor` wraps it). It is judged 120 ms after its input
+settles, because a TUI repaints a dialog in many small writes, and it works from **what the terminal shows,
+not from the byte stream** (`39d60fd`):
+
+- Ink repaints a dialog differentially (moving the selection rewrites two lines, not the footer), so the tail
+  of the raw stream stops looking like a dialog while the dialog is still open. The renderer's xterm is the
+  only thing that knows the screen *now*. While a pane is in chat view, after xterm has parsed each chunk
+  (the callback of `term.write`, `chatSkinScreenSoon`), the renderer sends at most one snapshot per 150 ms
+  window: the last 60 rows of xterm's buffer as plain text (`chatSkinScreenText`) over `chatSkin:screen`.
+  Main keeps the last 8 KiB, and the monitor's `screen()` **replaces** its buffer instead of extending it.
+- Until the first snapshot of a pane arrives, the monitor is fed the raw pty output (`push`, bounded tail of
+  16 KiB). Once one has arrived (`screenFed`), the raw stream is no longer fed: mixing the two would let a
+  repaint talk the monitor out of a dialog that is still open.
+- A dialog that was already on screen needs no new bytes to be seen. Main keeps a per-pty tail of the last
+  16 KiB of output from the moment the pty spawns (`ptyTails`) and pushes it into a monitor when one is
+  created; and `chatSkinSync` asks for a snapshot as soon as a watch starts.
+
+A verdict needs *structure*, not wording, because ordinary answers are full of numbered lists and sentences
+like "Do you want to proceed?":
 
 1. a numbered option list (consecutive, at least two) with the TUI's selection cursor `❯`, whose last option
    is within five non-empty lines of the end of a 40-line tail (a dialog is the last thing painted);
+   *or an unnumbered menu* (`ec1c440`): a `❯ label` cursor line between the second-to-last and the
+   ninth-to-last non-empty line **and** the TUI's own footer (`Enter to confirm`, `Esc to cancel`, …) in the
+   last two. Same structure, minus the numbers;
 2. a recogniser around it that only the TUI prints — trust, model picker, question chips / "Type something",
    permission wording — or, for an unrecognised but real menu, the TUI's own footer (`Enter to select`,
    `Esc to cancel`);
 3. kinds: `permission · trust · select · question · model · other`; `other` is deliberately narrow (a
    keypress prompt such as `(y/n)` on the very last lines). The `hint` is the question line, trimmed.
+
+**The folder-trust dialog, as Claude Code 2.1 really draws it** (`ec1c440`). The detector was first written
+against numbered menus. The real dialog is `Accessing workspace:` and the folder, then `Quick safety check:
+Is this a project you created or one you trust?`, `Security guide`, and two **unnumbered** rows, `❯ No, exit`
+over `Yes, I trust this folder`, with `Enter to confirm · Esc to cancel` as the last line. Two things made
+it invisible: the TUI places words with an absolute column (`ESC[<n>G`), and dropping that sequence glued
+them (`Quicksafetycheck`) so no wording could match; and the missing numbers failed the menu rule. Now
+`stripAnsi` turns the absolute-column sequence into a space, and the unnumbered menu above is accepted. The
+trust recogniser matches `Quick safety check`, `trust this folder` / `trust the files in this folder`,
+`Do you trust the files` and `Yes, I trust`; the `hint` is the first context line that matches, normally
+the `Quick safety check` line. The numbered variant is still recognised. `src/test/chatSkin.test.ts`
+holds the real sequences (a raw stream with the column sequences, a repaint that moves the cursor, a screen)
+with controls: stripping the column sequences instead of spacing them yields no verdict, and a raw stream
+followed by the repaint reads as "gone" while the screen still shows the dialog.
 
 **What the operator sees.** A non-null `prompt` puts `cs-strip` on the pane: the overlay shrinks to the
 upper part and the **real xterm** is un-hidden in the lower strip (so the TUI's bottom rows, where the
@@ -217,7 +256,8 @@ box is disabled for the duration. If the pane is not in front or the window is h
 and a toast says which session needs the operator. When the dialog goes (`kind: null`) the strip closes and
 the caret returns to the box.
 
-**When the dialog is considered answered.** The pty output moving past it, or *proof from the transcript*:
+**When the dialog is considered answered.** The screen moving past it (a snapshot that no longer shows one;
+before the first snapshot, the pty output), or *proof from the transcript*:
 a finished tool result or a new operator message (main calls `monitor.clear()`). A fresh assistant text does
 **not** clear it, on purpose: model text can appear while a dialog is still open.
 
@@ -234,12 +274,17 @@ silent transcript can mean the session was replaced under the same pty.
 - A dialog taller than the retained window loses its question line (the kind then falls back to `select`).
 - A false positive sends the operator to the terminal for nothing; a false negative leaves the session
   looking idle until the 20 s net fires. The design leans to the first.
-- **From reading the code, not tested:** the monitor exists only while a transcript watch exists, and a
-  watch needs an adopted `sessionId`. So a dialog shown *before* adoption (the first-run folder-trust prompt
-  is the obvious case) is not seen by the monitor, and a dialog already on screen when the operator flips
-  to chat starts with an empty buffer until the TUI next paints. The state shown meanwhile is "connecting",
-  and the stalled-turn net needs an open turn. Whether another path covers these cases is **pending** to
-  verify (§ 10).
+- **A dialog with nothing to anchor on is not recognised.** The first-run offer to make auto mode the
+  default has no footer and is not a kind the detector knows; the smoke gate (§ 9) answers it itself. The
+  same goes for any new first-run nag a CLI version adds.
+
+**Before the session has an id** (`39d60fd`). A new session in a folder Claude Code has not seen blocks on
+the folder-trust dialog *before* it registers a session id. The chat view used to start watching only once
+it had one, so the overlay hid the only thing the session was waiting on. Now `chatSkinSync` watches as soon
+as the pane is in chat view and its pty is alive: with no id the watch is `''` in the renderer and `null`
+on the wire, main starts only the dialog monitor, and the view reads "connecting". The strip and the notice
+work exactly as for any dialog. When the id is adopted the watch is replaced by one that also follows the
+transcript, keeping the monitor.
 
 ## 6. The usage bar: what is the pane's and what is the account's
 
@@ -329,20 +374,49 @@ there being one session.
   `src/test/chatSkin.test.ts` holds the wiring invariants of § 7. Fixtures are written by hand; no real
   transcript is copied into the repo. The controls are real: breaking the UTF-8 decoder on purpose made the
   multi-byte test fail.
-- **End-to-end gate in the smoke run — pending.** *Specification, not yet verified against the tree:* an
-  extra step of `npm run smoke`, enabled by `AIOS_SMOKE_CHAT=1`, running in the hidden window the smoke
-  already uses (`show: false`), that goes session → chat view → message → bubble. It needs a real `claude`,
-  so it starts an **ephemeral session in a temporary cwd that closes and cleans itself up**, and reports
-  `SKIPPED` (like the discovery gate) when no `claude` is on the machine. It is run only through
-  `npm run smoke` and never with a visible window: the repository's rule is that no check opens a window
-  on the operator's screen (`npm start`, `--eval` and `--shot` are not used to verify this feature). As of
-  this commit the step is **not in the branch**; this paragraph must be reconciled with the code when it
-  lands.
+- **End-to-end gate in the smoke run** (`chatViewSmoke` in `src/main/main.ts`, `97cf42d`). The last step of
+  `npm run smoke` (`electron . --smoke`), run in the hidden window the smoke already uses (`show: !SMOKE`),
+  after the fast gates and outside their 25 s ceiling, because it waits on a model and has deadlines of its
+  own. It is skipped when an earlier gate failed, so a broken build does not also spend a model call. A smoke
+  run uses a private, throwaway userData folder, so it neither reads nor writes the operator's local storage
+  while their app is open. It never opens a window on the operator's screen: it is run only through
+  `npm run smoke`, not with `npm start`, `--eval` or `--shot`.
+  - *Switches.* `AIOS_SMOKE_CHAT` unset: it runs when a usable `claude` is found (on the `PATH` and signed
+    in) and is `SKIPPED` otherwise (a laptop without it, CI). `AIOS_SMOKE_CHAT=1`: a gate that cannot run
+    is a **failure**, because "did not run" must never read as "passed". `AIOS_SMOKE_CHAT=0`: skipped on
+    purpose. `AIOS_SMOKE_CHAT_DEBUG` prints periodic progress lines (rows, state, pty age, the last screen
+    rows) while it waits for the answer.
+  - *What it proves.* It drives the whole path through the same functions the operator's hands drive:
+    1. `createPane`, the launch path every session uses, in a fresh temporary folder (`aios-smoke-chat-*`)
+       with `claude --model haiku`, its own name, `--strict-mcp-config` and a `--settings` blob that turns
+       hooks off, remote control off and the status line into a no-op, and with the environment inherited
+       from a launching Claude session dropped (`env -u`), so a throwaway session reaches nothing of the
+       operator's world;
+    2. the tab's Terminal/Chat toggle pressed **at once**, while the session is still blocked on the
+       folder-trust dialog and has no id, which is exactly when the chat view must not hide the terminal;
+    3. the wait (up to 75 s) for the pane to adopt its session id and for the chat view to follow it. It
+       records whether the detector reported `trust`, and answers the dialogs itself by reading the screen
+       and moving the cursor: "Yes, I trust" for the trust dialog and "No" for the auto-mode offer. No
+       session id in time is a failure that says whether the detector ever reported the trust dialog;
+    4. a message typed into the chat composer and sent with Enter (`submitToPty`), asking for exactly a
+       random word (`PONG-` plus eight hex digits);
+    5. an operator bubble **and** an assistant bubble carrying that word, painted from the transcript
+       (up to 90 s). A dialog that interrupts the turn is a failure.
+  - *How it cleans up.* On success and on failure it closes the pane, checks that the `claude` process
+    tree is gone (killing by pid and reporting a problem if not), that the pty and the transcript watcher
+    are unregistered and that the session left the registry, and removes the temporary folder and the
+    transcript folder Claude Code made for that cwd, after checking the name and the location and that it
+    is not a symlink. Any leftover turns an `ok` into a failure.
+  - *Exit code.* Only a `FAILED` verdict (or an earlier gate failing) exits non-zero; `SKIPPED` does not.
+  - `src/test/chatSkin.test.ts` pins the shape of the gate (hidden window, skip and strict modes, cleanup in
+    `finally`, deletion only of what it can name) with negative controls.
 - **Gates for a change like this:** `npm test`, `npm run smoke`, `npm run check:tokens` (no colour
   outside `theme.css`; every pty submit goes through `submitToPty`), `npm run check:whatsnew`.
-- **What source-reading tests cannot see:** that the bubbles actually paint and the strip actually shows.
-  That was checked by hand in a hidden window with a throwaway harness kept outside the repo, so it is
-  not reproducible from the tree until the smoke step above exists.
+- **What source-reading tests cannot see:** that the bubbles actually paint and that the detector sees a
+  real dialog. The smoke step above now covers both against a real session. What it does not look at is
+  the geometry of the strip (that the real xterm is un-hidden in the lower part and takes the focus); that
+  was checked by hand in a hidden window with a throwaway harness kept outside the repo, and is not
+  reproducible from the tree.
 
 ## 10. What it does not do yet, and risks
 
@@ -366,9 +440,9 @@ there being one session.
   crash. There is no version check.
 - **The TUI heuristic is fragile across versions** (wording, layout, glyphs). The 20 s stalled-turn notice
   is the guarantee, not the detector.
-- **Sessions without an adopted `sessionId`** have no watch and so no chat content and no dialog detection
-  (§ 5). Adoption depends on the registry / title announcement; a pane that never gets one stays on
-  "connecting" in chat view.
+- **Sessions without an adopted `sessionId`** have no transcript watch and so no chat content, but their
+  dialogs are watched from the screen (§ 5, `39d60fd`). Adoption depends on the registry / title
+  announcement; a pane that never gets one stays on "connecting" in chat view, with an empty log.
 - **Large transcripts.** A very large file was backfilled in under four seconds in a read-only trial, but
   every item becomes a DOM node (markdown is rendered per message); there is no virtualisation. Memory and
   scroll cost with very long sessions is **unmeasured**.
@@ -377,8 +451,9 @@ there being one session.
 
 **Open questions**
 
-1. Should a dialog before `sessionId` adoption (first-run trust) be covered by watching the pty from the
-   moment a chat view opens, independent of the transcript watch?
+1. Should the detector learn first-run offers that have no footer to anchor on (the "make auto mode your
+   default" one)? Nothing else points the operator at the terminal for them, since the stalled-turn notice
+   needs an open turn.
 2. Is 20 s the right threshold for the stalled-turn notice, and should it differ for long tool runs?
 3. Should the chat offer the tool's output behind a disclosure, now that it is available in the transcript?
 4. Should `chatViewDefault` be per agent or per pane kind rather than global?
