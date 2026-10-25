@@ -37,20 +37,54 @@ that has ended) do not.
 - **Open in chat by default.** Settings → `chatViewDefault` (off unless the stored value is literally
   `true`). It is read fresh on each pane creation, so it covers new, restored and resumed sessions — all of
   them go through `createPane` with a `claude` command.
-- **Bubbles.** The operator's messages and Claude's replies, the latter as markdown rendered once the
-  message is complete (code highlighted). Notes for system events: an interruption, an API error, the
-  output of a local command.
-- **Tools collapsed.** Each tool call is one line (`name · what it is about`) with a running / ok / error
-  state that updates in place when the result arrives. No tool output is shown.
-- **Activity indicator.** A "working" line while a turn is open and the pty has produced output recently,
-  or a message was just sent.
-- **The box.** Enter sends; Shift+Enter inserts a newline; IME composition never sends. Esc cuts the
-  running turn (only while something is running — see § 3). Slash commands are sent like any other
-  message, with no filter and no special path.
-- **Font and size.** The same pickers as before, persisted through the existing `chatFontFamily` /
-  `chatFontSize` settings and shared by every chat view.
-- **Usage bar.** 5-hour, weekly, context, model, effort. See § 6 for which of these belong to the pane
-  and which to the account.
+- **One reading column.** The conversation is a single centred column, at most ~748 px wide with 16 px
+  gutters, so a wide dock reads like a page and a narrow one simply fills. The log itself spans the pane (its
+  scrollbar stays at the pane's edge); the column is made with side padding, which resolves against the pane.
+  The look is inspired by the layout of chat apps in general (a column, boxes, compact tool rows, a floating
+  composer); it uses the app's own tokens, Inter or the system font, and none of anyone's marks.
+- **Boxes.** The operator's message is a soft rounded box on the right (plain text, line breaks kept). Claude's
+  reply has **no bubble**: it is text across the whole column, markdown rendered once the message is complete,
+  with a reading hierarchy (1.7 line height, headings, lists, quotes, links, rules), inline code on a soft
+  fill, a **header on every code block** (language on the left, a **copy** button on the right: clipboard
+  through the shell, "Copied" feedback) and **framed tables** (tinted header, faint zebra, their own horizontal
+  scroll). The "You" / "Claude" labels are gone from the screen and remain, hidden, for screen readers. The
+  code header, the copy button and the table wrapper are built as DOM *after* the sanitiser (§ 8), so the
+  allowlist did not change and no `<button>` can come from the model. Notes for system events (an
+  interruption, an API error, the output of a local command) are small centred pills.
+- **Tools as rows, with their output.** Each tool call is one compact row: a glyph by kind (read, edit, bash,
+  search, web, agent; a wrench for the rest, MCP tools included), the name, its main argument truncated with an
+  ellipsis, and a state mark: a quiet spinner in `--st-busy`, a check in `--st-ok`, a cross in `--st-error`
+  (never coral). Consecutive rows join into one card. A row is a button (`aria-expanded`): opened, it shows
+  what the tool returned (`ChatItem.tool.output`, § 3.2) in monospace, height-capped with its own scroll, with
+  a notice when only the start was kept, or a neutral line when there is nothing (or the tool still runs). The
+  status moves **in place** on the same node, so a row the operator opened stays open. The output is
+  untrusted text and only ever goes in through `textContent`.
+- **Activity indicator.** Three dots in `--st-busy` and "Claude is working…" **inside the column, under the
+  last message**, while a turn is open and the pty has produced output recently, or a message was just sent.
+- **The composer.** One large rounded card floating over the end of the conversation (a soft shadow, the
+  text fading out under it): a textarea that grows to a ceiling and then scrolls, a bottom row with a **model
+  chip** and an **effort chip** (read from the same usage data, § 6) and a **round send button** that
+  becomes a round **stop button** while Claude works (`chatSkinControls` is unchanged: stop when working,
+  send disabled without text). Enter sends; Shift+Enter inserts a newline; IME composition never sends. Esc
+  cuts the running turn (only while something is running — see § 3). Slash commands are sent like any other
+  message, with no filter and no special path. Focus is a visible ring around the whole card.
+- **Reading settings.** Font and size no longer take header space: an **Aa** button opens a small popover
+  (each font drawn in itself, the size as a row of numbers, a live sample), persisted through the same
+  `chatFontFamily` / `chatFontSize` settings and shared by every chat view; a stack or size saved by hand
+  stays selectable. It closes with Esc or a press outside, and **that Esc must not cut the turn**: its
+  listener runs before the interrupt one and stops the event (§ 9: a test pins the order).
+- **Usage meters.** 5-hour, weekly and context are fine meters in the header (label, a 4 px bar, the value;
+  neutral up to 70, `--st-warn` from 70, `--st-error` from 90). A reading we do not have is `—` with an empty
+  bar, never `0`, and each meter carries its value in `title` and `aria-label`. Model and effort are the
+  composer's chips. See § 6 for which of these belong to the pane and which to the account.
+- **Cards for the states.** *Connecting*, *waiting*, *empty* and *error* are one centred card (icon, a short
+  title, a sentence; the error one adds a button back to the terminal). *The terminal needs you* (a dialog) and
+  *quiet for a while* (a stalled turn) are a status card in the column — `--st-input` and `--st-warn` — with
+  the same button for the stalled case; under a dialog it docks onto the live terminal strip (§ 5).
+- **Motion, only as an answer to events.** A row that arrives rises a few px while it fades in (not for history
+  loaded within 1.5 s of a reset); the log glides to the tail while the view is following it (`cs.stick`; a
+  wheel-up takes the control back at once) and a round *latest* button appears when the operator has scrolled
+  away. Every animation has a `prefers-reduced-motion` fallback.
 - **Always a way out.** The header switch, the tab icon and the notice button all return to the terminal.
 
 ## 3. Architecture
@@ -142,7 +176,11 @@ Every event carries `paneId` plus exactly one of:
 | `{type:'missing'}` | The transcript file does not exist yet. Not an error; main keeps looking. |
 | `{type:'error', code}` | The read failed (`read-failed`). |
 
-`ChatItem = {uuid, role: 'user'|'assistant'|'tool'|'system', text?, tool?: {id, name, summary, status: 'running'|'ok'|'error'}, ts?}`.
+`ChatItem = {uuid, role: 'user'|'assistant'|'tool'|'system', text?, tool?: {id, name, summary, status: 'running'|'ok'|'error', output?, outputTruncated?}, ts?}`.
+`tool.output` is a bounded preview of the tool's result (ANSI and control characters removed, at most 4,000
+characters and 60 lines, cut at the head; `outputTruncated: true` when it was cut) that exists only once the
+result has arrived. It is **untrusted data**: the renderer shows it through `textContent` only. It is not
+redacted, because it goes to this app's own window and nowhere else (`core/transcriptChat.ts` says why).
 Details the renderer relies on:
 
 - During a backfill only `items` are streamed; `turn` and `usage` are announced **once** when it ends,
@@ -351,7 +389,7 @@ its `asarUnpack` entry. Reasons:
 5. **Maintenance surface.** A second event model, a second set of IPC channels and a pane kind to keep in
    step with every change to panes.
 
-**What was reused** (it lives in `renderer/app.js` between `CHAT SKIN` and `END CHAT SKIN`): the bubbles;
+**What was reused** (it lives in `renderer/app.js` between `CHAT SKIN` and `END CHAT SKIN`; the look of all of it was redesigned afterwards, § 2): the bubbles;
 the sanitised markdown (a private `marked` instance that escapes raw HTML, then an allowlist pass over an
 inert `<template>`, two independent guards because model output can quote a web page or an email and this
 renderer holds the whole `glassShell` bridge) and the highlighting; the font and size picker with its
@@ -415,15 +453,35 @@ there being one session.
 - **What source-reading tests cannot see:** that the bubbles actually paint and that the detector sees a
   real dialog. The smoke step above now covers both against a real session. What it does not look at is
   the geometry of the strip (that the real xterm is un-hidden in the lower part and takes the focus); that
-  was checked by hand in a hidden window with a throwaway harness kept outside the repo, and is not
-  reproducible from the tree.
+  is what the screenshot harness below shows.
+- **Looks are verified by looking: `npm run chat:shot`** (`2d30d9b`). A CSS rule can pass every source test and
+  still draw an unreadable column, so the visual design is checked on pictures. The harness boots the real
+  renderer in a window that **is never shown** (`show:false`, a lock that cancels `show()`, `focus()` and
+  `restore()`, and a `show` handler that hides it again; the unit suite pins it with negative controls),
+  with a private `userData` under the temp folder, at device scale factor 2, and writes one PNG per *shot* of a
+  hand-written fixture (`src/test/fixtures/chat-shot.json`, neutral: an invented sync client, no real
+  transcript). `npm run chat:shot -- --out <dir> [--fixture <file>]`.
+  - A shot is `{name, theme: dark|light, events, composer, terminal, js, size, layout, clip: window|pane,
+    working}`. `events` names streams of the same events `chatSkinHandleEvent` receives (reset, items, turn,
+    usage, prompt, missing, error, plus `status` for the usage meters); `js` runs in the renderer with
+    `{cs, root, $, $$, sleep}`, which is how a shot opens a tool row or the settings popover.
+  - The fixture covers what the design must hold: operator boxes, an answer with headings, lists, inline code,
+    a TypeScript and a bash block, a table, a quote and a link; a read, then a run of three tool calls in three
+    states (done, failed, running) with one opened to show its output; the composer with text and the stop
+    button; usage meters (and a high-usage variant that turns them gold and red); the settings popover open; the
+    attention card over a live dialog; the empty state; a narrow window; the stock workbench layout; all of them
+    in dark and light where it matters.
+  - How it is used: after every visual change, look at **every** PNG (dark and light) before calling it done —
+    spacing, hierarchy, contrast in the light theme, truncation, shadows. It does not replace the gates; it is
+    the one place a redesign is actually seen. It never answers a dialog and never writes to a pty.
 
 ## 10. What it does not do yet, and risks
 
 **Not done**
 
 - **Partial streaming.** Messages appear when complete, as the transcript records them.
-- **Tool output** is not shown, only that a tool ran and how it ended.
+- **Tool output beyond the preview.** Rows show the bounded preview (§ 2, § 3.2); the full result stays in the
+  transcript and the terminal. A very long output, or a diff rendered as a diff, is not drawn.
 - **Thinking and subagent activity** are not shown (subagent lines are dropped on purpose).
 - **Answering dialogs** from the chat; they are only pointed at (§ 5).
 - **Attachments, images, drag-and-drop, `@` mentions** in the box.
@@ -455,7 +513,8 @@ there being one session.
    default" one)? Nothing else points the operator at the terminal for them, since the stalled-turn notice
    needs an open turn.
 2. Is 20 s the right threshold for the stalled-turn notice, and should it differ for long tool runs?
-3. Should the chat offer the tool's output behind a disclosure, now that it is available in the transcript?
+3. *(answered)* The tool's output now sits behind a disclosure in each row. Open: should the row open on its
+   own for an error, or for the tool that is blocking a turn?
 4. Should `chatViewDefault` be per agent or per pane kind rather than global?
 5. Is a version guard on the transcript format worth having (warn when no `user`/`assistant` line was
    recognised in a non-empty file)?
