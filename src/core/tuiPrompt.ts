@@ -36,6 +36,10 @@ export interface TuiPrompt { kind: TuiPromptKind; hint: string }
 export function stripAnsi(s: string): string {
   return s
     .replace(/\x1b\[(\d*)C/g, (_m, n: string) => ' '.repeat(Math.min(Number(n) || 1, 40)))
+    // Ink also places words with an ABSOLUTE column (`ESC[<n>G`); dropping it glues the words
+    // ("Quicksafetycheck") and no wording-based recogniser can match. A space is enough: the
+    // lines are trimmed and the column itself carries no meaning here.
+    .replace(/\x1b\[\d*G/g, ' ')
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')                // OSC … BEL | ST
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')                         // CSI
     .replace(/\x1b[PX^_][\s\S]*?\x1b\\/g, '')                        // DCS / SOS / PM / APC
@@ -49,7 +53,9 @@ const BORDER = /[│┃║╭╮╰╯┌┐└┘─━═╌╍┄┅]/g;
 
 /** `❯ 1. Yes`, `  2. No`, `› 3. …` — group 1 is the cursor (if any), 2 the number, 3 the label. */
 const OPTION = /^\s*([❯›>])?\s*(\d{1,2})[.)]\s+(\S.*)$/;
-const FOOTER = /(Enter to (?:select|confirm|submit|continue)|Esc to (?:cancel|exit|close|go back)|to navigate|Tab\/Arrow keys|Press Enter to continue)/i;
+/** `❯ label` with no number: the cursor of an unnumbered menu. */
+const CURSOR_LINE = /^\s*[❯›]\s+\S/;
+const FOOTER =/(Enter to (?:select|confirm|submit|continue)|Esc to (?:cancel|exit|close|go back)|to navigate|Tab\/Arrow keys|Press Enter to continue)/i;
 
 const TRUST = /(Quick safety check|trust (?:this|the files in this) folder|Do you trust the files|Yes, I trust)/i;
 const MODEL = /(Select model|Switch between Claude models)/i;
@@ -129,6 +135,24 @@ export function detectTuiPrompt(screenText: string): TuiPrompt | null {
     }
   }
 
+  // 1b. a menu WITHOUT numbers. Claude Code 2.1 draws the folder-trust dialog as `❯ No, exit` over
+  // `Yes, I trust this folder`, with no "1."/"2.". The structure that keeps this honest is the same
+  // as above, minus the numbering: the selection cursor on a line near the end AND the TUI's own
+  // footer (`Enter to confirm · Esc to cancel`) as the very last thing painted.
+  if (FOOTER.test(lines.slice(-2).join('\n'))) {
+    let cur = -1;
+    for (let i = n - 2; i >= Math.max(0, n - 9); i--) if (CURSOR_LINE.test(lines[i])) { cur = i; break; }
+    if (cur >= 0) {
+      const ctx = lines.slice(Math.max(0, cur - 10)).join('\n');
+      const pick = (re: RegExp, fallback: string): string => clip(lines.slice(Math.max(0, cur - 10), cur).find((l) => re.test(l)) ?? fallback);
+      if (TRUST.test(ctx)) return { kind: 'trust', hint: pick(TRUST, 'Trust this folder?') };
+      if (MODEL.test(ctx)) return { kind: 'model', hint: pick(MODEL, 'Select model') };
+      if (QUESTION.test(ctx)) return { kind: 'question', hint: pick(QUESTION, 'Claude has a question') };
+      if (PERMISSION.test(ctx)) return { kind: 'permission', hint: pick(PERMISSION, 'Claude needs permission') };
+      return { kind: 'select', hint: clip(lines[cur - 1] ?? 'Choose an option') };
+    }
+  }
+
   // 2. not a menu, but still waiting on a keypress — only trusted on the very last lines
   const endText = lines.slice(-2).join('\n');
   const o = OTHER.exec(endText);
@@ -141,6 +165,13 @@ export function detectTuiPrompt(screenText: string): TuiPrompt | null {
 export interface PromptMonitor {
   /** Raw pty output, exactly as it arrives (ANSI included). */
   push(data: string): void;
+  /**
+   * What the terminal currently SHOWS (plain text, as the owner's emulator rendered it). The raw
+   * stream cannot say this: Ink repaints a dialog differentially (moving the selection rewrites two
+   * lines and not the footer), so the tail of the stream stops looking like a dialog while the
+   * dialog is still open. A screen replaces the buffer instead of extending it.
+   */
+  screen(text: string): void;
   /** The transcript moved on (a tool finished, the operator typed): whatever was asked is answered. */
   clear(): void;
   /** Stop timers; nothing is emitted afterwards. */
@@ -194,6 +225,12 @@ export function createPromptMonitor(o: PromptMonitorOptions): PromptMonitor {
     push(data: string): void {
       if (dead || !data) return;
       buf = (buf + data).slice(-maxChars);
+      if (timer !== undefined) clearT(timer);
+      timer = setT(evaluate, debounceMs);
+    },
+    screen(text: string): void {
+      if (dead) return;
+      buf = String(text ?? '').slice(-maxChars);
       if (timer !== undefined) clearT(timer);
       timer = setT(evaluate, debounceMs);
     },
