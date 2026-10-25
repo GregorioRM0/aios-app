@@ -32,6 +32,7 @@ import * as aios from './aios';
 import { redactSecrets } from './redact';
 import * as connectors from './connectors';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 
 /**
  * Glass Shell — walking skeleton. Window + the shared Glass panel + ONE real
@@ -42,6 +43,21 @@ import * as fs from 'fs';
  * then exits 0/1 — the in-app smoke gate, here from day one.
  */
 const SMOKE = process.argv.includes('--smoke');
+/* A smoke run is a guest on the operator's machine, and the app they use every day is usually OPEN
+   while it runs. Both share one userData folder by default, so the run would read the operator's
+   localStorage (restored tabs, preferences) and write its own test tabs into it. Give it a private,
+   throwaway folder instead. Settings and sessions live under ~/.aios and ~/.claude, not here. */
+let smokeUserData = '';
+if (SMOKE) {
+  /* One fixed name, wiped at the start of every run: Chromium writes a few KB again while the process
+     exits (after any cleanup the run could do), so a unique folder per run would pile up. */
+  smokeUserData = path.join(os.tmpdir(), 'aios-smoke-userdata');
+  fs.rmSync(smokeUserData, { recursive: true, force: true });
+  fs.mkdirSync(smokeUserData, { recursive: true });
+  app.setPath('userData', smokeUserData);
+}
+/* app.exit() does not run 'exit' listeners, so the smoke verdict removes the folder itself. */
+const dropSmokeUserData = (): void => { if (smokeUserData) { try { fs.rmSync(smokeUserData, { recursive: true, force: true }); } catch { /* best effort */ } } };
 /* A gate that CAN skip will eventually skip silently, and nobody notices the day it stops running
    for a real reason. The two framework-reading gates skip when there is no framework root — right
    on a developer's laptop, wrong in CI, where a fixture is provided precisely so they run. Strict
@@ -366,6 +382,219 @@ ipcMain.handle('chat:status', async () => {
   try { return mergeStatus(undefined, parseStatuslinePayload(await fs.promises.readFile(path.join(aios.claudeConfigDir(), 'statusline-payload.json'), 'utf8'))); }
   catch { return mergeStatus(undefined, {}); }   // no file yet, or unreadable: the bar just has fewer fields
 });
+
+/* ── SMOKE: the chat view over a REAL Claude Code session, end to end ───────────────────────────
+   Everything else in this file proves the chat view with fixtures; this proves it against the real
+   `claude`, in the hidden smoke window, by driving the same functions the operator's hands drive:
+   createPane (the launch path every session uses), the tab's Terminal/Chat toggle, the composer
+   (Enter → submitToPty) and the bubbles it paints from the transcript.
+
+   WHAT IT TOUCHES, AND WHY THAT IS SAFE. A fresh temp folder is the session's cwd, so the session
+   is new, cheap (--model haiku) and nothing of the operator's is read or written by it:
+     · `--setting-sources project` keeps the operator's user-level hooks, status line, remote
+       control and voice out of a throwaway session (none of them belong in a test);
+     · the run's own cleanup removes the pane, the claude process, the temp folder and the transcript
+       folder Claude Code made for that cwd — verified by name before anything is deleted.
+   Without `claude` or a login the gate is SKIPPED (a developer laptop, CI). With AIOS_SMOKE_CHAT=1 a
+   gate that cannot run is a FAILURE, because "did not run" must never read as "passed"; with
+   AIOS_SMOKE_CHAT=0 it is skipped on purpose. */
+type SmokeChatVerdict = { status: 'ok' | 'skipped' | 'failed'; detail: string };
+
+async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
+  const mode = process.env.AIOS_SMOKE_CHAT;
+  const strict = mode === '1';
+  const say = (m: string): void => console.log(`shell-smoke: chat view — ${m}`);
+  if (mode === '0') return { status: 'skipped', detail: 'disabled by AIOS_SMOKE_CHAT=0' };
+  const rd = aios.readiness();
+  if (!rd.claude || !rd.signedIn) {
+    const why = `no usable claude on this machine (on PATH=${rd.claude}, signed in=${rd.signedIn})`;
+    return strict ? { status: 'failed', detail: `strict mode, but ${why}` } : { status: 'skipped', detail: why };
+  }
+
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const js = <T>(code: string): Promise<T> => win.webContents.executeJavaScript(code) as Promise<T>;
+  const psTable = (): Promise<Map<number, number>> => new Promise((resolve) => {
+    execFile('ps', ['-axo', 'pid=,ppid='], (err, out) => {
+      const m = new Map<number, number>();
+      if (!err) for (const line of String(out).split('\n')) { const [a, b] = line.trim().split(/\s+/).map(Number); if (a && b >= 0) m.set(a, b); }
+      resolve(m);
+    });
+  });
+  const descendants = async (root: number): Promise<number[]> => {
+    const t = await psTable();
+    const out: number[] = [];
+    const walk = (pid: number): void => { for (const [c, par] of t) if (par === pid && !out.includes(c)) { out.push(c); walk(c); } };
+    walk(root);
+    return out;
+  };
+  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+  const tmpRoot = fs.realpathSync(os.tmpdir());
+  const dir = fs.mkdtempSync(path.join(tmpRoot, 'aios-smoke-chat-'));
+  const tag = path.basename(dir).slice('aios-smoke-chat-'.length);
+  const name = `smoke-chat-${tag.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+  const word = `PONG-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  const ask = `Reply with exactly the word ${word} and nothing else`;
+  const t0 = Date.now();
+  const since = (): string => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+
+  let paneId = -1;
+  let sessionId = '';
+  const kids = new Set<number>();
+  const problems: string[] = [];
+  let result: SmokeChatVerdict = { status: 'failed', detail: 'did not finish' };
+
+  const probe = (): Promise<{ view: string; exited: boolean; sessionId: string | null; watched: string | null; prompt: string | null;
+    state: string | null; ptyAge: number; hidden: boolean; screen: string[]; rows: Array<{ who: string; text: string; hidden: boolean }> } | null> => js(`(() => {
+      const p = panes.get(${paneId}); if (!p) return null;
+      const cs = p.chatSkin;
+      const buf = p.term.buffer.active; const screen = [];
+      for (let i = Math.max(0, buf.length - 16); i < buf.length; i++) { const l = buf.getLine(i); if (l) { const s = l.translateToString(true); if (s.trim()) screen.push(s); } }
+      const rows = cs ? [...cs.log.querySelectorAll('.chat-row')].map((r) => ({
+        who: r.classList.contains('who-user') ? 'user' : 'claude',
+        text: (r.querySelector('.chat-bubble') || r).textContent || '', hidden: r.hidden })) : [];
+      return { view: p.view || 'term', exited: !!p.exited, sessionId: p.sessionId || null, watched: cs ? cs.watched : null,
+        prompt: cs ? cs.promptKind : null, state: cs ? cs.state : null, ptyAge: Date.now() - (p.lastPtyAt || 0),
+        hidden: document.hidden, screen: screen.slice(-8), rows };
+    })()`);
+  const fail = (why: string, p?: { screen: string[] } | null): never => {
+    throw new Error(why + (p && p.screen.length ? ` | screen: ${p.screen.slice(-4).map((l) => l.trim()).join(' / ').slice(0, 300)}` : ''));
+  };
+
+  try {
+    // 1. open a real session through the renderer's own launch path (the folder is entered by the
+    //    shell: pty:spawn confines `cwd` to the allowed roots, and a temp folder is none of them)
+    /* The session must not inherit the identity of whatever launched this run: a smoke started from
+       inside a Claude session carries that session's bridge, messaging socket and id in its
+       environment, and the new one would attach to them. `env -u` drops them for this one command.
+       The flags keep a throwaway session from reaching the operator's world: hooks off (their
+       Stop hook can speak aloud), the status line neutralised (it rewrites the global usage
+       payload the chat view reads), no remote control, no MCP servers. User settings are otherwise
+       left alone, because permission defaults live there and a first-run nag appears without them. */
+    const inherited = Object.keys(process.env)
+      .filter((k) => (/^CLAUDE_CODE_/.test(k) && k !== 'CLAUDE_CODE_FORCE_SESSION_PERSIST') || k === 'CLAUDECODE' || k === 'CLAUDE_PID' || k === 'CLAUDE_EFFORT')
+      .map((k) => `-u ${k}`).join(' ');
+    const flags = JSON.stringify({ disableAllHooks: true, remoteControlAtStartup: false, statusLine: { type: 'command', command: 'true' } });
+    const opened = await js<number | null>(`(async () => {
+      const cmd = 'cd ' + shq(${JSON.stringify(dir)}) + ' && env ${inherited} ' + CLAUDE + ' --model haiku --name ' + shq(${JSON.stringify(name)})
+        + ' --strict-mcp-config --settings ' + shq(${JSON.stringify(flags)});
+      return await createPane({ name: ${JSON.stringify(name)}, cmd, bypassReady: true });
+    })()`);
+    if (typeof opened !== 'number') return fail('createPane returned no pane');
+    paneId = opened;
+    const shellPid = ptys.get(paneId)?.pid;
+    say(`pane ${paneId} opened in ${path.basename(dir)} (claude --model haiku --name ${name})`);
+
+    // 2. the operator's toggle, pressed at once: a new session is still blocked on the folder-trust
+    //    dialog and has no id, which is exactly when the chat view must not hide the terminal
+    const view = await js<string>(`(() => { const p = panes.get(${paneId}); if (!p || !p.viewBtn) return 'no toggle'; p.viewBtn.click(); return p.view || 'term'; })()`);
+    if (view !== 'chat') return fail(`the tab toggle did not switch to chat (view=${view})`);
+    say('chat view on (via the tab toggle)');
+
+    // 3. answer the trust dialog if there is one, and wait for the pane to adopt its session id
+    let trustSeen = false; let trustAnswered = false; let nagAnswered = false; let lastTry = 0;
+    const adoptDeadline = Date.now() + 75000;
+    let st = await probe();
+    for (; Date.now() < adoptDeadline; await sleep(400), st = await probe()) {
+      if (!st) return fail('the pane disappeared');
+      if (st.exited) return fail('the pty exited before the session came up', st);
+      if (st.prompt === 'trust' && !trustSeen) { trustSeen = true; say(`detector emitted prompt kind 'trust' after ${since()}`); }
+      /* Dialogs this gate answers itself. The folder-trust one is the point (the detector must have
+         seen it); the "make auto mode your default" offer is a first-run nag of this CLI that the
+         detector does not recognise (no footer to anchor on) and that must be answered "No": the
+         "Yes" would rewrite the operator's permission default. Both start with the cursor on the
+         WRONG row, so read the screen and move it before confirming. */
+      const screenText = st.screen.join('\n');
+      const nag = /Make auto mode your default/i.test(screenText);
+      if ((st.prompt === 'trust' || nag) && Date.now() - lastTry > 1500) {
+        lastTry = Date.now();
+        const want = nag ? /No, keep/i : /Yes, I trust/i;
+        const cur = [...st.screen].reverse().find((l) => l.includes('❯')) ?? '';   // the LAST cursor on screen: the composer's own ❯ sits above a dialog
+        if (want.test(cur)) { ptys.get(paneId)?.write('\r'); if (nag) nagAnswered = true; else trustAnswered = true; }
+        else ptys.get(paneId)?.write('\x1b[B');
+      }
+      if (st.sessionId && st.watched === st.sessionId) break;
+    }
+    if (!st || !st.sessionId) return fail(`no session id after ${since()}${trustSeen ? '' : " (and the detector never reported the trust dialog)"}`, st);
+    if (st.watched !== st.sessionId) return fail(`the chat view is not following the session (watched=${st.watched}, hidden window: document.hidden=${st.hidden})`, st);
+    sessionId = st.sessionId;
+    say(`session ${sessionId.slice(0, 8)}… adopted after ${since()}; trust dialog ${trustSeen ? (trustAnswered ? 'detected and answered' : 'detected') : 'not shown'}${nagAnswered ? '; auto-mode offer declined' : ''}; document.hidden=${st.hidden}`);
+    if (shellPid) for (const k of await descendants(shellPid)) kids.add(k);
+
+    // 4. wait for the TUI to settle at its prompt, then type into the composer and press Enter there
+    /* "Settled" means the composer is on screen (its own ❯ line) and the output has gone quiet. Text typed
+       before the TUI reads its input is dropped by the tty without a trace, and that is a test of
+       timing, not of the chat view. */
+    const composerUp = (x: { screen: string[] } | null): boolean => !!x && x.screen.some((l) => l.trim().startsWith('❯'));
+    for (let i = 0; i < 60 && st && (st.ptyAge < 1800 || st.prompt || !composerUp(st)); i++) { await sleep(300); st = await probe(); }
+    if (st && st.prompt) return fail(`a dialog (${st.prompt}) is still open`, st);
+    const sent = await js<boolean>(`(() => {
+      const cs = panes.get(${paneId}).chatSkin;
+      cs.input.value = ${JSON.stringify(ask)};
+      cs.input.dispatchEvent(new Event('input', { bubbles: true }));
+      cs.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return cs.input.value === '';
+    })()`);
+    if (!sent) return fail('Enter in the composer did not send the message');
+    const sentAt = Date.now();
+    say(`message sent from the composer: "${ask}"`);
+
+    // 5. the operator's bubble and Claude's answer must both be painted from the transcript
+    let userBubble = false; let answer = false;
+    const replyDeadline = Date.now() + 90000;
+    for (; Date.now() < replyDeadline && !(userBubble && answer); await sleep(500)) {
+      st = await probe();
+      if (!st) return fail('the pane disappeared while waiting for the answer');
+      if (process.env.AIOS_SMOKE_CHAT_DEBUG && (Date.now() - sentAt) % 3000 < 500) say(`debug +${Math.round((Date.now() - sentAt) / 1000)}s rows=${st.rows.length} state=${st.state} ptyAge=${st.ptyAge} screen=${JSON.stringify(st.screen.slice(-5))}`);
+      if (st.prompt) { say(`a dialog (${st.prompt}) interrupted the turn`); return fail(`dialog '${st.prompt}' while waiting for the answer`, st); }
+      userBubble = st.rows.some((r) => r.who === 'user' && !r.hidden && r.text.includes(word));
+      answer = st.rows.some((r) => r.who === 'claude' && !r.hidden && r.text.includes(word));
+    }
+    if (!userBubble) return fail(`no operator bubble with ${word} after ${((Date.now() - sentAt) / 1000).toFixed(0)}s`, st);
+    if (!answer) return fail(`no assistant bubble with ${word} after ${((Date.now() - sentAt) / 1000).toFixed(0)}s (rows: ${st?.rows.map((r) => r.who).join(',')})`, st);
+    say(`operator bubble and assistant bubble both carry ${word} (${((Date.now() - sentAt) / 1000).toFixed(1)}s after Enter)`);
+    result = { status: 'ok', detail: 'real session, chat view, composer, bubbles' };
+  } catch (e) {
+    result = { status: 'failed', detail: String((e as Error)?.message ?? e) };
+  } finally {
+    // CLEANUP — runs on success and on failure, and never touches anything this run did not create
+    try {
+      const shellPid = ptys.get(paneId)?.pid;
+      if (shellPid) for (const k of await descendants(shellPid)) kids.add(k);
+      if (paneId >= 0) await js(`(() => { if (panes.has(${paneId})) closePane(${paneId}); return true; })()`).catch(() => undefined);
+      for (let i = 0; i < 40 && [...kids].some(alive); i++) await sleep(250);
+      const left = [...kids].filter(alive);
+      if (left.length) {
+        problems.push(`closing the pane left process(es) ${left.join(',')} running; killed by pid`);
+        for (const k of left) { try { process.kill(k, 'SIGKILL'); } catch { /* gone */ } }
+      }
+      if (ptys.has(paneId)) problems.push('the pty is still registered after closePane');
+      if (skins.has(paneId) || tail.active().includes(paneId)) problems.push('a transcript watcher is still registered after closePane');
+      if (sessionId && aios.listRunningAgents().some((a) => a.sessionId === sessionId)) problems.push('the session is still in the registry');
+    } catch (e) { problems.push(`cleanup of the pane failed: ${String((e as Error)?.message ?? e)}`); }
+    let removed = '';
+    try {
+      // the temp folder: only if it is still exactly what this run made
+      if (path.dirname(dir) === tmpRoot && path.basename(dir) === `aios-smoke-chat-${tag}`) { fs.rmSync(dir, { recursive: true, force: true }); removed = 'temp folder'; }
+      // Claude Code's per-cwd transcript folder: named after the real path, verified before deleting
+      const projects = path.join(aios.claudeConfigDir(), 'projects');
+      const slug = dir.replace(/[^A-Za-z0-9]/g, '-');
+      const tdir = path.join(projects, slug);
+      if (fs.existsSync(tdir)) {
+        const st = fs.lstatSync(tdir);
+        if (st.isDirectory() && !st.isSymbolicLink() && path.dirname(tdir) === projects
+            && slug.endsWith(`aios-smoke-chat-${tag.replace(/[^A-Za-z0-9]/g, '-')}`)) {
+          fs.rmSync(tdir, { recursive: true, force: true }); removed += ' + transcript folder';
+        } else problems.push('transcript folder failed the name check; left in place');
+      }
+      if (fs.existsSync(dir)) problems.push('temp folder still exists');
+      if (fs.existsSync(tdir)) problems.push('transcript folder still exists');
+    } catch (e) { problems.push(`cleanup of the files failed: ${String((e as Error)?.message ?? e)}`); }
+    say(`cleanup — ${problems.length ? 'PROBLEMS: ' + problems.join('; ') : `pane closed, ${kids.size} process(es) gone, no watcher left, ${removed || 'nothing to remove'} removed`}`);
+    if (problems.length && result.status === 'ok') result = { status: 'failed', detail: problems.join('; ') };
+  }
+  return result;
+}
 
 let host: PanelHost | undefined;
 
@@ -1912,7 +2141,18 @@ app.whenReady().then(() => {
       // the setup gate opens a real tab and waits for its async paint, so the old 15s
       // ceiling would have failed the run on time rather than on truth
       new Promise<boolean>((r) => setTimeout(() => r(false), 25000)),
-    ]).then((ok) => app.exit(ok ? 0 : 1));
+    ]).then(async (ok) => {
+      /* The real-session gate runs AFTER the fast ones and outside their 25 s ceiling: it waits on a
+         model, so it has deadlines of its own (and always cleans up). Skipped when something
+         already failed, so a broken build does not also spend a model call. */
+      let chat: SmokeChatVerdict = { status: 'skipped', detail: 'an earlier gate failed' };
+      if (ok) chat = await chatViewSmoke(win).catch((e): SmokeChatVerdict => ({ status: 'failed', detail: String(e?.message ?? e) }));
+      if (chat.status === 'ok') console.log('shell-smoke: chat view OK ✓ — a real claude session, the chat toggle, the composer and the bubbles agree');
+      else if (chat.status === 'skipped') console.log(`shell-smoke: chat view SKIPPED — ${chat.detail}`);
+      else console.error(`shell-smoke: chat view FAILED — ${chat.detail}`);
+      dropSmokeUserData();
+      app.exit(ok && chat.status !== 'failed' ? 0 : 1);
+    });
   }
 });
 /* Every real quit passes through here first, so the close handler above lets the windows go. */

@@ -471,3 +471,23 @@ guarded('every route that opens a Claude session — new, resume, restore, bus, 
       && (src.match(/createPane\(\{[^}]*cmd:/g) || []).length >= 6;
   },
   (src) => src.replace('void chatSkinMaybeDefault(id, p);', ''));
+
+// ── the end-to-end smoke gate stays honest ──────────────────────────────────
+
+const gateHolds = (src: string): boolean => {
+    const g = /async function chatViewSmoke[\s\S]*?\n\}\n/.exec(src)?.[0] ?? '';
+    return /show: !SMOKE/.test(src)
+      && /AIOS_SMOKE_CHAT/.test(g) && /strict \? \{ status: 'failed'/.test(g) && /status: 'skipped'/.test(g)
+      && /--model haiku/.test(g) && /mkdtempSync\(path\.join\(tmpRoot, 'aios-smoke-chat-'\)\)/.test(g)
+      && /\} finally \{[\s\S]*closePane\([\s\S]*rmSync\(dir[\s\S]*rmSync\(tdir/.test(g)
+      && /path\.basename\(dir\) === `aios-smoke-chat-\$\{tag\}`/.test(g)
+      && /path\.dirname\(tdir\) === projects/.test(g) && /isSymbolicLink\(\)/.test(g)
+      && /viewBtn\.click\(\)/.test(g) && /KeyboardEvent\('keydown', \{ key: 'Enter'/.test(g)
+      && /app\.exit\(ok && chat\.status !== 'failed' \? 0 : 1\)/.test(src)
+      && /smokeUserData = path\.join\(os\.tmpdir\(\), 'aios-smoke-userdata'\)/.test(src);
+};
+test('the real-session smoke gate: hidden window, skipped without claude, strict on request, always cleans up, deletes only what it can name', () => {
+  assert.ok(gateHolds(main));
+  assert.equal(gateHolds(main.replace('path.dirname(tdir) === projects', 'true')), false, 'control: a transcript folder check that can be bypassed');
+  assert.equal(gateHolds(main.replace('} finally {\n    // CLEANUP', '} catch (e2) {\n    // CLEANUP')), false, 'control: cleanup that only runs on success');
+});
