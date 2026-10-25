@@ -7243,7 +7243,7 @@ function chatApplyStatus(cs, s) {
   chatPaintUsage(cs);
 }
 function chatPaintUsage(cs) {
-  for (const [k, , kind] of CHAT_USAGE_FIELDS) {
+  for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
     const out = cs.usageVals[k];
     out.className = 'cu-v';
     out.removeAttribute('title');
@@ -7258,8 +7258,9 @@ function chatPaintUsage(cs) {
         out.textContent = Math.round(v) + '%';
         if (v >= 90) out.classList.add('hi'); else if (v >= 70) out.classList.add('mid');
       } else { out.textContent = '—'; out.classList.add('none'); }
-    } else if (v) { out.textContent = String(v); }
+    } else if (v) { out.textContent = k === 'model' ? String(v).replace(/^claude-/, '') : String(v); }   // the full id stays in the tooltip
     else { out.textContent = '—'; out.classList.add('none'); }
+    if (kind === 'text') out.parentElement.title = t(label) + ': ' + (v || '—');
   }
 }
 function chatSkinRefreshStatus(cs) {
@@ -7310,7 +7311,8 @@ function chatSkinBuild(id, p) {
   const usageEl = el('div', 'chat-usage');
   usageEl.setAttribute('aria-label', t('chat.usage.label'));
   const usageVals = {};
-  for (const [k, label] of CHAT_USAGE_FIELDS) {
+  for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
+    if (kind !== 'pct') continue;   // model and effort are chips on the composer, not meters
     const cell = el('span', 'cu');
     const v = el('span', 'cu-v none', '—');
     cell.append(el('span', 'cu-k', t(label)), v);
@@ -7324,9 +7326,16 @@ function chatSkinBuild(id, p) {
   const stateEl = el('div', 'chat-note cs-state');   // connecting · waiting · empty · error — one line, first in the log
   log.appendChild(stateEl);
 
-  const workEl = el('div', 'cs-working', t('chat.skin.working'));
+  /* "Claude is working", inside the column and under the last message (it is the log's last child: new
+     rows are inserted before it). Three dots in the busy hue, a gentle wave; still dots under reduced motion. */
+  const workEl = el('div', 'cs-working');
+  const dots = el('span', 'cw-dots');
+  dots.setAttribute('aria-hidden', 'true');
+  dots.append(el('i'), el('i'), el('i'));
+  workEl.append(dots, el('span', 'cw-t', t('chat.skin.working')));
   workEl.hidden = true;
   workEl.setAttribute('role', 'status');
+  log.appendChild(workEl);
 
   const alertEl = el('div', 'cs-alert');
   alertEl.hidden = true;
@@ -7335,18 +7344,42 @@ function chatSkinBuild(id, p) {
   const alertBtn = el('button', 'vbtn primary', t('chat.skin.showTerminal'));
   alertEl.append(alertText, alertBtn);
 
+  /* The composer: one big rounded card floating over the end of the conversation. The text grows
+     with what is typed; under it a row carries the model and effort chips (read from the same usage
+     data as the meters) and, on the right, a round send button that becomes a stop button while
+     Claude is working. */
   const compose = el('div', 'chat-compose');
+  const box = el('div', 'cc-box');
   const input = el('textarea', 'chat-input');
   input.rows = 1;
   input.placeholder = t('chat.placeholder');
-  input.title = t('chat.inputHint');   // the key hints live in the tooltip: a long placeholder wraps and clips in a narrow dock
-  const sendBtn = el('button', 'vbtn primary', t('chat.send'));
-  const stopBtn = el('button', 'vbtn', t('chat.stop'));
-  stopBtn.title = t('chat.stopHint');
+  input.setAttribute('aria-label', t('chat.placeholder'));
+  input.title = t('chat.inputHint');   // the key hints live in the tooltip and in the faint line under the card: a long placeholder wraps and clips in a narrow dock
+  const chips = el('div', 'cc-chips');
+  for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
+    if (kind !== 'text') continue;
+    const chip = el('span', 'cc-chip cc-' + k);
+    const v = el('span', 'cu-v none', '—');
+    if (k === 'effort') chip.append(el('span', 'cc-k', t(label)));
+    chip.appendChild(v);
+    chips.appendChild(chip);
+    usageVals[k] = v;
+  }
+  const sendBtn = el('button', 'cc-send');
+  sendBtn.type = 'button';
+  sendBtn.append(csIcon('arrowUp', 16));
+  sendBtn.title = t('chat.send'); sendBtn.setAttribute('aria-label', t('chat.send'));
+  const stopBtn = el('button', 'cc-stop');
+  stopBtn.type = 'button';
+  stopBtn.append(csIcon('stop', 14));
+  stopBtn.title = t('chat.stopHint'); stopBtn.setAttribute('aria-label', t('chat.stop'));
   stopBtn.hidden = true;
-  compose.append(input, sendBtn, stopBtn);
+  const ccRow = el('div', 'cc-row');
+  ccRow.append(chips, el('span', 'cs-fill'), stopBtn, sendBtn);
+  box.append(input, ccRow);
+  compose.append(box, el('div', 'cc-hint', t('chat.inputHint')));
 
-  root.append(head, usageEl, log, workEl, alertEl, compose);
+  root.append(head, usageEl, log, alertEl, compose);
   p.el.appendChild(root);
 
   const cs = {
@@ -7487,7 +7520,8 @@ function chatSkinControls(p) {
   cs.stopBtn.hidden = !working;
   cs.sendBtn.hidden = working && !cs.input.value.trim();
   cs.sendBtn.disabled = !cs.input.value.trim() || !!cs.promptKind || !!p.exited;
-  cs.workEl.hidden = !working || !!cs.promptKind;
+  const showWork = working && !cs.promptKind;
+  if (cs.workEl.hidden === showWork) { cs.workEl.hidden = !showWork; if (showWork) chatSkinScroll(cs); }   // appearing pushes the end of the log down: follow it if the view is following the tail
 }
 function chatSkinPaintAlert(p) {
   const cs = p.chatSkin;
@@ -7638,7 +7672,7 @@ async function chatSkinMaybeDefault(id, p) {
 function chatSkinScroll(cs) { if (cs.stick) cs.log.scrollTop = cs.log.scrollHeight; }
 function chatSkinAutosize(cs) {
   cs.input.style.height = 'auto';
-  cs.input.style.height = Math.min(cs.input.scrollHeight + 2, Math.round(window.innerHeight * 0.4)) + 'px';
+  cs.input.style.height = Math.min(cs.input.scrollHeight, 220, Math.round(window.innerHeight * 0.4)) + 'px';   // grows with the text up to a ceiling, then scrolls
 }
 /* Which glyph a tool wears, by its name: what it DOES, so a column of calls scans at a glance.
    MCP and unknown tools fall through to the wrench. */
@@ -7756,7 +7790,7 @@ function chatSkinUpsert(cs, item) {
   if (!rec) {
     rec = chatSkinMakeItem(item.role, cs);
     cs.items.set(item.uuid, rec);
-    cs.log.appendChild(rec.node);
+    cs.log.insertBefore(rec.node, cs.workEl);   // the working indicator stays the last child of the column
   }
   const text = typeof item.text === 'string' ? item.text : '';
   if (rec.role === 'assistant') {
@@ -7781,7 +7815,7 @@ function chatSkinHandleEvent(ev) {
   switch (ev.type) {
     case 'reset':
       cs.items.clear();
-      cs.log.replaceChildren(cs.stateEl);
+      cs.log.replaceChildren(cs.stateEl, cs.workEl);
       cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true;
       break;
     case 'items':

@@ -74,7 +74,8 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --chat-composer-bg: color-mix(in srgb, var(--ink) 5%, var(--surface));
   --chat-composer-line: var(--line-strong);
   --chat-meter-track: color-mix(in srgb, var(--ink) 13%, var(--surface));
-  --chat-focus: color-mix(in srgb, var(--accent) 38%, transparent);       /* the composer's focus ring: the one place typing happens */
+  --chat-focus: color-mix(in srgb, var(--accent) 24%, transparent);       /* the composer's focus ring: the one place typing happens */
+  --chat-on-accent: #fff;   /* the glyph on a coral button; white, as the house .vbtn.primary does */
   --chat-float: 0 18px 44px -20px rgba(0,0,0,.75), 0 3px 10px -4px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
   --chat-pop: 0 14px 36px -12px rgba(0,0,0,.7), 0 2px 8px -2px rgba(0,0,0,.4);   /* a menu floating over the conversation */
   --edge: inset 0 1px 0 rgba(255,255,255,.05);
@@ -632,7 +633,8 @@ body.light {
   --chat-composer-bg: var(--surface);   /* a white card on the paper: border and shadow carry the lift, a tint would look dirty */
   --chat-composer-line: color-mix(in srgb, var(--ink) 18%, var(--surface));
   --chat-meter-track: color-mix(in srgb, var(--ink) 11%, var(--surface));
-  --chat-focus: color-mix(in srgb, var(--accent) 34%, transparent);
+  --chat-focus: color-mix(in srgb, var(--accent) 22%, transparent);
+  --chat-on-accent: #fff;
   --chat-float: 0 16px 36px -22px rgba(30,30,40,.38), 0 2px 8px -3px rgba(30,30,40,.16);
   --chat-pop: 0 14px 34px -14px rgba(30,30,40,.34), 0 2px 8px -2px rgba(30,30,40,.14);
 }
@@ -1580,8 +1582,12 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .tab .tview:hover, .tab .tview:focus-visible { color: var(--accent-ink); outline: none; }
 .tab .tview.on { color: var(--accent-ink); }
 .tab .tview[hidden] { display: none; }
-.cs-working { display: flex; align-items: center; gap: 7px; padding: 4px 16px; flex: 0 0 auto; font-size: 11.5px; color: var(--subtle); }
-.cs-working::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--st-busy); animation: chatpulse 1.1s ease-in-out infinite; }
+.cs-working { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin: 4px 0 0; color: var(--subtle); font-size: .88em; }
+.cw-dots { display: inline-flex; align-items: center; gap: 4px; height: 14px; }
+.cw-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--st-busy); animation: cs-wave 1.3s ease-in-out infinite; }
+.cw-dots i:nth-child(2) { animation-delay: .16s; }
+.cw-dots i:nth-child(3) { animation-delay: .32s; }
+@keyframes cs-wave { 0%, 60%, 100% { transform: translateY(0); opacity: .35; } 30% { transform: translateY(-4px); opacity: 1; } }
 .cs-alert { --sc: var(--st-warn); display: flex; align-items: center; gap: 12px; padding: 8px 14px; flex: 0 0 auto; color: var(--ink); font-size: 12.5px;
             background: color-mix(in srgb, var(--sc) 10%, var(--surface)); border-top: 1px solid color-mix(in srgb, var(--sc) 42%, transparent); }
 .cs-alert.prompt { --sc: var(--st-input); }   /* waiting on the operator: the same hue as everywhere else in the app */
@@ -1621,7 +1627,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .ct-body:has(.ct-out[hidden]) .ct-note { padding: 8px 2px 0; }
 @keyframes cs-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ct-spin { animation: none; } .ct-chev { transition: none; } }
-@media (prefers-reduced-motion: reduce) { .cs-working::before { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .cw-dots i { animation: none; } }
 .chat-pick { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 7px;
              font-family: var(--font); font-size: 11.5px; padding: 3px 6px; max-width: 150px; cursor: pointer; }
 .chat-pick:hover, .chat-pick:focus-visible { border-color: var(--accent); outline: none; }
@@ -1708,13 +1714,34 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
                           background: var(--st-busy); vertical-align: middle; animation: chatpulse 1.1s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .chat-note.busy::before { animation: none; } }
 
-.chat-compose { display: flex; align-items: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); flex: 0 0 auto; }
-.chat-input { flex: 1; resize: none; box-sizing: border-box; min-height: 38px; max-height: 40vh; background: var(--surface-2);
-              color: var(--ink); border: 1px solid var(--line-strong); border-radius: 10px; padding: 8px 11px;
-              font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px); line-height: 1.45; user-select: text; }
-.chat-input:focus { outline: none; border-color: var(--accent); }
+/* ── composer: a big rounded card floating over the end of the conversation ── */
+.chat-compose { position: relative; flex: 0 0 auto; padding: 0 max(16px, calc((100% - var(--cs-col)) / 2)) 12px; }
+.chat-compose::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 30px; pointer-events: none;
+                        background: linear-gradient(to bottom, transparent, var(--surface)); }   /* the text fades out under the card instead of being cut by it */
+.cc-box { display: flex; flex-direction: column; gap: 6px; padding: 13px 12px 10px 17px; border-radius: 20px;
+          background: var(--chat-composer-bg); border: 1px solid var(--chat-composer-line); box-shadow: var(--chat-float);
+          transition: border-color .15s ease, box-shadow .15s ease; }
+.cc-box:focus-within { border-color: color-mix(in srgb, var(--accent) 42%, var(--chat-composer-line)); box-shadow: var(--chat-float), 0 0 0 3px var(--chat-focus); }
+.chat-input { display: block; width: 100%; box-sizing: border-box; resize: none; min-height: 25px; max-height: 220px; padding: 0; margin: 0;
+              background: none; color: var(--ink); border: 0; outline: none; font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px);
+              line-height: 1.55; user-select: text; }
 .chat-input::placeholder { color: var(--faint); }
-.chat-compose .vbtn { height: 38px; padding: 0 16px; flex: 0 0 auto; }
-.chat-compose .vbtn.primary { padding: 0 18px; font-size: 12.5px; }
-.chat-compose .vbtn:disabled, .chat-compose .vbtn.primary:disabled { background: var(--surface-2); color: var(--faint); border-color: var(--line); cursor: default; }
-.chat-compose .vbtn[hidden] { display: none; }
+.cc-row { display: flex; align-items: center; gap: 8px; min-height: 34px; }
+.cc-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.cc-chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 999px; box-sizing: border-box;
+           border: 1px solid var(--line-strong); color: var(--subtle); font-family: var(--mono); font-size: 11px; white-space: nowrap; max-width: 100%; }
+.cc-chip .cu-v { color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.cc-chip .cu-v.none { color: var(--faint); }
+.cc-k { font-family: var(--font); color: var(--faint); }
+.cc-send, .cc-stop { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 34px; height: 34px; padding: 0; border-radius: 50%;
+                     cursor: pointer; transition: background .15s ease, color .15s ease, transform .1s ease; }
+.cc-send { border: 0; background: var(--accent-fill); color: var(--chat-on-accent); }
+.cc-send:hover:not(:disabled) { background: var(--accent-fill-hover); }
+.cc-send:active:not(:disabled) { transform: scale(.94); }
+.cc-send:disabled { background: var(--chat-meter-track); color: var(--faint); cursor: default; }
+.cc-stop { border: 1px solid var(--chat-composer-line); background: var(--chat-composer-bg); color: var(--ink); }
+.cc-stop:hover { background: var(--chat-row-hover); }
+.cc-send:focus-visible, .cc-stop:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 2px; }
+.cc-hint { margin-top: 7px; text-align: center; color: var(--faint); font-size: 11px; }
+@container (max-width: 520px) { .cc-hint { display: none; } .cc-chip.cc-effort .cc-k { display: none; } }
+@media (prefers-reduced-motion: reduce) { .cc-box, .cc-send, .cc-stop { transition: none; } .cc-send:active:not(:disabled) { transform: none; } }
