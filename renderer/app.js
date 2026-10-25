@@ -7065,6 +7065,27 @@ const CS_STATUS_MS = 20000;
    the others is what "my chat font" means. Seeded from shellConfig on each entry. */
 const chatPrefs = { family: '', size: CHAT_DEFAULT_SIZE };
 
+/* Glyphs only the chat uses, added to the shared table so icon() stays the one way to draw them.
+   Plain geometric strokes of our own (nothing taken from any brand's set). */
+Object.assign(ICONS, {
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5.5 15A2.2 2.2 0 0 1 4 12.9V6.2A2.2 2.2 0 0 1 6.2 4h6.7A2.2 2.2 0 0 1 15 5.5"/>',
+  arrowUp: '<path d="M12 19V5"/><path d="m5.5 11.5 6.5-6.5 6.5 6.5"/>',
+  arrowDown: '<path d="M12 5v14"/><path d="m18.5 12.5-6.5 6.5-6.5-6.5"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.6 2.6 3.9 5.6 3.9 9s-1.3 6.4-3.9 9c-2.6-2.6-3.9-5.6-3.9-9S9.4 5.6 12 3Z"/>',
+  eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  alert: '<path d="M10.3 3.9 2.4 17.5a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9.5v4"/><path d="M12 17h.01"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  textSize: '<path d="M3 19 8.5 5 14 19"/><path d="M5 14.5h7"/><path d="M15.5 19l2.8-7 2.7 7"/><path d="M16.6 16.7h3.4"/>',
+});
+/* An icon as an element. The markup comes from the static ICONS table above, never from model text,
+   which is why this is one of the very few innerHTML writes in the skin (see chatSkin.test.ts). */
+function csIcon(name, size = 14) {
+  const holder = el('span', 'cs-ico');
+  holder.setAttribute('aria-hidden', 'true');
+  holder.innerHTML = icon(name, size);
+  return holder;
+}
+
 /* ── markdown, without ever injecting the model's raw HTML ───────────────────
    Model output is untrusted text: a reply that quotes a web page, an email or a file can carry
    `<img onerror=…>` or `<script>`, and this renderer holds the full glassShell bridge. So the
@@ -7135,7 +7156,44 @@ function chatRender(target, text) {
   try { frag = chatSanitize(chatMarkdown().parse(String(text || ''), { async: false })); }
   catch { target.textContent = String(text || ''); return; }
   chatHighlight(frag);
+  chatDecorate(frag);
   target.replaceChildren(frag);
+}
+/* Chrome around the sanitised markdown, built here as DOM and never taken from the model: a header
+   on every code block (language + copy button) and a scroll wrapper around every table. It runs AFTER
+   chatSanitize on purpose — the allowlist stays exactly as strict as before, and no <button> can ever
+   arrive from model output. The copy button reads the code from the <pre> when clicked, as text. */
+function chatDecorate(frag) {
+  for (const pre of [...frag.querySelectorAll('pre')]) {
+    const code = pre.querySelector('code');
+    const m = code && /(?:^|\s)language-([\w+#.-]+)/.exec(code.getAttribute('class') || '');
+    const wrap = el('div', 'cm-code');
+    const head = el('div', 'cm-code-head');
+    const copy = el('button', 'cm-copy');
+    copy.type = 'button';
+    const label = el('span', 'cm-copy-t', t('chat.code.copy'));
+    copy.append(csIcon('copy', 13), label);
+    copy.title = t('chat.code.copyLabel');
+    copy.setAttribute('aria-label', t('chat.code.copyLabel'));
+    copy.addEventListener('click', () => {
+      const text = pre.textContent || '';
+      clearTimeout(copy._t);
+      Promise.resolve(window.glassShell.copyText(text)).then((ok) => ok !== false, () => false).then((ok) => {
+        copy.classList.toggle('done', ok);
+        copy.classList.toggle('fail', !ok);
+        label.textContent = t(ok ? 'chat.code.copied' : 'chat.code.copyFailed');
+        copy._t = setTimeout(() => { copy.classList.remove('done', 'fail'); label.textContent = t('chat.code.copy'); }, 1700);
+      });
+    });
+    head.append(el('span', 'cm-lang', m ? m[1] : t('chat.code.plain')), copy);
+    pre.replaceWith(wrap);
+    wrap.append(head, pre);
+  }
+  for (const table of [...frag.querySelectorAll('table')]) {
+    const scroller = el('div', 'cm-table');   // a wide table scrolls inside its own box instead of widening the column
+    table.replaceWith(scroller);
+    scroller.appendChild(table);
+  }
 }
 
 /* ── preferences: font + size ─────────────────────────────────────────────── */

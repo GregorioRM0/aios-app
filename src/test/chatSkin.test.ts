@@ -280,15 +280,16 @@ test('model output never reaches the DOM as raw HTML', () => {
   for (const bad of ['SCRIPT', 'IMG', 'IFRAME', 'STYLE', 'FORM', 'SVG']) assert.doesNotMatch(tags, new RegExp(`'${bad}'`), `${bad} must not be allowed`);
   assert.match(fnBody(skin, 'chatRender'), /chatSanitize\(chatMarkdown\(\)\.parse\(/);
   assert.match(fnBody(skin, 'chatRender'), /target\.replaceChildren\(frag\)/);
-  // the only markup writes: the inert template, hljs output over textContent, and the tab icon glyph
+  // the only markup writes: the inert template, hljs output over textContent, the tab icon glyph, and csIcon's holder
+  // (an icon from the static ICONS table, never model text — a model-text write would still show up as a new name here)
   const direct = [...skin.matchAll(/(\w+(?:\.\w+)*)\.innerHTML\s*=/g)].map((m) => m[1]);
-  assert.deepEqual(direct.sort(), ['b', 'code', 'tpl'], `unexpected innerHTML writes: ${direct.join(', ')}`);
+  assert.deepEqual(direct.sort(), ['b', 'code', 'holder', 'tpl'], `unexpected innerHTML writes: ${direct.join(', ')}`);
   // the operator's and the transcript's plain text go in as textContent
   assert.match(fnBody(skin, 'chatSkinUpsert'), /rec\.body\.textContent = text/);
   // links open in the system browser, never inside this window
   assert.match(skin, /e\.preventDefault\(\);\n\s+void window\.glassShell\.openExternal\(/);
   // negative control: an innerHTML of model text would be caught by the same list
-  assert.notDeepEqual([...(skin + '\nrow.innerHTML = text;').matchAll(/(\w+(?:\.\w+)*)\.innerHTML\s*=/g)].map((m) => m[1]).sort(), ['b', 'code', 'tpl']);
+  assert.notDeepEqual([...(skin + '\nrow.innerHTML = text;').matchAll(/(\w+(?:\.\w+)*)\.innerHTML\s*=/g)].map((m) => m[1]).sort(), ['b', 'code', 'holder', 'tpl']);
 });
 
 test('the markdown sanitizer, run for real, drops scripts, handlers and unsafe links', () => {

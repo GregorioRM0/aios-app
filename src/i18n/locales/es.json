@@ -1210,6 +1210,11 @@
   "chat.skin.tool.running": "en curso",
   "chat.skin.tool.ok": "listo",
   "chat.skin.tool.error": "falló",
+  "chat.code.plain": "Código",
+  "chat.code.copy": "Copiar",
+  "chat.code.copied": "Copiado",
+  "chat.code.copyFailed": "No se pudo copiar",
+  "chat.code.copyLabel": "Copiar este código",
   "settings.chatViewDefault": "Abrir las sesiones de Claude como chat",
   "settings.chatViewDefaultHint": "Las sesiones nuevas de Claude empiezan en la vista de chat. Puedes volver cualquier pestaña a la terminal cuando quieras."
 }
