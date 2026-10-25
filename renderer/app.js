@@ -7060,6 +7060,8 @@ const CS_WORKING_MS = 3000;   // pty output this recent, inside an open turn, re
 const CS_SUBMIT_MS = 4000;    // …and a message just sent counts as work before the first event comes back
 const CS_STALL_MS = 20000;    // open turn + live pty + a silent transcript for this long → offer the terminal
 const CS_TICK_MS = 750;
+const CS_ANIM_AFTER_MS = 1500;   // rows that arrive sooner than this after a reset are history being loaded, not news: they do not animate
+const chatReducedMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 const CS_STATUS_MS = 20000;
 /* One preference pair for every chat view: changing the font in one conversation changing it in
    the others is what "my chat font" means. Seeded from shellConfig on each entry. */
@@ -7401,6 +7403,11 @@ function chatSkinBuild(id, p) {
      data as the meters) and, on the right, a round send button that becomes a stop button while
      Claude is working. */
   const compose = el('div', 'chat-compose');
+  const jumpBtn = el('button', 'cs-jump');   // shown only while the operator has scrolled away from the end
+  jumpBtn.type = 'button';
+  jumpBtn.hidden = true;
+  jumpBtn.append(csIcon('arrowDown', 16));
+  jumpBtn.title = t('chat.skin.jump'); jumpBtn.setAttribute('aria-label', t('chat.skin.jump'));
   const box = el('div', 'cc-box');
   const input = el('textarea', 'chat-input');
   input.rows = 1;
@@ -7429,13 +7436,13 @@ function chatSkinBuild(id, p) {
   const ccRow = el('div', 'cc-row');
   ccRow.append(chips, el('span', 'cs-fill'), stopBtn, sendBtn);
   box.append(input, ccRow);
-  compose.append(box, el('div', 'cc-hint', t('chat.inputHint')));
+  compose.append(jumpBtn, box, el('div', 'cc-hint', t('chat.inputHint')));
 
   root.append(head, log, alertEl, compose);
   p.el.appendChild(root);
 
   const cs = {
-    id, root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, input, sendBtn, stopBtn, gear, menu, fontList, sizeList, usageEl, usageVals,
+    id, root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, usageEl, usageVals,
     menuOpen: false, menuOff: null,
     swTerm, swChat,
     items: new Map(),            // transcript uuid -> { node, role, … }
@@ -7444,7 +7451,7 @@ function chatSkinBuild(id, p) {
     gen: 0,                      // bumps on every watch/unwatch so a late reply can tell it is stale
     state: 'connecting',         // connecting · waiting · live · error
     errorCode: '',
-    turnOpen: false, lastEventAt: 0, lastSubmitAt: 0, stick: true,
+    turnOpen: false, lastEventAt: 0, lastSubmitAt: 0, stick: true, resetAt: Date.now(), autoUntil: 0,
     promptKind: null, promptHint: '', stalled: false, idCheckedAt: 0, idChecks: 0, watchedAt: 0,
   };
   p.chatSkin = cs;
@@ -7452,7 +7459,13 @@ function chatSkinBuild(id, p) {
   chatPaintUsage(cs);
 
   // follow the tail unless the operator scrolled up to read — and resume once they return to it
-  log.addEventListener('scroll', () => { cs.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48; });
+  log.addEventListener('scroll', () => {
+    if (performance.now() < cs.autoUntil) return;   // our own smooth scroll passes through "far from the end" on its way down: that is not the operator leaving
+    cs.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48;
+    chatSkinPaintJump(cs);
+  });
+  log.addEventListener('wheel', (e) => { if (e.deltaY < 0) cs.autoUntil = 0; }, { passive: true });   // the operator reaching for the past takes the wheel back at once
+  jumpBtn.addEventListener('click', () => { cs.stick = true; chatSkinScroll(cs, true); chatSkinPaintJump(cs); try { cs.input.focus({ preventScroll: true }); } catch { /* detached */ } });
   // links never navigate this window: they open in the system browser
   log.addEventListener('click', (e) => {
     const a = e.target instanceof Element ? e.target.closest('a[href]') : null;
@@ -7782,7 +7795,17 @@ async function chatSkinMaybeDefault(id, p) {
 }
 
 /* ── painting the transcript ─────────────────────────────────────────────── */
-function chatSkinScroll(cs) { if (cs.stick) cs.log.scrollTop = cs.log.scrollHeight; }
+/* Follow the tail unless the operator went up to read (cs.stick). New rows glide down instead of jumping. */
+function chatSkinScroll(cs, smooth) {
+  if (!cs.stick) return;
+  if (smooth && !chatReducedMotion()) {
+    cs.autoUntil = performance.now() + 500;
+    cs.log.scrollTo({ top: cs.log.scrollHeight, behavior: 'smooth' });
+  } else cs.log.scrollTop = cs.log.scrollHeight;
+}
+function chatSkinPaintJump(cs) {
+  cs.jumpBtn.hidden = cs.stick || cs.log.scrollHeight <= cs.log.clientHeight + 48;
+}
 function chatSkinAutosize(cs) {
   cs.input.style.height = 'auto';
   cs.input.style.height = Math.min(cs.input.scrollHeight, 220, Math.round(window.innerHeight * 0.4)) + 'px';   // grows with the text up to a ceiling, then scrolls
@@ -7897,13 +7920,17 @@ function chatSkinMakeItem(role, cs) {
   const node = el('div', 'chat-note');
   return { node, body: node, role: 'system' };
 }
-function chatSkinUpsert(cs, item) {
+function chatSkinUpsert(cs, item, animate) {
   if (!item || typeof item !== 'object' || !item.uuid) return;
   let rec = cs.items.get(item.uuid);
   if (!rec) {
     rec = chatSkinMakeItem(item.role, cs);
     cs.items.set(item.uuid, rec);
     cs.log.insertBefore(rec.node, cs.workEl);   // the working indicator stays the last child of the column
+    if (animate) {   // a few px of rise and a fade; only for news, never for history being loaded
+      rec.node.classList.add('cs-in');
+      rec.node.addEventListener('animationend', (e) => { if (e.target === rec.node) rec.node.classList.remove('cs-in'); });
+    }
   }
   const text = typeof item.text === 'string' ? item.text : '';
   if (rec.role === 'assistant') {
@@ -7929,13 +7956,17 @@ function chatSkinHandleEvent(ev) {
     case 'reset':
       cs.items.clear();
       cs.log.replaceChildren(cs.stateEl, cs.workEl);
-      cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true;
+      cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true; cs.resetAt = Date.now();
       break;
     case 'items':
-      if (Array.isArray(ev.items)) for (const it of ev.items) chatSkinUpsert(cs, it);
-      chatSkinRegroup(cs);
-      cs.state = 'live'; cs.lastEventAt = Date.now(); cs.stalled = false;
-      chatSkinScroll(cs);
+      {
+        const animate = Date.now() - cs.resetAt > CS_ANIM_AFTER_MS && !chatReducedMotion();
+        if (Array.isArray(ev.items)) for (const it of ev.items) chatSkinUpsert(cs, it, animate);
+        chatSkinRegroup(cs);
+        cs.state = 'live'; cs.lastEventAt = Date.now(); cs.stalled = false;
+        chatSkinScroll(cs, animate);
+        chatSkinPaintJump(cs);
+      }
       break;
     case 'turn':
       cs.turnOpen = !!ev.open; cs.lastEventAt = Date.now(); cs.stalled = false;

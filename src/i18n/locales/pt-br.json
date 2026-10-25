@@ -1227,6 +1227,7 @@
   "chat.skin.state.error.text": "Erro {code}. O terminal continua funcionando.",
   "chat.skin.alert.prompt.title": "Precisa da sua resposta",
   "chat.skin.alert.stalled.title": "Tudo quieto há um tempo",
+  "chat.skin.jump": "Ir para a última mensagem",
   "settings.chatViewDefault": "Abrir as sessões do Claude como chat",
   "settings.chatViewDefaultHint": "As novas sessões do Claude começam na visualização de chat. Você pode voltar qualquer aba para o terminal quando quiser."
 }

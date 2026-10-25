@@ -74,7 +74,7 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --chat-composer-bg: color-mix(in srgb, var(--ink) 5%, var(--surface));
   --chat-composer-line: var(--line-strong);
   --chat-meter-track: color-mix(in srgb, var(--ink) 13%, var(--surface));
-  --chat-focus: color-mix(in srgb, var(--accent) 24%, transparent);       /* the composer's focus ring: the one place typing happens */
+  --chat-focus: color-mix(in srgb, var(--accent) 20%, transparent);       /* the composer's focus ring: the one place typing happens */
   --chat-on-accent: #fff;   /* the glyph on a coral button; white, as the house .vbtn.primary does */
   --chat-meter-fill: color-mix(in srgb, var(--ink) 52%, var(--surface));   /* a usage bar in its normal range: neutral, so only 70+ and 90+ ever draw the eye */
   --chat-float: 0 18px 44px -20px rgba(0,0,0,.75), 0 3px 10px -4px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
@@ -634,7 +634,7 @@ body.light {
   --chat-composer-bg: var(--surface);   /* a white card on the paper: border and shadow carry the lift, a tint would look dirty */
   --chat-composer-line: color-mix(in srgb, var(--ink) 18%, var(--surface));
   --chat-meter-track: color-mix(in srgb, var(--ink) 11%, var(--surface));
-  --chat-focus: color-mix(in srgb, var(--accent) 22%, transparent);
+  --chat-focus: color-mix(in srgb, var(--accent) 17%, transparent);
   --chat-on-accent: #fff;
   --chat-meter-fill: color-mix(in srgb, var(--ink) 50%, var(--surface));
   --chat-float: 0 16px 36px -22px rgba(30,30,40,.38), 0 2px 8px -3px rgba(30,30,40,.16);
@@ -1780,7 +1780,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cc-box { display: flex; flex-direction: column; gap: 6px; padding: 13px 12px 10px 17px; border-radius: 20px;
           background: var(--chat-composer-bg); border: 1px solid var(--chat-composer-line); box-shadow: var(--chat-float);
           transition: border-color .15s ease, box-shadow .15s ease; }
-.cc-box:focus-within { border-color: color-mix(in srgb, var(--accent) 42%, var(--chat-composer-line)); box-shadow: var(--chat-float), 0 0 0 3px var(--chat-focus); }
+.cc-box:focus-within { border-color: color-mix(in srgb, var(--accent) 34%, var(--chat-composer-line)); box-shadow: var(--chat-float), 0 0 0 3px var(--chat-focus); }
 .chat-input { display: block; width: 100%; box-sizing: border-box; resize: none; min-height: 25px; max-height: 220px; padding: 0; margin: 0;
               background: none; color: var(--ink); border: 0; outline: none; font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px);
               line-height: 1.55; user-select: text; }
@@ -1804,3 +1804,11 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cc-hint { margin-top: 7px; text-align: center; color: var(--faint); font-size: 11px; }
 @container (max-width: 520px) { .cc-hint { display: none; } .cc-chip.cc-effort .cc-k { display: none; } }
 @media (prefers-reduced-motion: reduce) { .cc-box, .cc-send, .cc-stop { transition: none; } .cc-send:active:not(:disabled) { transform: none; } }
+/* ── motion that answers events: a new row rises a few px while it fades in; the "latest" button appears when the operator is away from the tail ── */
+.cs-in { animation: cs-in .34s cubic-bezier(.2, .7, .2, 1) both; }
+@keyframes cs-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.cs-jump { position: absolute; left: 50%; bottom: calc(100% + 10px); z-index: 2; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin-left: -17px; padding: 0;
+           border: 1px solid var(--chat-composer-line); border-radius: 50%; background: var(--chat-composer-bg); color: var(--ink); box-shadow: var(--chat-pop); cursor: pointer; }
+.cs-jump:hover { background: var(--chat-row-hover); }
+.cs-jump:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .cs-in { animation: none; } }
