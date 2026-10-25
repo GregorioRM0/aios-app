@@ -1,0 +1,197 @@
+{
+  "$comment": "Hand-written, neutral fixture for the chat-view screenshot harness (format documented in the CHAT SHOT block of src/main/main.ts). Every name, path and line is invented; never paste real transcripts here. It lives beside the other fixtures in src/test/fixtures/: the unit suite validates it and the harness reads it at run time (a custom one can be passed with --fixture).",
+  "version": 1,
+  "settleMs": 700,
+  "streams": {
+    "conversation": [
+      {
+        "type": "status",
+        "fiveHourPct": 42,
+        "sevenDayPct": 71,
+        "contextPct": 38,
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      {
+        "type": "usage",
+        "contextTokens": 84000,
+        "model": "claude-sonnet-5-5"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "u-1",
+            "role": "user",
+            "text": "Uploads to the sync service keep stalling after a few failures. Can you look at the retry logic and tell me why?"
+          },
+          {
+            "uuid": "t-1",
+            "role": "tool",
+            "tool": {
+              "id": "tool-1",
+              "name": "Read",
+              "summary": "src/sync/client.ts",
+              "status": "ok",
+              "output": "1  import { request } from './http';\n2  \n3  export async function uploadChunk(chunk: Buffer, attempt = 0) {\n4    try {\n5      return await request('PUT', chunk);\n6    } catch (err) {\n7      await sleep(delay(attempt));\n8      return uploadChunk(chunk, attempt + 1);\n9    }\n10 }"
+            }
+          },
+          {
+            "uuid": "t-2",
+            "role": "tool",
+            "tool": {
+              "id": "tool-2",
+              "name": "Grep",
+              "summary": "delay( in src/ and test/",
+              "status": "ok",
+              "output": "src/sync/client.ts:7:      await sleep(delay(attempt));\nsrc/sync/backoff.ts:3:export function delay(attempt: number) {\nsrc/sync/backoff.ts:4:  return 500 * 2 ** attempt + Math.random() * 100;\ntest/sync/backoff.test.ts:12:  assert.ok(delay(10) > 60_000);"
+            }
+          },
+          {
+            "uuid": "a-1",
+            "role": "assistant",
+            "text": "## Why the uploads stall\n\nThe retry loop in `uploadChunk` waits for the *previous* delay to finish **before** it computes the next one, so a burst of failures compounds instead of spreading out. Two things make it worse:\n\n- the delay doubles on every attempt but is never capped\n- the jitter is added to the delay instead of replacing part of it\n\n### What I would change\n\n1. Cap the delay at 30 seconds\n2. Apply *full jitter*, a random value between zero and the capped delay\n3. Stop after `maxAttempts` and surface the last error\n\nHere is the shape of the fix:\n\n```ts\nexport function nextDelay(attempt: number, base = 500, cap = 30_000): number {\n  const ceiling = Math.min(cap, base * 2 ** attempt);\n  return Math.floor(Math.random() * ceiling);\n}\n```\n\nAnd how to check it from the command line:\n\n```bash\nnpm test -- --grep \"nextDelay\"\nnode scripts/simulate-retries.mjs --attempts 8 --seed 7\n```\n\n| Attempt | Old delay | New ceiling |\n|---------|-----------|-------------|\n| 1       | 500 ms    | 500 ms      |\n| 4       | 4 s       | 4 s         |\n| 8       | 64 s      | 30 s        |\n\n> Backoff without a cap is a polite way of waiting forever.\n\nThe reasoning follows the [exponential backoff guide](https://example.com/docs/retries), which recommends full jitter for exactly this case."
+          },
+          {
+            "uuid": "u-2",
+            "role": "user",
+            "text": "Good catch. Fix the backoff, but keep the public API unchanged."
+          },
+          {
+            "uuid": "a-2",
+            "role": "assistant",
+            "text": "I'll patch the delay calculation in `backoff.ts` and run the suite."
+          },
+          {
+            "uuid": "t-3",
+            "role": "tool",
+            "tool": {
+              "id": "tool-3",
+              "name": "Edit",
+              "summary": "src/sync/backoff.ts",
+              "status": "error",
+              "output": "Error: the text to replace was not found in src/sync/backoff.ts.\nThe file changed since it was read; read it again before editing."
+            }
+          },
+          {
+            "uuid": "t-4",
+            "role": "tool",
+            "tool": {
+              "id": "tool-4",
+              "name": "Bash",
+              "summary": "npm test",
+              "status": "running",
+              "output": "> sync-client@1.4.0 test\n> node --test test/sync/*.test.js\n\n✔ delay grows with the attempt (2.1ms)\n✔ delay never exceeds the cap (0.8ms)\n▶ retries stop after maxAttempts"
+            }
+          },
+          {
+            "uuid": "u-3",
+            "role": "user",
+            "text": "When it passes, add a line to the changelog as well."
+          }
+        ]
+      },
+      {
+        "type": "turn",
+        "open": true
+      }
+    ],
+    "empty": [
+      {
+        "type": "status",
+        "fiveHourPct": 42,
+        "sevenDayPct": 71,
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      {
+        "type": "items",
+        "items": []
+      }
+    ],
+    "attention-prompt": [
+      {
+        "type": "prompt",
+        "kind": "permission",
+        "hint": "Run the unit tests of the sync client? npm test"
+      }
+    ]
+  },
+  "shots": [
+    {
+      "name": "chat-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged"
+    },
+    {
+      "name": "chat-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged"
+    },
+    {
+      "name": "attention-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "attention-prompt"
+      ],
+      "terminal": "\u001b[2m╭──────────────────────────────────────────────────────────────╮\u001b[0m\n\u001b[2m│\u001b[0m \u001b[1mBash command\u001b[0m                                                 \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   npm test                                                   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   \u001b[2mRun the unit tests of the sync client\u001b[0m                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m Do you want to proceed?                                      \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m \u001b[36m❯ 1. Yes\u001b[0m                                                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   2. Yes, and don't ask again for npm test in this project   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   3. No, and tell Claude what to do differently \u001b[2m(esc)\u001b[0m         \u001b[2m│\u001b[0m\n\u001b[2m╰──────────────────────────────────────────────────────────────╯\u001b[0m"
+    },
+    {
+      "name": "attention-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "attention-prompt"
+      ],
+      "terminal": "\u001b[2m╭──────────────────────────────────────────────────────────────╮\u001b[0m\n\u001b[2m│\u001b[0m \u001b[1mBash command\u001b[0m                                                 \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   npm test                                                   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   \u001b[2mRun the unit tests of the sync client\u001b[0m                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m Do you want to proceed?                                      \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m \u001b[36m❯ 1. Yes\u001b[0m                                                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   2. Yes, and don't ask again for npm test in this project   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   3. No, and tell Claude what to do differently \u001b[2m(esc)\u001b[0m         \u001b[2m│\u001b[0m\n\u001b[2m╰──────────────────────────────────────────────────────────────╯\u001b[0m"
+    },
+    {
+      "name": "empty-dark",
+      "theme": "dark",
+      "events": [
+        "empty"
+      ]
+    },
+    {
+      "name": "markdown-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "js": [
+        "// scroll the rich answer to the top of the log, as a reader who went back to it would",
+        "const row = ctx.$('.chat-row.who-claude');",
+        "ctx.cs.stick = false;",
+        "ctx.cs.log.scrollTop = row.offsetTop - 12;"
+      ]
+    },
+    {
+      "name": "narrow-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "size": {
+        "width": 720,
+        "height": 760
+      },
+      "composer": "Short question?"
+    },
+    {
+      "name": "workbench-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "layout": "workbench",
+      "composer": "Also check that the retry count is logged"
+    }
+  ]
+}

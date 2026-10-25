@@ -476,7 +476,7 @@ guarded('every route that opens a Claude session — new, resume, restore, bus, 
 
 const gateHolds = (src: string): boolean => {
     const g = /async function chatViewSmoke[\s\S]*?\n\}\n/.exec(src)?.[0] ?? '';
-    return /show: !SMOKE/.test(src)
+    return /show: !\(SMOKE \|\| CHAT_SHOT\)/.test(src)
       && /AIOS_SMOKE_CHAT/.test(g) && /strict \? \{ status: 'failed'/.test(g) && /status: 'skipped'/.test(g)
       && /--model haiku/.test(g) && /mkdtempSync\(path\.join\(tmpRoot, 'aios-smoke-chat-'\)\)/.test(g)
       && /\} finally \{[\s\S]*closePane\([\s\S]*rmSync\(dir[\s\S]*rmSync\(tdir/.test(g)
@@ -490,4 +490,150 @@ test('the real-session smoke gate: hidden window, skipped without claude, strict
   assert.ok(gateHolds(main));
   assert.equal(gateHolds(main.replace('path.dirname(tdir) === projects', 'true')), false, 'control: a transcript folder check that can be bypassed');
   assert.equal(gateHolds(main.replace('} finally {\n    // CLEANUP', '} catch (e2) {\n    // CLEANUP')), false, 'control: cleanup that only runs on success');
+});
+
+// ── the hidden-window screenshot harness (--chat-shot) ──────────────────────
+// A QA mode whose one promise is "never shows a window". Everything it does is invisible to the
+// unit level (a visible window still captures fine), so the promise is pinned in the source, each
+// guard with a negative control, plus the fixture the harness renders.
+
+const runner = read('scripts/chat-shot.mjs');
+const pkg = JSON.parse(read('package.json')) as { scripts: Record<string, string> };
+const chatShotBlock = (src: string): string => {
+  const a = src.indexOf('/* ── CHAT SHOT');
+  const b = src.indexOf('/* Every session the App creates');
+  return a >= 0 && b > a ? src.slice(a, b) : '';
+};
+const shotBlock = chatShotBlock(main);
+
+test('chat-shot: the window is created hidden, the lock makes any later show a no-op, and nothing in the mode shows it', () => {
+  const holds = (src: string): boolean => {
+    const win = /new BrowserWindow\(\{[\s\S]*?\n  \}\);/.exec(src)?.[0] ?? '';
+    const lock = /function lockWindowHidden\(win: BrowserWindow\): void \{[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
+    return /show: !\(SMOKE \|\| CHAT_SHOT\)/.test(win)
+      && /show: noop/.test(lock) && /showInactive: noop/.test(lock) && /focus: noop/.test(lock) && /win\.on\('show', \(\) => \{[^}]*win\.hide\(\)/.test(lock)
+      && /if \(CHAT_SHOT\) \{ lockWindowHidden\(win\); void runChatShot\(win\); return; \}/.test(src)
+      && !/\.show\(\)|showInactive\(\)|\.focus\(\)/.test(chatShotBlock(src).replace(lock, ''))
+      && /if \(!CHAT_SHOT && mainWin/.test(src);   // the Dock's activate handler
+  };
+  assert.ok(holds(main), 'the hidden-window guarantees must hold on the real source');
+  assert.equal(holds(main.replace('show: !(SMOKE || CHAT_SHOT)', 'show: !SMOKE')), false, 'control: a window that is shown in chat-shot mode');
+  assert.equal(holds(main.replace("win.on('show', () => { if (!win.isDestroyed()) win.hide(); });", '')), false, 'control: no re-hide if something shows it');
+  assert.equal(holds(main.replace('void runChatShot(win); return; }', 'void runChatShot(win); }')), false, 'control: the mode falls through into the normal flow');
+});
+
+test('chat-shot: skips the single-instance lock, the bus, the watchers and the updater, like --shot and --eval', () => {
+  const holds = (src: string): boolean => /if \(!\(SMOKE \|\| CHAT_SHOT\) && !app\.requestSingleInstanceLock\(\)\)/.test(src)
+    && /if \(!SMOKE && !SHOT && !CHAT_SHOT\) setupExplorerWatch\(win\)/.test(src)
+    && /if \(!SMOKE && !SHOT && !CHAT_SHOT\) setupClaudeConfigWatch\(win\)/.test(src)
+    && /if \(!SMOKE && !SHOT && !EVAL && !CHAT_SHOT\) initCommandBus\(/.test(src)
+    && /if \(!SMOKE && !SHOT && !EVAL && !CHAT_SHOT\) initAutoUpdater\(/.test(src)
+    && /if \(!SMOKE && !SHOT && !EVAL && !CHAT_SHOT\) \{\s*const stopCaffeine/.test(src)
+    && /if \(!SMOKE && !SHOT && !EVAL && !CHAT_SHOT\) \{\s*try \{\s*const r = aios\.seedClaudeDefaults/.test(src);
+  assert.ok(holds(main));
+  assert.equal(holds(main.replace('!(SMOKE || CHAT_SHOT) && !app.requestSingleInstanceLock()', '!SMOKE && !app.requestSingleInstanceLock()')), false, 'control: the lock is taken, so a QA run would quit the moment the App is open');
+  assert.equal(holds(main.replace('!SHOT && !EVAL && !CHAT_SHOT) initCommandBus(', '!SHOT && !EVAL) initCommandBus(')), false, 'control: the bus would fulfil real spawn requests');
+});
+
+test('chat-shot: 1280x860 CSS px at 2x, throwaway userData, a 2x switch set before ready, and a global timeout', () => {
+  const holds = (src: string): boolean => {
+    const top = src.slice(0, src.indexOf('const ptys = new Map'));
+    return /CHAT_SHOT_SIZE = \{ width: 1280, height: 860 \}/.test(top)
+      && /if \(CHAT_SHOT\) \{\s*\/\*[\s\S]*?app\.commandLine\.appendSwitch\('force-device-scale-factor', '2'\)/.test(top)
+      && /useContentSize: CHAT_SHOT/.test(src)
+      && /backgroundThrottling: false/.test(src)
+      && /--user-data-dir must be an existing folder under/.test(top) && /process\.exit\(1\)/.test(top)
+      && /mkdtempSync\(path\.join\(os\.tmpdir\(\), 'aios-chatshot-ud-'\)\)/.test(top)
+      && /setTimeout\(\(\) => fail\('timed out after 150 s'\), 150_000\)/.test(chatShotBlock(src))
+      && /finish\(0\)/.test(chatShotBlock(src)) && /app\.exit\(code\)/.test(chatShotBlock(src));
+  };
+  assert.ok(holds(main));
+  assert.equal(holds(main.replace("appendSwitch('force-device-scale-factor', '2')", "appendSwitch('force-device-scale-factor', '1')")), false, 'control: a 1x capture');
+  assert.equal(holds(main.replace("'aios-chatshot-ud-'", "'aios-chatshot-'")), false, 'control: userData named something the cleanup would not recognise');
+  assert.equal(holds(main.replace('150_000', '1_500_000')), false, 'control: a timeout nobody would wait for');
+});
+
+test('chat-shot: the renderer driver only feeds the skin and the xterm — it never writes to the pty', () => {
+  const driver = /const CHAT_SHOT_DRIVER = String\.raw`[\s\S]*?\n\}\)\(\)`;/.exec(main)?.[0] ?? '';
+  assert.ok(driver.length > 1500, 'the driver was found');
+  assert.ok(/chatSkinHandleEvent\(/.test(driver) && /p\.term\.write\(/.test(driver));
+  assert.equal(/ptyWrite|submitToPty|ptyRun\(|chatSkinSendNow/.test(driver), false, 'the driver must never type into the pty');
+  assert.equal(/ptyWrite|submitToPty/.test(driver.replace('p.term.write(', 'ptyWrite(')), true, 'control: the pattern does catch a pty write');
+  assert.ok(/noProfile: true/.test(driver) && /cmd: 'cat'/.test(driver), 'a bare shell running cat, never a real claude');
+});
+
+test('chat-shot: the fake watch is settled before the fixture is injected, and the choice is written down', () => {
+  const holds = (src: string): boolean => {
+    const open = src.indexOf('async open(o)');
+    const apply = src.indexOf('async apply(id, spec)');
+    const i = src.indexOf('await window.glassShell.chatSkinWatch(id, FAKE_SESSION)');
+    return open > 0 && i > open && i < apply && /THE FAKE SESSION, AND THE WATCH THAT COMES BACK/.test(src);
+  };
+  assert.ok(holds(main));
+  assert.equal(holds(main.replace('await window.glassShell.chatSkinWatch(id, FAKE_SESSION);', '')), false, 'control: injecting while the app\'s own watch can still answer');
+});
+
+test('chat-shot: the runner isolates HOME + userData, turns the bus off, launches --chat-shot hidden and deletes only its own temp folders', () => {
+  const code = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const holds = (src: string): boolean => /demo\.mjs'\), '--build-only', '--out', home/.test(src)
+    && /AIOS_BUS_DISABLED: '1'/.test(src) && /HOME: home/.test(src)
+    && /`--user-data-dir=\$\{userData\}`/.test(src) && /`--chat-shot=\$\{out\}`/.test(src) && /--use-mock-keychain/.test(src)
+    && /real\.startsWith\(tmp \+ path\.sep\) && path\.basename\(real\)\.startsWith\(PREFIX\)/.test(src)
+    && /const cleanup = \(\) => \{ for \(const d of created\.splice\(0\)\) if \(isOurTemp\(d\)\)/.test(src)
+    && !/--shot|--eval|--smoke|\.dev-userdata|pkill|killall/.test(code(src));
+  assert.ok(holds(runner));
+  assert.equal(holds(runner.replace("AIOS_BUS_DISABLED: '1'", "AIOS_BUS_DISABLED: '0'")), false, 'control: the bus left on');
+  assert.equal(holds(runner.replace('path.basename(real).startsWith(PREFIX)', 'true')), false, 'control: a cleanup that deletes any temp folder');
+  assert.equal(holds(runner.replace('`--user-data-dir=${userData}`', "'--user-data-dir=.dev-userdata'")), false, 'control: the developer userData');
+  assert.equal(holds(runner.replace("'--use-mock-keychain',", "'--use-mock-keychain', '--eval=1',")), false, 'control: a visible-window flag');
+  assert.equal(pkg.scripts['chat:shot'], 'npm run compile && node scripts/chat-shot.mjs');
+});
+
+interface FxTool { id: string; name: string; summary: string; status: string; output?: string }
+interface FxItem { uuid: string; role: string; text?: string; tool?: FxTool }
+interface FxEvent { type: string; items?: FxItem[]; kind?: string; open?: boolean; [k: string]: unknown }
+interface FxShot { name: string; theme?: string; events?: Array<string | FxEvent>; composer?: string; terminal?: string; js?: string | string[]; size?: { width: number; height: number }; layout?: string }
+const fixture = JSON.parse(read('src/test/fixtures/chat-shot.json')) as { version: number; streams: Record<string, FxEvent[]>; shots: FxShot[] };
+
+test('chat-shot fixture: parses, has the minimum shots, and every shot resolves to real streams', () => {
+  assert.equal(fixture.version, 1);
+  const names = fixture.shots.map((s) => s.name);
+  for (const n of ['chat-dark', 'chat-light', 'attention-dark', 'attention-light', 'empty-dark']) assert.ok(names.includes(n), `missing shot ${n}`);
+  assert.equal(new Set(names).size, names.length, 'shot names are unique (they become file names)');
+  for (const s of fixture.shots) {
+    assert.match(s.name, /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/);
+    for (const e of s.events ?? []) assert.ok(typeof e === 'string' ? Array.isArray(fixture.streams[e]) : typeof e.type === 'string', `${s.name}: bad event ${JSON.stringify(e).slice(0, 60)}`);
+  }
+  const byName = (n: string): FxShot => fixture.shots.find((s) => s.name === n) as FxShot;
+  assert.equal(byName('chat-dark').theme, 'dark');
+  assert.equal(byName('chat-light').theme, 'light');
+  for (const n of ['chat-dark', 'chat-light']) assert.ok(byName(n).composer, `${n} has text in the composer`);
+  for (const n of ['attention-dark', 'attention-light']) assert.ok(byName(n).terminal && (byName(n).events ?? []).includes('attention-prompt'), `${n} shows a dialog in the xterm and fires a prompt event`);
+  assert.ok(fixture.shots.some((s) => s.js), 'at least one shot demonstrates per-shot js');
+  assert.ok(fixture.shots.some((s) => s.size), 'at least one shot demonstrates a size override');
+});
+
+test('chat-shot fixture: the conversation covers markdown, three tool states with output, usage, and an open turn', () => {
+  const ev = fixture.streams.conversation;
+  const items = ev.filter((e) => e.type === 'items').flatMap((e) => e.items ?? []);
+  assert.ok(items.filter((i) => i.role === 'user').length >= 2 && items.filter((i) => i.role === 'user').length <= 3, '2 or 3 operator messages');
+  const md = items.filter((i) => i.role === 'assistant').map((i) => i.text ?? '').join('\n');
+  for (const [what, re] of [['h2', /^## /m], ['h3', /^### /m], ['bullets', /^- /m], ['numbered list', /^1\. /m], ['inline code', /`[^`\n]+`/], ['ts block', /```ts\n/], ['bash block', /```bash\n/],
+    ['3-column table', /^\|[^|\n]+\|[^|\n]+\|[^|\n]+\|$/m], ['blockquote', /^> /m], ['link', /\[[^\]]+\]\(https?:\/\/[^)]+\)/]] as Array<[string, RegExp]>) assert.match(md, re, `markdown: ${what}`);
+  const tools = items.filter((i) => i.role === 'tool').map((i) => i.tool as FxTool);
+  assert.deepEqual([...new Set(tools.map((t) => t.status))].sort(), ['error', 'ok', 'running']);
+  for (const t of tools) { assert.ok(t.summary, `${t.name} has a summary`); assert.ok((t.output ?? '').split('\n').length >= 2, `${t.name} has multi-line output`); }
+  const status = ev.find((e) => e.type === 'status') as FxEvent;
+  assert.ok(typeof status.fiveHourPct === 'number' && typeof status.sevenDayPct === 'number' && status.model && status.effort);
+  const usage = ev.find((e) => e.type === 'usage') as FxEvent;
+  assert.ok(Number.isFinite(usage.contextTokens) && usage.model);
+  assert.equal((ev[ev.length - 1] as FxEvent).open, true, 'the turn is left open: Claude is working');
+  const prompt = fixture.streams['attention-prompt'][0];
+  assert.ok(prompt.type === 'prompt' && (prompt.kind === 'permission' || prompt.kind === 'trust'));
+});
+
+test('chat-shot fixture: neutral by construction — no hex colors, no personal paths, nothing copied from a real vault', () => {
+  const raw = read('src/test/fixtures/chat-shot.json');
+  assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(raw), false);
+  assert.equal(/\/Users\/|\/home\/|C:\\\\|@gmail|\.aios\/|vault/i.test(raw), false);
 });

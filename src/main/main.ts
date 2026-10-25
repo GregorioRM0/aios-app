@@ -67,6 +67,41 @@ const SMOKE_STRICT = process.env.AIOS_SMOKE_STRICT === '1';
 const rendererErrors: string[] = [];
 const SHOT = process.argv.find((a) => a.startsWith('--shot')); // --shot[=/path.png] : render + screenshot + exit (dev/QA)
 const EVAL = process.argv.find((a) => a.startsWith('--eval=')); // --eval=<js> : run JS in the renderer, print result, exit (dev/QA)
+/* --chat-shot=<dir> : QA harness for the chat view. Renders hand-written conversations in a window
+   that is NEVER shown and writes one PNG per shot into <dir> (see runChatShot below).
+   Unlike --shot/--eval, which put a visible window on the operator's desktop, this mode is built
+   so that a visible window is impossible — see createWindow and lockWindowHidden. */
+const CHAT_SHOT_ARG = process.argv.find((a) => a === '--chat-shot' || a.startsWith('--chat-shot='));
+const CHAT_SHOT = !!CHAT_SHOT_ARG;
+const CHAT_SHOT_DIR = CHAT_SHOT_ARG && CHAT_SHOT_ARG.includes('=') ? CHAT_SHOT_ARG.slice(CHAT_SHOT_ARG.indexOf('=') + 1) : '';
+const CHAT_SHOT_FIXTURE_ARG = process.argv.find((a) => a.startsWith('--chat-shot-fixture='));
+const CHAT_SHOT_SIZE = { width: 1280, height: 860 };   // CSS pixels; the PNG is 2x this (see the scale switch below)
+let chatShotUserData = '';   // set only when this run had to mint its own userData (the runner normally passes one)
+if (CHAT_SHOT) {
+  /* Must be set before `ready`: it fixes the device scale factor for every window, so the
+     renderer lays out at 1280x860 CSS px and capturePage returns 2560x1720 device px — sharp
+     enough to judge hairlines and type, which a 1x capture hides. */
+  app.commandLine.appendSwitch('force-device-scale-factor', '2');
+  /* macOS: no Dock icon, no menu bar, no activation. A QA run should not so much as bounce in the
+     Dock while the operator is working in the same session of the desktop. */
+  if (process.platform === 'darwin') { try { app.setActivationPolicy('accessory'); } catch { /* older Electron — the window is still never shown */ } }
+  /* A QA run is a guest, exactly like a smoke run: it must never read or write the operator's real
+     userData (restored tabs, preferences) nor a developer's `.dev-userdata`. So the userData folder
+     has to live under the OS temp dir. The runner passes one; run by hand without it, mint one here
+     rather than silently falling back to the real folder. */
+  const given = process.argv.find((a) => a.startsWith('--user-data-dir='));
+  const realTmp = (() => { try { return fs.realpathSync(os.tmpdir()); } catch { return os.tmpdir(); } })();
+  const underTmp = (p: string): boolean => { try { const r = fs.realpathSync(path.resolve(p)); return r.startsWith(realTmp + path.sep); } catch { return false; } };
+  if (given) {
+    if (!underTmp(given.slice('--user-data-dir='.length))) {
+      console.error(`chat-shot: refusing to run — --user-data-dir must be an existing folder under ${realTmp} (got ${given.slice('--user-data-dir='.length)}).`);
+      process.exit(1);   // synchronous: nothing below this line may run against a real userData
+    }
+  } else {
+    chatShotUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-chatshot-ud-'));
+    app.setPath('userData', chatShotUserData);
+  }
+}
 const ptys = new Map<number, pty.IPty>();
 /* The last few KB of every pty's raw output. The chat skin's dialog detector only learns about a
    dialog from output it SEES, and a dialog is drawn once: a chat view opened (or a session that
@@ -82,11 +117,18 @@ function createWindow(): BrowserWindow {
      is dark on a light machine (the body class used to land only after an IPC round-trip). */
   const firstTheme = resolvedTheme(aios.shellSettings().theme, nativeTheme.shouldUseDarkColors);
   const win = new BrowserWindow({
-    width: 1360,
-    height: 860,
-    minWidth: 880,
-    minHeight: 560,
-    show: !SMOKE,
+    /* chat-shot: the viewport is exactly CHAT_SHOT_SIZE (useContentSize), and the minimum is lifted
+       so a shot can ask for a narrow dock. */
+    width: CHAT_SHOT ? CHAT_SHOT_SIZE.width : 1360,
+    height: CHAT_SHOT ? CHAT_SHOT_SIZE.height : 860,
+    useContentSize: CHAT_SHOT,
+    minWidth: CHAT_SHOT ? 320 : 880,
+    minHeight: CHAT_SHOT ? 320 : 560,
+    /* WHY A QA RUN CAN NEVER SHOW A WINDOW. `show` is false here, and lockWindowHidden() (called by
+       the whenReady handler) additionally turns every later show()/focus() on this window into a
+       no-op and re-hides it if anything gets past that. Together they make "a QA run popped a
+       window over the operator's work" impossible rather than merely unlikely. */
+    show: !(SMOKE || CHAT_SHOT),
     backgroundColor: WINDOW_BG[firstTheme],
     title: 'AIOS',
     // Frameless-with-inset-controls is a macOS affordance: 'hiddenInset' insets the traffic
@@ -102,6 +144,9 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       webviewTag: true, // in-app browser panes (the Manual + operator-opened URLs) — #14
+      /* chat-shot: a hidden window is throttled (timers, rAF, even painting) unless told otherwise,
+         and a throttled page captures stale or blank. Only this QA mode opts out. */
+      ...(CHAT_SHOT ? { backgroundThrottling: false } : {}),
     },
   });
   void win.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'), { query: { theme: firstTheme } });
@@ -1527,7 +1572,8 @@ let mainWin: BrowserWindow | undefined;
    either, because it looks like it cannot drift. */
 const APP_ID = 'com.the-aios.app';
 
-if (!SMOKE && !app.requestSingleInstanceLock()) {
+/* A QA run must coexist with the operator's open App and dev window, so it never takes (or yields to) the lock. */
+if (!(SMOKE || CHAT_SHOT) && !app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
@@ -1553,6 +1599,273 @@ if (process.platform === 'win32') {
   try { app.setAppUserModelId(APP_ID); } catch { /* older Electron — the default id stands */ }
 }
 
+/* ── CHAT SHOT: screenshots of the chat view, from a window that is never shown ──────────────────
+   `--chat-shot=<dir>` is a QA harness for whoever iterates on the chat view's looks: it boots the
+   real renderer in a hidden window, opens one terminal pane that "is" a Claude session, feeds the
+   chat skin hand-written events (the same `chatSkinHandleEvent` entry the transcript tail uses),
+   and writes one PNG per entry of a JSON fixture. Run it through `npm run chat:shot` — the runner
+   (scripts/chat-shot.mjs) builds the synthetic HOME and the throwaway userData this mode requires.
+
+   Why not --shot or --eval: both create a VISIBLE window (`show: !SMOKE`), which puts a window on
+   the operator's desktop mid-work. This mode never does: createWindow passes show:false, and
+   lockWindowHidden() makes any later show()/focus() a no-op.
+
+   THE FIXTURE (src/test/fixtures/chat-shot.json by default, or --chat-shot-fixture=<path>):
+     { "version": 1,
+       "settleMs": 700,                          // fonts + transitions; per-shot "wait" adds to it
+       "layout": "dock-max",                     // default for every shot; see per-shot "layout"
+       "setup": "…js…" | ["…", …],               // optional, runs once before the first shot
+       "streams": { "name": [ <event>, … ] },    // reusable event lists, see below
+       "shots": [ { "name": "chat-dark",         // → <dir>/chat-dark.png (letters, digits, . _ -)
+                    "theme": "dark" | "light",   // default dark
+                    "events": ["conversation", { "type": "turn", "open": true }],
+                                                 // stream names and/or inline events, in order
+                    "composer": "text in the compose box",
+                    "terminal": "text written to the xterm (NOT the pty) — for dialog states",
+                    "js": "…" | ["…"],           // extra JS, async, after the events; see ctx below
+                    "size": { "width": 900, "height": 700 },   // CSS px; default 1280x860
+                    "layout": "dock-max" | "workbench",   // dock maximised (default) or the stock layout
+                    "clip": "window" | "pane",   // default window
+                    "wait": 0,                   // extra ms before the capture
+                    "working": true } ] }        // keep the "working" indicator lit (default true
+                                                 // while the last turn event left the turn open)
+   An <event> is what chatSkinHandleEvent takes minus paneId (reset · items · turn · usage · prompt ·
+   missing · error) plus one extra type, "status", which feeds the usage bar like the statusline does
+   ({ "type": "status", "fiveHourPct": 42, … }). A shot's "js" runs in the renderer with
+   ctx = { id, p (the pane), cs (p.chatSkin), root (the chat overlay), $ / $$ (querySelector(All) in
+   it), sleep(ms), feed(events) }; throwing fails the run, naming the shot. Adding a shot is adding an
+   object to "shots" — main.ts never changes.
+
+   THE FAKE SESSION, AND THE WATCH THAT COMES BACK. The pane gets a made-up (but well-formed) session
+   id so the chat view is eligible and enters watch mode, which asks main to tail
+   a .jsonl file under <HOME>/.claude/projects/. That file does not exist, so main answers 'not-found'
+   asynchronously and keeps looking. Rather than race that reply, the driver (1) awaits an identical
+   chatSkinWatch itself, which also replaces the app's own watch, so no tail is running any more, and
+   (2) only then injects `reset` + the fixture's events. Nothing can emit a transcript event after
+   that, and the one late path that remains (the app's own not-found reply) only repaints a state
+   line that `items` has already turned to 'live'. */
+interface ChatShotShot {
+  name: string; theme?: 'dark' | 'light'; events?: Array<string | Record<string, unknown>>; composer?: string;
+  terminal?: string | string[] | null; js?: string | string[]; size?: { width: number; height: number };
+  clip?: 'window' | 'pane'; wait?: number; working?: boolean; layout?: 'dock-max' | 'workbench';
+}
+interface ChatShotFixture { version: 1; settleMs?: number; layout?: 'dock-max' | 'workbench'; setup?: string | string[]; streams?: Record<string, Array<Record<string, unknown>>>; shots: ChatShotShot[]; }
+
+function validateChatShotFixture(raw: unknown): ChatShotFixture {
+  const fx = raw as ChatShotFixture;
+  if (!fx || typeof fx !== 'object' || fx.version !== 1) throw new Error('fixture: "version" must be 1');
+  if (fx.layout !== undefined && fx.layout !== 'dock-max' && fx.layout !== 'workbench') throw new Error('fixture: "layout" must be "dock-max" or "workbench"');
+  if (!Array.isArray(fx.shots) || fx.shots.length === 0) throw new Error('fixture: "shots" must be a non-empty array');
+  const streams = fx.streams ?? {};
+  const seen = new Set<string>();
+  for (const s of fx.shots) {
+    if (!s || typeof s.name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(s.name)) throw new Error(`fixture: bad shot name ${JSON.stringify(s && s.name)} (letters, digits, . _ - only; it becomes a file name)`);
+    if (seen.has(s.name)) throw new Error(`fixture: duplicate shot name "${s.name}"`);
+    seen.add(s.name);
+    if (s.theme !== undefined && s.theme !== 'dark' && s.theme !== 'light') throw new Error(`fixture: shot "${s.name}": theme must be "dark" or "light"`);
+    if (s.layout !== undefined && s.layout !== 'dock-max' && s.layout !== 'workbench') throw new Error(`fixture: shot "${s.name}": layout must be "dock-max" or "workbench"`);
+    if (s.clip !== undefined && s.clip !== 'window' && s.clip !== 'pane') throw new Error(`fixture: shot "${s.name}": clip must be "window" or "pane"`);
+    for (const e of s.events ?? []) {
+      if (typeof e === 'string' ? !Array.isArray(streams[e]) : !e || typeof e !== 'object' || typeof (e as { type?: unknown }).type !== 'string') throw new Error(`fixture: shot "${s.name}": unknown stream or malformed event ${JSON.stringify(e).slice(0, 80)}`);
+    }
+    if (s.size && !(s.size.width >= 320 && s.size.height >= 320 && s.size.width <= 4000 && s.size.height <= 4000)) throw new Error(`fixture: shot "${s.name}": size out of range`);
+  }
+  return fx;
+}
+
+/* The renderer half. Plain JS in a String.raw (no backticks or dollar-brace inside) because it is
+   evaluated in the page, where `panes`, `createPane`, `chatSkin*` are script-level globals — the
+   same trick --eval uses. It never touches the pty: only the xterm's screen (term.write) and the
+   chat skin's own event entry. */
+const CHAT_SHOT_DRIVER = String.raw`(() => {
+  if (window.__chatShot) return 'already';
+  const FAKE_SESSION = '00000000-0000-4000-8000-00000000c0de';
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const waitFor = async (fn, what, ms) => {
+    const t0 = Date.now();
+    for (;;) {
+      let v = false;
+      try { v = fn(); } catch (e) { v = false; }
+      if (v) return v;
+      if (Date.now() - t0 > (ms || 20000)) throw new Error('timed out waiting for ' + what);
+      await sleep(50);
+    }
+  };
+  const S = { pin: 0 };
+  const feed = (id, events) => {
+    const p = panes.get(id);
+    const cs = p && p.chatSkin;
+    if (!cs) throw new Error('the pane has no chat view');
+    for (const ev of events) {
+      if (ev.type === 'status') { const s = Object.assign({}, ev); delete s.type; chatApplyStatus(cs, s); continue; }
+      chatSkinHandleEvent(Object.assign({ paneId: id }, ev));
+    }
+  };
+  window.__chatShot = {
+    async ready() {
+      await waitFor(() => typeof createPane === 'function' && typeof chatSkinSetView === 'function' && window.glassShell && panes instanceof Map && document.readyState === 'complete', 'the renderer');
+      await document.fonts.ready;
+      await sleep(1500);   // first paint of the workbench (pulse, explorer) before anything is measured
+      return true;
+    },
+    async open(o) {
+      THEME = o.theme === 'light' ? 'light' : 'dark';
+      applyTheme(THEME);
+      // noProfile: a bare shell, so nothing from a profile prints into the xterm; 'cat' then keeps it silent
+      const id = await createPane({ name: o.name, cmd: 'cat', bypassReady: true, noProfile: true });
+      const p = panes.get(id);
+      if (!p) throw new Error('createPane returned no pane');
+      // 'dock-max' gives the chat the whole height of the window, which is what a design review wants
+      // to look at; 'workbench' is the layout an operator gets by default (editor above, dock below).
+      th = o.layout === 'workbench' ? TH_DEFAULT : TH_MAX;
+      applySplit(); fitTerms();
+      p.isSession = true;
+      p.sessionId = FAKE_SESSION;   // eligibility normally comes from the session registry; set directly, never persisted
+      await sleep(400);             // the shell has printed whatever it will print
+      if (!chatSkinSetView(id, 'chat')) throw new Error('the pane is not eligible for the chat view');
+      await waitFor(() => p.chatSkin && p.chatSkin.watched === FAKE_SESSION, 'the chat watch');
+      await window.glassShell.chatSkinWatch(id, FAKE_SESSION);   // see "THE FAKE SESSION" in main.ts
+      await sleep(150);
+      p.chatSkin.statusAt = Date.now() + 3600000;   // the global usage refresh must not overwrite the fixture's numbers
+      return id;
+    },
+    async apply(id, spec) {
+      const p = panes.get(id);
+      const cs = p.chatSkin;
+      feed(id, [{ type: 'reset' }].concat(spec.events || []));
+      if (typeof spec.composer === 'string' && spec.composer) {
+        cs.input.value = spec.composer;
+        cs.input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      if (spec.terminal !== null && spec.terminal !== undefined) {
+        p.term.reset();
+        // a TUI draws its dialog at the BOTTOM of the screen, and the chat shows the lower part of the
+        // xterm in its strip, so pad the text down instead of leaving it at the top where it is cropped
+        const lines = String(spec.terminal).split(/\r?\n/);
+        const pad = Math.max(0, p.term.rows - lines.length - 1);
+        await new Promise((r) => p.term.write('\r\n'.repeat(pad) + lines.join('\r\n'), r));
+        repaintTerm(p);
+      }
+      if (S.pin) { clearInterval(S.pin); S.pin = 0; }
+      if (cs.turnOpen && spec.working !== false) {
+        const hold = () => { p.lastPtyAt = Date.now(); chatSkinControls(p); };
+        hold();
+        S.pin = setInterval(hold, 250);   // "working" needs recent pty output; keep it lit for the capture
+      }
+      return true;
+    },
+    ctx(id) {
+      const p = id === null || id === undefined ? null : panes.get(id);
+      const cs = p ? p.chatSkin : null;
+      const root = cs ? cs.root : document;
+      return {
+        id, p, cs, root, sleep,
+        $: (sel) => root.querySelector(sel),
+        $$: (sel) => Array.from(root.querySelectorAll(sel)),
+        feed: (events) => feed(id, events),
+      };
+    },
+    async settle(id, ms) {
+      await document.fonts.ready;
+      await sleep(ms);
+      await new Promise((r) => {
+        let done = false;
+        const fin = () => { if (!done) { done = true; r(); } };
+        requestAnimationFrame(() => requestAnimationFrame(fin));
+        setTimeout(fin, 400);   // a throttled page may never deliver the frames
+      });
+      const p = panes.get(id);
+      const b = p.el.getBoundingClientRect();
+      return { x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) };
+    },
+    close(id) {
+      if (S.pin) { clearInterval(S.pin); S.pin = 0; }
+      closePane(id);
+      return true;
+    },
+  };
+  return 'installed';
+})()`;
+
+/* Belt and braces for "never visible": no code path may bring this window up. */
+function lockWindowHidden(win: BrowserWindow): void {
+  const noop = (): void => { /* a QA window is never shown */ };
+  Object.assign(win, { show: noop, showInactive: noop, focus: noop, restore: noop, maximize: noop, setFullScreen: noop });
+  win.on('show', () => { if (!win.isDestroyed()) win.hide(); });
+}
+
+function dropChatShotUserData(): void {
+  if (chatShotUserData && path.basename(chatShotUserData).startsWith('aios-chatshot-ud-')) {
+    try { fs.rmSync(chatShotUserData, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+async function runChatShot(win: BrowserWindow): Promise<void> {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+  const finish = (code: number): void => { dropChatShotUserData(); app.exit(code); };
+  const fail = (msg: string): void => { console.error('chat-shot: FAILED — ' + msg); finish(1); };
+  /* A hung renderer must not hang whoever called us (the runner has its own, longer, kill timer). */
+  setTimeout(() => fail('timed out after 150 s'), 150_000);
+  try {
+    if (!CHAT_SHOT_DIR) throw new Error('missing output folder: --chat-shot=<dir>');
+    const outDir = path.resolve(CHAT_SHOT_DIR);
+    fs.mkdirSync(outDir, { recursive: true });
+    const fixturePath = CHAT_SHOT_FIXTURE_ARG
+      ? path.resolve(CHAT_SHOT_FIXTURE_ARG.slice('--chat-shot-fixture='.length))
+      : path.join(__dirname, '..', '..', 'src', 'test', 'fixtures', 'chat-shot.json');
+    let fx: ChatShotFixture;
+    try { fx = validateChatShotFixture(JSON.parse(fs.readFileSync(fixturePath, 'utf8'))); }
+    catch (e) { throw new Error(`cannot use fixture ${fixturePath}: ${e instanceof Error ? e.message : String(e)}`); }
+
+    const wc = win.webContents;
+    wc.setBackgroundThrottling(false);
+    if (wc.isLoading()) await new Promise<void>((r) => wc.once('did-finish-load', () => r()));
+    const exec = (code: string): Promise<unknown> => wc.executeJavaScript(code, true);
+    const userJs = (js: string | string[], id: number | null): Promise<unknown> =>
+      exec(`(async () => { const ctx = window.__chatShot.ctx(${id === null ? 'null' : String(id)}); ${Array.isArray(js) ? js.join('\n') : js}\n})()`);
+
+    await exec(CHAT_SHOT_DRIVER);
+    await exec('window.__chatShot.ready()');
+    if (fx.setup) await userJs(fx.setup, null);
+
+    const written: string[] = [];
+    for (const shot of fx.shots) {
+      const step = (what: string, e: unknown): Error => new Error(`shot "${shot.name}": ${what}: ${e instanceof Error ? e.message : String(e)}`);
+      const size = shot.size ?? CHAT_SHOT_SIZE;
+      win.setContentSize(size.width, size.height);
+      await sleep(200);   // let the layout follow the new size before a pane is created in it
+      const streams = fx.streams ?? {};
+      const events = (shot.events ?? []).flatMap((e) => (typeof e === 'string' ? streams[e] : [e]));
+      let id: number;
+      try { id = (await exec(`window.__chatShot.open(${JSON.stringify({ name: 'chat-qa', theme: shot.theme ?? 'dark', layout: shot.layout ?? fx.layout ?? 'dock-max' })})`)) as number; }
+      catch (e) { throw step('opening the chat view', e); }
+      try {
+        await exec(`window.__chatShot.apply(${id}, ${JSON.stringify({ events, composer: shot.composer, terminal: Array.isArray(shot.terminal) ? shot.terminal.join('\n') : shot.terminal, working: shot.working })})`);
+        if (shot.js) await userJs(shot.js, id);
+      } catch (e) { throw step('applying events / js', e); }
+      const rect = (await exec(`window.__chatShot.settle(${id}, ${Math.max(0, (fx.settleMs ?? 700) + (shot.wait ?? 0))})`)) as { x: number; y: number; width: number; height: number };
+      const img = shot.clip === 'pane' ? await wc.capturePage(rect) : await wc.capturePage();
+      const { width, height } = img.getSize();
+      /* A page that never painted still captures: as one flat colour. That would read as a
+         "working" harness while measuring nothing, so refuse it. */
+      const bmp = img.toBitmap();
+      let varied = false;
+      for (let i = 4; i < bmp.length && !varied; i += 97) varied = bmp[i] !== bmp[0] || bmp[i + 1] !== bmp[1] || bmp[i + 2] !== bmp[2];
+      if (!varied) throw new Error(`shot "${shot.name}": the capture is one flat colour — the hidden window did not paint`);
+      const file = path.join(outDir, `${shot.name}.png`);
+      fs.writeFileSync(file, img.toPNG());
+      written.push(file);
+      const expectW = (shot.clip === 'pane' ? rect.width : size.width) * 2;
+      console.log(`chat-shot: ${file} ${width}x${height}${width === expectW ? '' : ` (expected ${expectW} wide: the 2x scale did not apply)`}`);
+      try { await exec(`window.__chatShot.close(${id})`); } catch { /* the run is about to end or fail anyway */ }
+    }
+    console.log(`chat-shot: done — ${written.length} PNG(s) in ${outDir}`);
+    finish(0);
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e));
+  }
+}
+
 /* Every session the App creates, including a browser pane's, gets the web permission policy
    before any page can ask for anything (webPermissions.ts explains why the default is not safe). */
 app.on('session-created', (s) => installWebPermissionPolicy(s));
@@ -1568,7 +1881,7 @@ app.whenReady().then(() => {
      and an update install still quit (quitState.ts explains why the install needs its own mark).
      Windows and Linux keep closing = quitting, their convention. Smoke/eval runs never hide. */
   win.on('close', (e) => {
-    if (!closeShouldHide(process.platform, isQuitting(), !!(SMOKE || EVAL || SHOT))) return;
+    if (!closeShouldHide(process.platform, isQuitting(), !!(SMOKE || EVAL || SHOT || CHAT_SHOT))) return;
     e.preventDefault();
     if (win.isFullScreen()) { win.once('leave-full-screen', () => win.hide()); win.setFullScreen(false); }
     else win.hide();
@@ -1576,27 +1889,27 @@ app.whenReady().then(() => {
   installMenu(() => mainWin);
   host = new PanelHost(win.webContents);
   host.start();
-  if (!SMOKE && !SHOT) setupExplorerWatch(win);
+  if (!SMOKE && !SHOT && !CHAT_SHOT) setupExplorerWatch(win);
   /* Seed Claude's config once, so the Settings mirror has real values to reflect instead of
      assertions nobody read. Idempotent by marker, skipped in smoke/shot so a gate never writes
      into the machine it is testing on. */
-  if (!SMOKE && !SHOT && !EVAL) {
+  if (!SMOKE && !SHOT && !EVAL && !CHAT_SHOT) {
     try {
       const r = aios.seedClaudeDefaults();
       if (!r.already && r.seeded.length) console.log(`[claude-config] seeded on first install: ${r.seeded.join(', ')}`);
     } catch (e) { console.log('[claude-config] seeding skipped:', String(e)); }
   }
-  if (!SMOKE && !SHOT) setupClaudeConfigWatch(win);
+  if (!SMOKE && !SHOT && !CHAT_SHOT) setupClaudeConfigWatch(win);
   // Spawn-inbox command bus: watch ~/.aios/spawn-inbox/ and fulfil agent-dropped
   // spawn/kill/send requests natively (Glass 0.4.2/0.4.3 parity). Interactive
   // window only — never during smoke/shot/eval.
-  if (!SMOKE && !SHOT && !EVAL) initCommandBus(() => mainWin, app.getVersion());
+  if (!SMOKE && !SHOT && !EVAL && !CHAT_SHOT) initCommandBus(() => mainWin, app.getVersion());
   /* AI-132 keep-awake. Same guards as the bus: a smoke/shot/eval run must not hold a real
      machine awake. 2s matches the rendering cadence the RUNNING card already polls sessions on,
      so `auto` reacts as fast as the operator can see a session go busy and no new poll exists
      just for this. The teardown releases the blocker — the process dying releases it anyway, so
      this only covers a quit that lingers. */
-  if (!SMOKE && !SHOT && !EVAL) {
+  if (!SMOKE && !SHOT && !EVAL && !CHAT_SHOT) {
     const stopCaffeine = caffeine.init((st) => {
       const w = mainWin;
       if (w && !w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('shell:caffeinate', st);
@@ -1607,7 +1920,7 @@ app.whenReady().then(() => {
   // boot + every 6h, native-notify when staged, install on quit. GitHub-Releases
   // channel; never fires in dev/smoke/shot/eval. Renderer surface folds into the
   // Needs-you inbox card (batch G) later; this is the mechanism only.
-  if (!SMOKE && !SHOT && !EVAL) initAutoUpdater(() => mainWin);
+  if (!SMOKE && !SHOT && !EVAL && !CHAT_SHOT) initAutoUpdater(() => mainWin);
   // Glass re-checks status whenever its panel becomes visible again; the App's
   // panel never hides, so window focus is the equivalent signal — come back from
   // a push or a pull elsewhere and the pill is current. Rate-limited in the host.
@@ -1637,6 +1950,7 @@ app.whenReady().then(() => {
   win.on('closed', () => clearInterval(rootPoll));
   win.on('closed', () => { tail.unwatchAll(); for (const id of [...skins.keys()]) void endSkin(id, false); });   // macOS hides the window instead of closing it, so this is a real teardown
   win.on('closed', () => { host?.dispose(); host = undefined; for (const w of explorerWatchers.splice(0)) { try { w.close(); } catch { /* ignore */ } } });
+  if (CHAT_SHOT) { lockWindowHidden(win); void runChatShot(win); return; }
   if (EVAL) {
     const expr = EVAL.slice('--eval='.length);
     win.webContents.once('did-finish-load', () => {
@@ -2161,7 +2475,7 @@ app.on('before-quit', markQuitting);
 app.on('before-quit', () => { tail.unwatchAll(); for (const id of [...skins.keys()]) void endSkin(id, false); });
 /* The Dock icon brings the hidden window back. */
 app.on('activate', () => {
-  if (mainWin && !mainWin.isDestroyed()) { mainWin.show(); mainWin.focus(); }
+  if (!CHAT_SHOT && mainWin && !mainWin.isDestroyed()) { mainWin.show(); mainWin.focus(); }   // a QA run has no Dock icon to click, but never relies on that
 });
 /* Kept on every platform: on macOS a window only really closes while quitting (or if it died),
    and an App left in the Dock with no window and no way to rebuild one would be worse. */
