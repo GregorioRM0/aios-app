@@ -16,12 +16,15 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import { detectTuiPrompt, createPromptMonitor } from '../core/tuiPrompt';
 
 const read = (p: string): string => fs.readFileSync(p, 'utf8');
 const app = read('renderer/app.js');
 const menu = read('src/main/menu.ts');
 const css = read('renderer/theme.css');
 const html = read('renderer/index.html');
+const main = read('src/main/main.ts');
+const preload = read('src/preload/preload.ts');
 
 const START = '/* ═══ CHAT SKIN';
 const END = '/* ═══ END CHAT SKIN ═══ */';
@@ -143,14 +146,21 @@ guarded('closing the pane or losing the pty unwatches the transcript',
   },
   (src) => src.replace('  chatSkinTeardown(id, p);   // stop tailing the transcript', '  // (teardown removed)   // stop tailing the transcript'));
 
-guarded('the watch follows the sessionId: a change is an unwatch then a re-watch, and an unknown id shows "connecting"',
+guarded('the watch follows the sessionId: a new id replaces the watch, no id yet still watches dialogs, only leaving chat unwatches',
   (src) => {
     const sync = fnBody(slice(src), 'chatSkinSync');
     return /cs\.watched === want\) return/.test(sync)
-      && sync.indexOf('chatSkinUnwatch(id)') > 0 && sync.indexOf('chatSkinUnwatch(id)') < sync.indexOf('chatSkinWatch(id, want)')
-      && /p\.view === 'chat' && !p\.exited && p\.sessionId/.test(sync);
+      // '' = chat view without a session id yet (dialogs only); null = not watching at all
+      && /p\.view === 'chat' && !p\.exited \? \(p\.sessionId \? String\(p\.sessionId\) : ''\) : null/.test(sync)
+      && /cs\.watched !== null && want === null/.test(sync) && sync.indexOf('chatSkinUnwatch(id)') > 0
+      && /chatSkinWatch\(id, want \|\| null\)/.test(sync)
+      && sync.indexOf('chatSkinUnwatch(id)') < sync.indexOf('chatSkinWatch(id,');
   },
   (src) => src.replace('if (cs.watched === want) return;', 'if (cs.watched) return;'));
+
+guarded('a transcript that is not there yet is "waiting", not an error: a new session has no file until its first message',
+  (src) => /r && !r\.ok && r\.error === 'not-found'\) \{ chatSkinPaintState\(p\); return; \}/.test(fnBody(slice(src), 'chatSkinSync')),
+  (src) => src.replace("r.error === 'not-found'", "r.error === 'nothing'"));
 
 test('every place that learns, changes or forgets a session tells the skin (or the tick reconciles it)', () => {
   const hooks = (app.match(/chatSkinSessionChanged\(/g) || []).length;
@@ -344,3 +354,120 @@ test('the font and size pickers persist through the same settings as before', ()
   assert.match(skin, /setSetting\('chatFontFamily'/);
   assert.match(skin, /setSetting\('chatFontSize'/);
 });
+
+
+// ── integration: renderer ↔ preload ↔ main speak the same contract ──────────
+
+/** The renderer's pane id IS the pty id: every call below passes the `panes` key, and main keys `skins` by the pty id. */
+const contractHolds = (rend: string, pre: string, mn: string): boolean => {
+  const chans = ['chatSkin:watch', 'chatSkin:unwatch', 'chatSkin:event', 'chatSkin:screen'];
+  const events = ['reset', 'items', 'turn', 'usage', 'prompt', 'missing', 'error'];
+  const handler = /function chatSkinHandleEvent\(ev\) \{[\s\S]*?\n\}/.exec(rend)?.[0] ?? '';
+  return chans.every((c) => pre.includes(`'${c}'`) && mn.includes(`'${c}'`))
+    && /ipcMain\.handle\('chatSkin:watch'/.test(mn) && /ipcMain\.handle\('chatSkin:unwatch'/.test(mn)
+    && /ipcMain\.on\('chatSkin:screen'/.test(mn) && /sender\.send\('chatSkin:event', ev\)/.test(mn)
+    && events.every((e) => new RegExp(`type: '${e}'`).test(pre) && new RegExp(`case '${e}':`).test(handler))
+    && /glassShell\.onChatSkinEvent\(chatSkinHandleEvent\)/.test(rend)
+    && /gs\.chatSkinWatch\(id, want \|\| null\)/.test(rend) && /gs\.chatSkinUnwatch\(id\)/.test(rend)
+    && /glassShell\.chatSkinScreen\(id, chatSkinScreenText\(p\)\)/.test(rend)
+    && /const paneId = ev\.paneId|const id = ev\.paneId/.test(handler) && /panes\.get\(id\)/.test(handler)
+    && /const id = nextId\+\+;\n\s+ptys\.set\(id, p\);/.test(mn)
+    && /const id = await window\.glassShell\.ptySpawn\(/.test(rend) && /panes\.set\(id, p\)/.test(rend);
+};
+test('the renderer, the preload and main agree on every channel, event type and the pane id', () => {
+  assert.ok(contractHolds(app, preload, main));
+  // negative controls: a renamed channel, a dropped event case and a pane id that is not the pty id each break it
+  assert.equal(contractHolds(app, preload.replaceAll("'chatSkin:event'", "'chatSkin:events'"), main), false);
+  assert.equal(contractHolds(app.replace("case 'missing':", "case 'absent':"), preload, main), false);
+  assert.equal(contractHolds(app, preload, main.replace('const id = nextId++;', 'const id = nextId++ + 1;')), false);
+});
+
+test('main\'s watch accepts a null session id (dialogs only) and keeps the dialog monitor when the id arrives', () => {
+  const w = /ipcMain\.handle\('chatSkin:watch'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
+  assert.match(w, /sessionId: string \| null/);
+  assert.match(w, /if \(!transcript\) return \{ ok: true, file: '' \}/);
+  assert.match(w, /if \(!k\) \{[\s\S]*createPromptMonitor[\s\S]*skins\.set\(id, k\)/, 'the monitor is created once, not per watch');
+  assert.match(w, /monitor\.push\(seen\)/, 'a dialog already on screen is not forgotten');
+  assert.match(preload, /chatSkinWatch: \(paneId: number, sessionId: string \| null\)/);
+  assert.doesNotMatch(w.replace('if (!k) {', 'if (true) {'), /if \(!k\) \{/, 'control: the reuse guard is what the first check reads');
+});
+
+// ── the dialog detector, against what this CLI really draws ─────────────────
+
+/* Claude Code 2.1 places words with an ABSOLUTE column (`ESC[<n>G`) and draws the folder-trust dialog
+   with no numbers. Hand-written from a capture's structure; neutral folder name. */
+const TRUST_RAW = '\x1b[2G\x1b[38;5;220m\x1b[1mAccessing\x1b[12Gworkspace:\x1b[22m\x1b[39m\r\r\n\r\r\n\x1b[2G\x1b[1m/tmp/example-folder\x1b[22m\r\r\n\r\r\n'
+  + '\x1b[2GQuick\x1b[8Gsafety\x1b[15Gcheck:\x1b[22GIs\x1b[25Gthis\x1b[30Ga\x1b[32Gproject\x1b[40Gyou\x1b[44Gcreated\x1b[52Gor\x1b[55Gone\x1b[59Gyou\x1b[63Gtrust?\r\r\n\r\r\n'
+  + '\x1b[2G\x1b[38;5;246mSecurity\x1b[11Gguide\x1b[39m\r\r\n\r\r\n\x1b[2G\x1b[38;5;153m❯\x1b[4GNo,\x1b[8Gexit\x1b[39m\r\r\n\x1b[4GYes,\x1b[9GI\x1b[11Gtrust\x1b[17Gthis\x1b[22Gfolder\r\r\n\r\r\n'
+  + '\x1b[2G\x1b[38;5;246mEnter\x1b[8Gto\x1b[11Gconfirm\x1b[19G·\x1b[21GEsc\x1b[25Gto\x1b[28Gcancel\x1b[39m\r\r\n\x1b[1C\x1b[4A';
+/* Moving the selection repaints only the two option lines — the footer is NOT sent again. */
+const TRUST_MOVED = '\x1b[1D\x1b[4B\r\x1b[1C\x1b[4A \x1b[4GNo, exit\r\x1b[1C\x1b[1B\x1b[38;5;153m❯\x1b[4GYes, I trust this folder\x1b[39m\r\r\n\r\n\r\n\x1b[1C\x1b[3A';
+const TRUST_SCREEN = ['Accessing workspace:', '/tmp/example-folder', 'Quick safety check: Is this a project you created or one you trust?', 'Security guide',
+  '   No, exit', ' ❯ Yes, I trust this folder', '', ' Enter to confirm · Esc to cancel'].join('\n');
+const COMPOSER_SCREEN = ['Do you want me to continue?', '─'.repeat(60), '❯ Try "fix lint errors"', '─'.repeat(60), ' ⏵⏵ bypass permissions on (shift+tab to cycle)'].join('\n');
+
+test('the unnumbered folder-trust dialog is recognised once the absolute-column words are joined', () => {
+  assert.equal(detectTuiPrompt(TRUST_RAW)?.kind, 'trust');
+  assert.match(detectTuiPrompt(TRUST_RAW)?.hint ?? '', /Quick safety check/);
+  // negative control: without the words the same bytes read as noise ("Quicksafetycheck…")
+  assert.equal(detectTuiPrompt(TRUST_RAW.replace(/\x1b\[\d+G/g, '')), null);
+});
+
+test('the idle composer is not a dialog, even right under a question Claude asked', () => {
+  assert.equal(detectTuiPrompt(COMPOSER_SCREEN), null);
+  assert.equal(detectTuiPrompt(COMPOSER_SCREEN.replace('Do you want me to continue?', 'Which option do you prefer?')), null);
+  assert.equal(detectTuiPrompt(TRUST_SCREEN)?.kind, 'trust', 'control: the same detector does see a real dialog');
+});
+
+test('a differential repaint hides the dialog from the stream but not from the screen — which is why the screen is what main reads', () => {
+  assert.equal(detectTuiPrompt(TRUST_RAW + TRUST_MOVED), null, 'the raw stream loses it (the footer was not repainted)');
+  assert.equal(detectTuiPrompt(TRUST_SCREEN)?.kind, 'trust', 'the screen still shows it');
+  const seen: Array<string | null> = [];
+  const m = createPromptMonitor({ onChange: (k) => seen.push(k), setTimer: (fn) => { fn(); return 0; }, clearTimer: () => undefined });
+  m.screen(TRUST_SCREEN);
+  m.screen(TRUST_SCREEN.replace(' ❯ Yes', '   Yes').replace('   No, exit', ' ❯ No, exit'));   // the cursor moved; still a dialog, no flicker
+  assert.deepEqual(seen, ['trust'], 'one event, no null in between');
+  m.screen(COMPOSER_SCREEN);
+  assert.deepEqual(seen, ['trust', null]);
+  // control: the stream-fed monitor is the one that flickers
+  const seen2: Array<string | null> = [];
+  const m2 = createPromptMonitor({ onChange: (k) => seen2.push(k), setTimer: (fn) => { fn(); return 0; }, clearTimer: () => undefined });
+  m2.push(TRUST_RAW); m2.push(TRUST_MOVED);
+  assert.deepEqual(seen2, ['trust', null]);
+});
+
+test('the renderer sends screens only while the chat view is up and watching, after xterm parsed the bytes', () => {
+  const fn = fnBody(skin, 'chatSkinScreenSoon');
+  assert.match(fn, /cs\.watched === null \|\| p\.view !== 'chat'/);
+  assert.match(fn, /cs\.screenTimer\) return/, 'one snapshot per window');
+  assert.match(app, /p\.term\.write\(m\.data, p\.chatSkin && p\.view === 'chat' \? \(\) => chatSkinScreenSoon\(m\.id, p\) : undefined\)/);
+  assert.match(main, /if \(sk && !sk\.screenFed\) sk\.monitor\.push\(data\)/, 'once a screen arrives the raw stream stops feeding the monitor');
+  assert.match(main, /k\.sender !== e\.sender/, 'only the window that owns the watch can feed it');
+});
+
+// ── the chat view changes nothing about who a session is or how it is reached ──
+
+guarded('in chat view a session is still found by name/id, written to by the bus and the primary, closed, and restored — none of it reads the view',
+  (src) => {
+    const by = /const byName = [\s\S]*?\n\};/.exec(src)?.[0] ?? '';
+    const amb = /const ambiguous = [\s\S]*?;\n/.exec(src)?.[0] ?? '';
+    const send = /case 'sendByName': \{[\s\S]*?\n    \}\n/.exec(src)?.[0] ?? '';
+    const prim = fnBody(src, 'runInPrimary');
+    const close = fnBody(src, 'closePane');
+    const snap = fnBody(src, 'sessionsSnapshot');
+    const noView = (x: string): boolean => x.length > 40 && !/\.view\b|chatSkin(?!Teardown)/.test(x);
+    return noView(by) && noView(amb) && noView(send) && noView(prim) && noView(snap)
+      && /submitToPty\(hit\[0\], m\.text\)/.test(send) && /submitToPty\(hit\[0\], slash\)/.test(prim)
+      && close.indexOf('chatSkinTeardown(id, p)') > 0 && close.indexOf('chatSkinTeardown(id, p)') < close.indexOf('window.glassShell.ptyKill(id)')
+      && /panes\.delete\(id\)/.test(close);
+  },
+  (src) => src.replace('submitToPty(hit[0], m.text);\n      // a bus send', 'if (panes.get(hit[0]).view === "chat") return;\n      submitToPty(hit[0], m.text);\n      // a bus send'));
+
+guarded('every route that opens a Claude session — new, resume, restore, bus, primary — goes through createPane, where the chat default is applied',
+  (src) => {
+    const cp = fnBody(src, 'createPane');
+    return /chatSkinMountToggle\(id, p\)/.test(cp) && /void chatSkinMaybeDefault\(id, p\)/.test(cp)
+      && !/chatSkinMaybeDefault\(/.test(src.replace(cp, '').replace(skin, ''))
+      && (src.match(/createPane\(\{[^}]*cmd:/g) || []).length >= 6;
+  },
+  (src) => src.replace('void chatSkinMaybeDefault(id, p);', ''));

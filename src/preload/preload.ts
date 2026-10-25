@@ -52,8 +52,10 @@ contextBridge.exposeInMainWorld('glassShell', {
   /* CHAT SKIN — a chat view over a terminal tab. The tab's pty stays the only session; main follows
      its transcript file live and reports what the TUI is waiting on. `paneId` is the pty id.
      chatStatus is the usage bar: the last statusline payload ANY session wrote (global, not per tab). */
-  chatSkinWatch: (paneId: number, sessionId: string): Promise<{ ok: true; file: string } | { ok: false; error: string }> => ipcRenderer.invoke('chatSkin:watch', paneId, sessionId),
+  chatSkinWatch: (paneId: number, sessionId: string | null): Promise<{ ok: true; file: string } | { ok: false; error: string }> => ipcRenderer.invoke('chatSkin:watch', paneId, sessionId),
   chatSkinUnwatch: (paneId: number): Promise<void> => ipcRenderer.invoke('chatSkin:unwatch', paneId),
+  /** What the pane's terminal shows right now (plain text): the dialog detector reads screens, not the raw stream. */
+  chatSkinScreen: (paneId: number, text: string): void => { ipcRenderer.send('chatSkin:screen', paneId, text); },
   onChatSkinEvent: (cb: (ev: ChatSkinEvent) => void): void => { ipcRenderer.on('chatSkin:event', (_e, ev) => cb(ev)); },
   chatStatus: (): Promise<ChatStatus> => ipcRenderer.invoke('chat:status'),
   ptyWrite: (id: number, data: string) => ipcRenderer.send('pty:write', { id, data }),

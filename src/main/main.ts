@@ -52,6 +52,12 @@ const rendererErrors: string[] = [];
 const SHOT = process.argv.find((a) => a.startsWith('--shot')); // --shot[=/path.png] : render + screenshot + exit (dev/QA)
 const EVAL = process.argv.find((a) => a.startsWith('--eval=')); // --eval=<js> : run JS in the renderer, print result, exit (dev/QA)
 const ptys = new Map<number, pty.IPty>();
+/* The last few KB of every pty's raw output. The chat skin's dialog detector only learns about a
+   dialog from output it SEES, and a dialog is drawn once: a chat view opened (or a session that
+   is still unidentified, like a folder-trust prompt before any transcript exists) after it was
+   painted would otherwise never know the TUI is waiting. The monitor is seeded from this tail. */
+const PTY_TAIL_CHARS = 16384;
+const ptyTails = new Map<number, string>();
 aios.setPtyPidSource(() => [...ptys.values()].map((p) => p.pid));   // review blocker 6: pane membership from the tree
 let nextId = 1;
 
@@ -258,9 +264,11 @@ ipcMain.handle('pty:spawn', (e, opts: { cols: number; rows: number; cmd?: string
   ptys.set(id, p);
   p.onData((data) => {
     if (!e.sender.isDestroyed()) e.sender.send('pty:data', { id, data });
-    skins.get(id)?.monitor.push(data);   // chat skin only: is the TUI waiting on a dialog? (no-op for every other pane)
+    ptyTails.set(id, ((ptyTails.get(id) ?? '') + data).slice(-PTY_TAIL_CHARS));   // so a chat view opened mid-dialog can still see the dialog
+    const sk = skins.get(id);
+    if (sk && !sk.screenFed) sk.monitor.push(data);   // chat skin only: is the TUI waiting on a dialog? Until the renderer sends real screens, the raw stream is the best guess
   });
-  p.onExit(({ exitCode }) => { ptys.delete(id); void endSkin(id, true); if (!e.sender.isDestroyed()) e.sender.send('pty:exit', { id, exitCode }); });
+  p.onExit(({ exitCode }) => { ptys.delete(id); ptyTails.delete(id); void endSkin(id, true); if (!e.sender.isDestroyed()) e.sender.send('pty:exit', { id, exitCode }); });
   /* THE COMMAND IS NOT WRITTEN HERE ANY MORE — see `pty:run`.
      It used to run right at spawn, while the pty was still at the hardcoded 80×24 the renderer
      passes before it has measured anything. A shell prompt survives that (it reflows), but a
@@ -280,7 +288,7 @@ ipcMain.handle('pty:run', (_e, { id, cmd }: { id: number; cmd: string }) => {
 });
 ipcMain.on('pty:write', (_e, { id, data }: { id: number; data: string }) => ptys.get(id)?.write(data));
 ipcMain.on('pty:resize', (_e, { id, cols, rows }: { id: number; cols: number; rows: number }) => ptys.get(id)?.resize(cols, rows));
-ipcMain.on('pty:kill', (_e, { id }: { id: number }) => { ptys.get(id)?.kill(); ptys.delete(id); void endSkin(id, false); });
+ipcMain.on('pty:kill', (_e, { id }: { id: number }) => { ptys.get(id)?.kill(); ptys.delete(id); ptyTails.delete(id); void endSkin(id, false); });
 
 /* ── CHAT SKIN ───────────────────────────────────────────────────────────────────────────────────
    The chat view is a SKIN over a terminal pane, not a second session. The pty and the `claude`
@@ -292,7 +300,7 @@ ipcMain.on('pty:kill', (_e, { id }: { id: number }) => { ptys.get(id)?.kill(); p
    The chat never types for the operator and never answers a dialog; it points at the terminal.
    `paneId` IS the pty id: pty:spawn returns it, the renderer keys its `panes` Map and ptyWrite by
    it, and `ptys` is keyed by it here — one number all the way through. */
-interface Skin { sender: Electron.WebContents; monitor: PromptMonitor; onGone: () => void; }
+interface Skin { sender: Electron.WebContents; monitor: PromptMonitor; onGone: () => void; screenFed: boolean; }
 const skins = new Map<number, Skin>();
 const tail = createTranscriptTail();
 
@@ -306,23 +314,48 @@ async function endSkin(paneId: number, flush: boolean): Promise<void> {
   else tail.unwatch(paneId);
 }
 
-ipcMain.handle('chatSkin:watch', async (e, paneId: number, sessionId: string): Promise<{ ok: true; file: string } | { ok: false; error: 'not-found' | 'bad-id' }> => {
+/* `sessionId` may be null: "watch this pane's dialogs, there is no transcript yet". A brand-new
+   session in a folder Claude has not seen blocks on the trust dialog BEFORE it registers a session
+   id, so a chat view that waited for the id would sit on "connecting" with the only thing that
+   matters hidden behind it. A later watch with the real id keeps the same monitor, so a dialog that
+   is still open is not forgotten (and not announced twice) when the id arrives. */
+ipcMain.handle('chatSkin:watch', async (e, paneId: number, sessionId: string | null): Promise<{ ok: true; file: string } | { ok: false; error: 'not-found' | 'bad-id' }> => {
   const id = Number(paneId);
-  if (!Number.isInteger(id) || id < 0 || !isSessionId(sessionId)) return { ok: false, error: 'bad-id' };
-  await endSkin(id, false);                       // one watch per pane: a new session id replaces the old one
+  const transcript = sessionId !== null && sessionId !== undefined;
+  if (!Number.isInteger(id) || id < 0 || (transcript && !isSessionId(sessionId))) return { ok: false, error: 'bad-id' };
   const sender = e.sender;
+  let k = skins.get(id);
+  if (k && k.sender !== sender) { await endSkin(id, false); k = undefined; }
+  tail.unwatch(id);                               // one transcript per pane: a new session id replaces the old one
   const send = (ev: unknown): void => { if (!sender.isDestroyed()) sender.send('chatSkin:event', ev); };
-  const monitor = createPromptMonitor({
-    onChange: (kind, hint) => send({ paneId: id, type: 'prompt', kind, ...(hint ? { hint } : {}) }),
-  });
-  const onGone = (): void => { void endSkin(id, false); };
-  sender.once('destroyed', onGone);               // a closed or reloaded window must not leave a watcher behind
-  skins.set(id, { sender, monitor, onGone });
-  return tail.watch(id, sessionId, (ev) => {
+  if (!k) {
+    const monitor = createPromptMonitor({
+      onChange: (kind, hint) => send({ paneId: id, type: 'prompt', kind, ...(hint ? { hint } : {}) }),
+    });
+    const onGone = (): void => { void endSkin(id, false); };
+    sender.once('destroyed', onGone);             // a closed or reloaded window must not leave a watcher behind
+    k = { sender, monitor, onGone, screenFed: false };
+    skins.set(id, k);
+    const seen = ptyTails.get(id);
+    if (seen) monitor.push(seen);
+  }
+  if (!transcript) return { ok: true, file: '' };
+  const monitor = k.monitor;
+  return tail.watch(id, sessionId as string, (ev) => {
     // a finished tool or a new operator message proves the dialog that was open has been answered
     if (ev.type === 'items' && ev.items.some((it) => it.role === 'user' || (it.tool && it.tool.status !== 'running'))) monitor.clear();
     send(ev);
   });
+});
+/* The renderer's terminal emulator is the only thing that knows what the screen looks like NOW, so
+   it sends snapshots while the chat view is up; once one arrives the raw stream is no longer fed to
+   the monitor (a mix of the two would let a differential repaint talk the monitor out of a dialog
+   that is still open). Only the sender that owns the watch may feed it. */
+ipcMain.on('chatSkin:screen', (e, paneId: number, text: string) => {
+  const k = skins.get(Number(paneId));
+  if (!k || k.sender !== e.sender || typeof text !== 'string') return;
+  k.screenFed = true;
+  k.monitor.screen(text.slice(-8192));
 });
 ipcMain.handle('chatSkin:unwatch', (_e, paneId: number) => endSkin(Number(paneId), false));
 /* The usage bar. ~/.claude/statusline-payload.json is the LAST payload ANY Claude Code session on this

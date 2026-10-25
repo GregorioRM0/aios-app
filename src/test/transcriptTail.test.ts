@@ -285,7 +285,7 @@ test('main and preload agree on every chatSkin channel, and the SDK is gone', ()
 });
 
 test('the preload exposes exactly the contract the renderer programs against', () => {
-  assert.match(preload, /chatSkinWatch: \(paneId: number, sessionId: string\): Promise<\{ ok: true; file: string \} \| \{ ok: false; error: string \}>/);
+  assert.match(preload, /chatSkinWatch: \(paneId: number, sessionId: string \| null\): Promise<\{ ok: true; file: string \} \| \{ ok: false; error: string \}>/);
   assert.match(preload, /chatSkinUnwatch: \(paneId: number\): Promise<void>/);
   assert.match(preload, /onChatSkinEvent: \(cb: \(ev: ChatSkinEvent\) => void\)/);
   assert.match(preload, /chatStatus: \(\): Promise<ChatStatus>/);
@@ -295,7 +295,7 @@ test('the preload exposes exactly the contract the renderer programs against', (
 });
 
 test('the watch is tied to the pty: fed by its output, ended by its exit, kill, and the window', () => {
-  assert.match(main, /skins\.get\(id\)\?\.monitor\.push\(data\)/, 'pty output feeds the dialog detector');
+  assert.match(main, /sk\.monitor\.push\(data\)/, 'pty output feeds the dialog detector (until the renderer sends real screens)');
   assert.match(main, /p\.onExit\([^\n]*endSkin\(id, true\)/, 'pty exit ends the watch (after a last pass)');
   assert.match(main, /ipcMain\.on\('pty:kill'[^\n]*endSkin\(id, false\)/, 'a killed pane ends the watch');
   assert.match(main, /sender\.once\('destroyed', onGone\)/, 'a destroyed window ends the watch');
@@ -304,7 +304,7 @@ test('the watch is tied to the pty: fed by its output, ended by its exit, kill, 
   assert.match(main, /app\.on\('before-quit', \(\) => \{ tail\.unwatchAll\(\)/);
   // the pane id is the pty id: the id pty:spawn hands out is the one the skin map is keyed by
   assert.match(main, /const id = nextId\+\+;\n\s+ptys\.set\(id, p\);/);
-  assert.match(main, /skins\.set\(id, \{ sender, monitor, onGone \}\)/);
+  assert.match(main, /k = \{ sender, monitor, onGone, screenFed: false \};\n\s+skins\.set\(id, k\)/);
 });
 
 test('a dialog is cleared only by proof from the transcript, not by assistant text', () => {

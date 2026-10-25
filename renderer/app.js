@@ -4144,7 +4144,7 @@ window.glassShell.onPtyData((m) => {
   const p = panes.get(m.id);
   if (!p || p.kind !== 'term') return;
   p.lastPtyAt = Date.now();   // the chat view's "working" indicator and stalled-transcript check read this
-  p.term.write(m.data);
+  p.term.write(m.data, p.chatSkin && p.view === 'chat' ? () => chatSkinScreenSoon(m.id, p) : undefined);   // the callback fires once xterm has PARSED the bytes
   if (p.scheduleAtlasClear) p.scheduleAtlasClear((m.data || '').length);   // volume-gated; see its definition
   // pty-grade theater: tail the latest meaningful output line into the ticker
   // (throttled — TUI spinners redraw constantly; the ticker breathes, not thrashes)
@@ -7494,26 +7494,53 @@ function chatSkinSync(id, p) {
   const cs = p && p.chatSkin;
   if (!cs) return;
   const gs = window.glassShell;
-  const want = p.view === 'chat' && !p.exited && p.sessionId ? String(p.sessionId) : null;
+  /* null: not watching. '': in chat view but the session has no id yet — main still follows the
+     pty's dialogs, because a new session in a folder Claude has not seen blocks on the trust prompt
+     BEFORE it has an id, and the overlay would otherwise hide the one thing it is waiting on. */
+  const want = p.view === 'chat' && !p.exited ? (p.sessionId ? String(p.sessionId) : '') : null;
   if (cs.watched === want) return;
-  if (cs.watched) {
+  if (cs.watched !== null && want === null) {
     cs.gen++;
     if (typeof gs.chatSkinUnwatch === 'function') Promise.resolve(gs.chatSkinUnwatch(id)).catch(() => { /* already gone */ });
   }
   cs.watched = want;
   cs.turnOpen = false; cs.stalled = false; cs.watchedAt = Date.now(); cs.idChecks = 0;
-  if (!want) { chatSkinLayout(p); return; }
+  if (want === null) { chatSkinLayout(p); return; }
   cs.state = 'waiting'; cs.errorCode = '';
   const gen = ++cs.gen;
   if (typeof gs.chatSkinWatch !== 'function') { cs.state = 'error'; cs.errorCode = 'unavailable'; chatSkinPaintState(p); return; }
-  Promise.resolve(gs.chatSkinWatch(id, want)).then((r) => {
+  // a watch with a new id REPLACES the previous one in main (and keeps its dialog monitor), so no unwatch in between
+  Promise.resolve(gs.chatSkinWatch(id, want || null)).then((r) => {
     if (gen !== cs.gen || p.chatSkin !== cs) return;   // a newer watch or a closed pane owns the answer now
+    /* 'not-found' is not a failure: a new session has no transcript file until its first message, and
+       main keeps looking and announces the file when it appears (reset + items). */
+    if (r && !r.ok && r.error === 'not-found') { chatSkinPaintState(p); return; }
     if (!r || !r.ok) { cs.state = 'error'; cs.errorCode = (r && r.error) || '?'; chatSkinPaintState(p); }
   }).catch((e) => {
     if (gen !== cs.gen || p.chatSkin !== cs) return;
     cs.state = 'error'; cs.errorCode = String((e && e.message) || e).slice(0, 60); chatSkinPaintState(p);
   });
   chatSkinPaintState(p);
+  chatSkinScreenSoon(id, p);   // a dialog that is already on screen sends no more bytes: describe it now
+}
+/* The dialog detector in main reads what the terminal SHOWS, not the raw byte stream: a TUI repaints
+   a dialog differentially (moving the selection rewrites two lines and not its footer), so the tail
+   of the stream stops looking like a dialog while the dialog is still open. xterm's buffer is the
+   screen; send its last rows, at most one snapshot per window, after the bytes have been parsed. */
+function chatSkinScreenText(p) {
+  const b = p.term.buffer.active;
+  const rows = [];
+  for (let i = Math.max(0, b.length - 60); i < b.length; i++) { const l = b.getLine(i); if (l) rows.push(l.translateToString(true)); }
+  return rows.join('\n');
+}
+function chatSkinScreenSoon(id, p) {
+  const cs = p.chatSkin;
+  if (!cs || cs.watched === null || p.view !== 'chat' || cs.screenTimer) return;
+  cs.screenTimer = setTimeout(() => {
+    cs.screenTimer = 0;
+    if (p.view !== 'chat' || cs.watched === null || p.exited || !panes.has(id)) return;
+    if (typeof window.glassShell.chatSkinScreen === 'function') window.glassShell.chatSkinScreen(id, chatSkinScreenText(p));
+  }, 150);
 }
 /* Called wherever app.js learns, changes or forgets a pane's session. */
 function chatSkinSessionChanged(id, p) {
