@@ -1219,6 +1219,8 @@
   "chat.skin.tool.runningNoOutput": "Sigue en curso. Su salida aparece aquí cuando termine.",
   "chat.skin.tool.truncated": "Solo se muestra el comienzo de la salida.",
   "chat.usage.none": "sin lectura",
+  "chat.settings.label": "Ajustes del texto",
+  "chat.settings.sample": "Palabras sencillas, con el estilo que elegiste.",
   "settings.chatViewDefault": "Abrir las sesiones de Claude como chat",
   "settings.chatViewDefaultHint": "Las sesiones nuevas de Claude empiezan en la vista de chat. Puedes volver cualquier pestaña a la terminal cuando quieras."
 }

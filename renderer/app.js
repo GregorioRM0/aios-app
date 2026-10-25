@@ -7203,19 +7203,28 @@ function chatApplyPrefs() {
 function chatStyleSkin(cs) {
   cs.root.style.setProperty('--chat-font', chatPrefs.family || 'inherit');   // '' = follow the app's own font
   cs.root.style.setProperty('--chat-size', String(chatPrefs.size));
-  if (cs.fontSel) {
-    if (![...cs.fontSel.options].some((o) => o.value === chatPrefs.family)) {
-      // a stack saved by hand in the config: keep it selectable rather than silently replacing it
-      const o = document.createElement('option'); o.value = chatPrefs.family; o.textContent = chatPrefs.family; cs.fontSel.appendChild(o);
-    }
-    cs.fontSel.value = chatPrefs.family;
-  }
-  if (cs.sizeSel) {
-    if (![...cs.sizeSel.options].some((o) => Number(o.value) === chatPrefs.size)) {
-      const o = document.createElement('option'); o.value = String(chatPrefs.size); o.textContent = String(chatPrefs.size); cs.sizeSel.appendChild(o);
-    }
-    cs.sizeSel.value = String(chatPrefs.size);
-  }
+  // a stack or a size saved by hand in the config stays selectable (as an extra entry) rather than being silently replaced
+  if (cs.fontList) chatSkinCheck(cs.fontList, chatPrefs.family, (v) => chatSkinOpt(v, v, v));
+  if (cs.sizeList) chatSkinCheck(cs.sizeList, String(chatPrefs.size), (v) => chatSkinOpt(v, v));
+}
+/* The settings menu is two radio groups of buttons (font, size). One option is built by chatSkinOpt;
+   chatSkinCheck marks the one that matches the saved value (adding it if the value is not on the list)
+   and keeps a roving tabindex, so Tab enters the group once and the arrows move inside it. */
+function chatSkinOpt(value, label, family) {
+  const b = el('button', 'csm-opt');
+  b.type = 'button';
+  b.setAttribute('role', 'radio');
+  b.dataset.value = value;
+  b.appendChild(el('span', 'csm-t', label));
+  if (family !== undefined) b.style.fontFamily = family || 'inherit';   // each font is drawn in itself
+  else b.classList.add('csm-num');
+  b.appendChild(csIcon('check', 13));
+  return b;
+}
+function chatSkinCheck(list, value, make) {
+  let hit = [...list.children].find((b) => b.dataset.value === value);
+  if (!hit) { hit = make(value); list.appendChild(hit); }
+  for (const b of list.children) { b.setAttribute('aria-checked', String(b === hit)); b.tabIndex = b === hit ? 0 : -1; }
 }
 function chatReadPrefs(c) {
   if (!c) return;
@@ -7305,15 +7314,30 @@ function chatSkinBuild(id, p) {
   swChat.setAttribute('aria-pressed', 'true');
   swTerm.setAttribute('aria-pressed', 'false');
   sw.append(swTerm, swChat);
-  const fontSel = el('select', 'chat-pick');
-  fontSel.title = t('chat.font.label'); fontSel.setAttribute('aria-label', t('chat.font.label'));
-  for (const f of CHAT_FONTS) { const o = el('option', '', t(f.label)); o.value = f.stack; fontSel.appendChild(o); }
-  const sizeSel = el('select', 'chat-pick');
-  sizeSel.title = t('chat.size.label'); sizeSel.setAttribute('aria-label', t('chat.size.label'));
-  for (const s of CHAT_SIZES) { const o = el('option', '', String(s)); o.value = String(s); sizeSel.appendChild(o); }
+  /* Font and size live behind one small button (Aa) instead of two always-visible selects: reading
+     settings are set once and then in the way. The popover closes with Esc or a click outside, and Esc
+     there must NOT reach the handler that cuts the running turn (see the keydown listeners below). */
+  const gear = el('button', 'cs-gear');
+  gear.type = 'button';
+  gear.append(csIcon('textSize', 17));
+  gear.title = t('chat.settings.label'); gear.setAttribute('aria-label', t('chat.settings.label'));
+  gear.setAttribute('aria-haspopup', 'dialog'); gear.setAttribute('aria-expanded', 'false');
+  const menu = el('div', 'cs-menu');
+  menu.id = 'cs-menu-' + id;
+  menu.hidden = true;
+  menu.setAttribute('role', 'dialog');
+  menu.setAttribute('aria-label', t('chat.settings.label'));
+  gear.setAttribute('aria-controls', menu.id);
+  const fontList = el('div', 'csm-list');
+  fontList.setAttribute('role', 'radiogroup'); fontList.setAttribute('aria-label', t('chat.font.label'));
+  for (const f of CHAT_FONTS) fontList.appendChild(chatSkinOpt(f.stack, t(f.label), f.stack));
+  const sizeList = el('div', 'csm-sizes');
+  sizeList.setAttribute('role', 'radiogroup'); sizeList.setAttribute('aria-label', t('chat.size.label'));
+  for (const s of CHAT_SIZES) sizeList.appendChild(chatSkinOpt(String(s), String(s)));
+  menu.append(el('div', 'csm-h', t('chat.font.label')), fontList, el('div', 'csm-h', t('chat.size.label')), sizeList, el('div', 'csm-sample', t('chat.settings.sample')));
   const usageEl = el('div', 'chat-usage');
   usageEl.setAttribute('aria-label', t('chat.usage.label'));
-  head.append(sw, el('span', 'cs-fill'), usageEl, fontSel, sizeSel);
+  head.append(sw, el('span', 'cs-fill'), usageEl, gear, menu);
   const usageVals = {};
   for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
     if (kind !== 'pct') continue;   // model and effort are chips on the composer, not meters
@@ -7392,7 +7416,8 @@ function chatSkinBuild(id, p) {
   p.el.appendChild(root);
 
   const cs = {
-    id, root, log, stateEl, workEl, alertEl, alertText, alertBtn, input, sendBtn, stopBtn, fontSel, sizeSel, usageEl, usageVals,
+    id, root, log, stateEl, workEl, alertEl, alertText, alertBtn, input, sendBtn, stopBtn, gear, menu, fontList, sizeList, usageEl, usageVals,
+    menuOpen: false, menuOff: null,
     swTerm, swChat,
     items: new Map(),            // transcript uuid -> { node, role, … }
     status: {}, model: '', ctxTokens: undefined, statusAt: 0,
@@ -7424,6 +7449,14 @@ function chatSkinBuild(id, p) {
     e.preventDefault();
     chatSkinSendNow(id, p);
   });
+  /* Registered BEFORE the interrupt listener below and stopping the event for it: while the settings menu
+     is open, Esc closes the menu and nothing else. Without this the same keystroke would also write a
+     lone ESC to the pty and cut the turn Claude is in the middle of. */
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !cs.menuOpen) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    chatSkinMenu(cs, false, true);
+  });
   // Esc anywhere in the overlay cuts the running turn — the same key the TUI itself answers to
   root.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || e.isComposing || cs.promptKind) return;
@@ -7434,19 +7467,52 @@ function chatSkinBuild(id, p) {
   stopBtn.addEventListener('click', () => chatSkinInterrupt(id, p));
   swTerm.addEventListener('click', () => chatSkinSetView(id, 'term'));
   alertBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
-  fontSel.addEventListener('change', () => {
-    chatPrefs.family = fontSel.value;
+  gear.addEventListener('click', () => chatSkinMenu(cs, !cs.menuOpen));
+  fontList.addEventListener('click', (e) => {
+    const b = e.target instanceof Element ? e.target.closest('[role="radio"]') : null;
+    if (!b) return;
+    chatPrefs.family = b.dataset.value || '';
     chatApplyPrefs();
     void Promise.resolve(window.glassShell.setSetting('chatFontFamily', chatPrefs.family)).catch(() => {});
   });
-  sizeSel.addEventListener('change', () => {
-    const v = Number(sizeSel.value);
+  sizeList.addEventListener('click', (e) => {
+    const b = e.target instanceof Element ? e.target.closest('[role="radio"]') : null;
+    const v = b ? Number(b.dataset.value) : NaN;
     if (!Number.isFinite(v)) return;
     chatPrefs.size = v;
     chatApplyPrefs();
     void Promise.resolve(window.glassShell.setSetting('chatFontSize', v)).catch(() => {});
   });
+  for (const list of [fontList, sizeList]) list.addEventListener('keydown', (e) => {
+    // radio-group keys: the arrows move AND select, Home/End jump
+    const keys = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
+    const opts = [...list.children];
+    const at = opts.indexOf(document.activeElement);
+    if (at < 0 || !(e.key in keys || e.key === 'Home' || e.key === 'End')) return;
+    e.preventDefault();
+    const to = e.key === 'Home' ? 0 : e.key === 'End' ? opts.length - 1 : (at + keys[e.key] + opts.length) % opts.length;
+    opts[to].focus(); opts[to].click();
+  });
   return cs;
+}
+
+/* Open or close the settings popover. While open, a pointer press anywhere outside it (and outside
+   the button that owns it) closes it; the listener lives on the document only for that time. */
+function chatSkinMenu(cs, open, refocus) {
+  if (cs.menuOpen === open) return;
+  cs.menuOpen = open;
+  cs.menu.hidden = !open;
+  cs.gear.setAttribute('aria-expanded', String(open));
+  if (cs.menuOff) { cs.menuOff(); cs.menuOff = null; }
+  if (open) {
+    const away = (e) => { if (e.target instanceof Node && !cs.menu.contains(e.target) && !cs.gear.contains(e.target)) chatSkinMenu(cs, false); };
+    document.addEventListener('pointerdown', away, true);
+    cs.menuOff = () => document.removeEventListener('pointerdown', away, true);
+    const on = cs.fontList.querySelector('[aria-checked="true"]');
+    if (on) try { on.focus({ preventScroll: true }); } catch { /* detached */ }
+  } else if (refocus) {
+    try { cs.gear.focus({ preventScroll: true }); } catch { /* detached */ }
+  }
 }
 
 /* ── the switch itself ───────────────────────────────────────────────────── */
@@ -7517,6 +7583,7 @@ function chatSkinLayout(p) {
   p.el.classList.toggle('view-chat', on);
   p.el.classList.toggle('cs-strip', on && !!cs.promptKind);
   cs.root.hidden = !on;
+  if (!on) chatSkinMenu(cs, false);   // a popover left open would keep a document listener alive behind a hidden view
   cs.input.disabled = !!cs.promptKind || !!p.exited;
   chatSkinControls(p);
   chatSkinPaintAlert(p);

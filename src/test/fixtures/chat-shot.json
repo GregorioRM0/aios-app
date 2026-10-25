@@ -115,6 +115,13 @@
         "kind": "permission",
         "hint": "Run the unit tests of the sync client? npm test"
       }
+    ],
+    "usage-high": [
+      {
+        "type": "status",
+        "fiveHourPct": 78,
+        "sevenDayPct": 93
+      }
     ]
   },
   "shots": [
@@ -202,6 +209,57 @@
       ],
       "layout": "workbench",
       "composer": "Also check that the retry count is logged"
+    },
+    {
+      "name": "settings-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "js": [
+        "ctx.cs.gear.click();"
+      ]
+    },
+    {
+      "name": "settings-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "js": [
+        "ctx.cs.gear.click();"
+      ]
+    },
+    {
+      "name": "markdown-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "js": [
+        "// scroll the rich answer to the top of the log, as a reader who went back to it would",
+        "const row = ctx.$('.chat-row.who-claude');",
+        "ctx.cs.stick = false;",
+        "ctx.cs.log.scrollTop = row.offsetTop - 12;"
+      ]
+    },
+    {
+      "name": "empty-light",
+      "theme": "light",
+      "events": [
+        "empty"
+      ]
+    },
+    {
+      "name": "meters-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "usage-high"
+      ],
+      "composer": ""
     }
   ]
 }
