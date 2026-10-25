@@ -7,7 +7,9 @@
  */
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { createTranscriptTracker, type ChatItem } from '../core/transcriptChat';
+import {
+  createTranscriptTracker, previewToolOutput, TOOL_OUTPUT_MAX_CHARS, TOOL_OUTPUT_MAX_LINES, type ChatItem,
+} from '../core/transcriptChat';
 
 let n = 0;
 const uid = (): string => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
@@ -233,4 +235,121 @@ test('reset forgets the turn and the running tools (the file is about to be re-r
   t.reset();
   assert.deepEqual(t.snapshot(), { turnOpen: false, usage: {} });
   assert.deepEqual(t.feed(toolResult('x', 'late')).items, []);
+});
+
+// ── tool result preview (tool.output) ───────────────────────────────────────
+
+const resultBlocks = (id: string, content: unknown, isError?: boolean): string =>
+  userBlocks([{ type: 'tool_result', tool_use_id: id, content, ...(isError === undefined ? {} : { is_error: isError }) }]);
+/** Run one tool through use + result and hand back the tool the result produced. */
+const runTool = (result: (id: string) => string) => {
+  const t = createTranscriptTracker();
+  t.feed(userStr('q'));
+  t.feed(toolUse('p1', 'Bash', { command: 'x' }));
+  return t.feed(result('p1')).items[0]?.tool;
+};
+const ESC = '\x1b';
+
+test('output: a string result fills tool.output, and only once the result arrives', () => {
+  const t = createTranscriptTracker();
+  const running = t.feed(toolUse('o1', 'Bash', { command: 'echo hi' })).items[0];
+  assert.equal(running.tool?.output, undefined, 'a tool still running has no output');
+  assert.equal('output' in (running.tool as object), false, 'the key is absent, not undefined');
+  const done = t.feed(toolResult('o1', 'line one\nline two\n')).items[0];
+  assert.equal(done.tool?.status, 'ok');
+  assert.equal(done.tool?.output, 'line one\nline two', 'trailing newline is not content');
+  assert.equal(done.tool?.outputTruncated, undefined, 'the flag is absent when nothing was cut');
+  assert.equal(done.tool?.summary, running.tool?.summary, 'the rest of the tool is untouched');
+  // negative control: an empty result gives no output key at all
+  assert.equal('output' in (runTool((id) => toolResult(id, '')) as object), false);
+  assert.equal('output' in (runTool((id) => toolResult(id, '  \n ')) as object), false);
+});
+
+test('output: an array content keeps text blocks in order and replaces non-text ones with a marker', () => {
+  const tool = runTool((id) => resultBlocks(id, [
+    { type: 'text', text: 'before' },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA'.repeat(500) } },
+    { type: 'text', text: 'after' },
+    { type: 'something_new', payload: 1 },
+  ]));
+  assert.equal(tool?.output, 'before\n[image]\nafter\n[other]');
+  assert.ok(!tool?.output?.includes('AAAA'), 'base64 never reaches the view');
+  // negative control: text-only array has no marker
+  assert.equal(runTool((id) => resultBlocks(id, [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }]))?.output, 'a\nb');
+  // content that is neither string nor array, or an array of junk, yields no output
+  assert.equal('output' in (runTool((id) => resultBlocks(id, { type: 'text', text: 'x' })) as object), false);
+  assert.equal('output' in (runTool((id) => resultBlocks(id, [null, 3, 'str'])) as object), false);
+});
+
+test('output: ANSI sequences and control characters are stripped, newlines and tabs stay', () => {
+  const dirty = `${ESC}[31mred${ESC}[0m ${ESC}[1;32;4mgreen${ESC}[0m\n${ESC}]0;window title\x07body\tcol\x00\x07\x08\x7f\n${ESC}]8;;http://x${ESC}\\link${ESC}]8;;${ESC}\\ ${ESC}[2K${ESC}(B`;
+  assert.equal(runTool((id) => toolResult(id, dirty))?.output, 'red green\nbody\tcol\nlink');
+  // carriage returns: CRLF is a newline, a bare CR (progress redraw) separates frames instead of gluing them
+  assert.equal(runTool((id) => toolResult(id, 'a\r\nb\r10%\r100%'))?.output, 'a\nb\n10%\n100%');
+  // negative control: plain text with brackets that merely look like an escape is untouched
+  assert.equal(runTool((id) => toolResult(id, 'arr[0] = "[31m"'))?.output, 'arr[0] = "[31m"');
+  // an unterminated OSC must not swallow the text after it
+  assert.equal(runTool((id) => toolResult(id, `${ESC}]0;oops\nkept`))?.output, '0;oops\nkept');
+});
+
+test('output: cut by characters, flagged, and never past the cap', () => {
+  const long = 'x'.repeat(TOOL_OUTPUT_MAX_CHARS + 500);
+  const tool = runTool((id) => toolResult(id, long));
+  assert.equal(tool?.output?.length, TOOL_OUTPUT_MAX_CHARS);
+  assert.equal(tool?.outputTruncated, true);
+  // exactly at the cap is not truncated (negative control for the boundary)
+  const exact = runTool((id) => toolResult(id, 'y'.repeat(TOOL_OUTPUT_MAX_CHARS)));
+  assert.equal(exact?.output?.length, TOOL_OUTPUT_MAX_CHARS);
+  assert.equal(exact?.outputTruncated, undefined);
+  // a huge result is bounded and flagged too, without scanning all of it
+  const huge = previewToolOutput('z'.repeat(5_000_000));
+  assert.equal(huge?.text.length, TOOL_OUTPUT_MAX_CHARS);
+  assert.equal(huge?.truncated, true);
+  // the cut never leaves half of a surrogate pair
+  const emoji = previewToolOutput('a'.repeat(TOOL_OUTPUT_MAX_CHARS - 1) + '\u{1F600}'.repeat(3));
+  assert.ok(!/[\ud800-\udbff]$/.test(emoji?.text ?? ''), 'no dangling high surrogate');
+});
+
+test('output: cut by lines, flagged; the line cap and the char cap each win when stricter', () => {
+  const many = Array.from({ length: TOOL_OUTPUT_MAX_LINES + 40 }, (_, i) => `row ${i}`).join('\n');
+  const tool = runTool((id) => toolResult(id, many));
+  assert.equal(tool?.output?.split('\n').length, TOOL_OUTPUT_MAX_LINES);
+  assert.equal(tool?.output?.split('\n')[TOOL_OUTPUT_MAX_LINES - 1], `row ${TOOL_OUTPUT_MAX_LINES - 1}`);
+  assert.equal(tool?.outputTruncated, true);
+  // exactly the cap (with a trailing newline, which is not a line) is not truncated
+  const exact = Array.from({ length: TOOL_OUTPUT_MAX_LINES }, (_, i) => `row ${i}`).join('\n') + '\n';
+  const ok = runTool((id) => toolResult(id, exact));
+  assert.equal(ok?.output?.split('\n').length, TOOL_OUTPUT_MAX_LINES);
+  assert.equal(ok?.outputTruncated, undefined);
+  // few but very long lines are held by the char cap instead
+  const wide = runTool((id) => toolResult(id, `${'w'.repeat(3000)}\n${'w'.repeat(3000)}`));
+  assert.equal(wide?.output?.length, TOOL_OUTPUT_MAX_CHARS);
+  assert.equal(wide?.outputTruncated, true);
+});
+
+test('output: an error result keeps its output next to status error', () => {
+  const tool = runTool((id) => toolResult(id, `${ESC}[31mError: boom${ESC}[0m\n  at fake (file.js:1:1)`, true));
+  assert.equal(tool?.status, 'error');
+  assert.equal(tool?.output, 'Error: boom\n  at fake (file.js:1:1)');
+  // negative control: same text, no is_error → ok
+  assert.equal(runTool((id) => toolResult(id, 'Error: boom'))?.status, 'ok');
+});
+
+test('output: a tool that never got a result stays running without output, also after an interrupt', () => {
+  const t = createTranscriptTracker();
+  t.feed(userStr('q'));
+  t.feed(toolUse('r1', 'Bash', { command: 'sleep 1' }));
+  t.feed(toolUse('r2', 'Bash', { command: 'sleep 2' }));
+  const first = t.feed(toolResult('r1', 'done'));
+  assert.equal(first.items[0].tool?.output, 'done');
+  const cut = t.feed(userBlocks([{ type: 'text', text: '[Request interrupted by user]' }]));
+  const failed = cut.items.find((i) => i.uuid === 'r2');
+  assert.equal(failed?.tool?.status, 'error');
+  assert.equal('output' in (failed?.tool as object), false, 'an interrupted tool has nothing to preview');
+});
+
+test('output: feedAll hands the final item, with its output, in the place the tool_use took', () => {
+  const u = feedAll([userStr('q'), toolUse('b1', 'Read', { file_path: '/p/a.md' }), toolResult('b1', '# title')]);
+  assert.equal(u.items.length, 2);
+  assert.deepEqual(u.items[1].tool, { id: 'b1', name: 'Read', summary: u.items[1].tool?.summary, status: 'ok', output: '# title' });
 });

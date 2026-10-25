@@ -37,9 +37,36 @@ export interface ChatItem {
   role: 'user' | 'assistant' | 'tool' | 'system';
   /** Raw markdown for assistant text; the renderer sanitises and renders it. */
   text?: string;
-  tool?: { id: string; name: string; summary: string; status: 'running' | 'ok' | 'error' };
+  tool?: {
+    id: string; name: string; summary: string; status: 'running' | 'ok' | 'error';
+    /**
+     * A bounded, ANSI-free preview of the tool's result, present only once its tool_result arrived
+     * (and only when there was something to show). UNTRUSTED DATA: it is whatever the tool printed,
+     * so the renderer must paint it with textContent, never innerHTML — it is deliberately not
+     * escaped here, because escaping at the source would double-encode for a textContent consumer.
+     */
+    output?: string;
+    /** True when `output` was cut at TOOL_OUTPUT_MAX_CHARS / TOOL_OUTPUT_MAX_LINES. Absent otherwise. */
+    outputTruncated?: boolean;
+  };
   ts?: string;
 }
+
+/**
+ * Caps on a tool result's preview. The preview rides inside the item, and an item travels over IPC
+ * on every event that touches it (a backfill re-sends the whole history) and is then painted by the
+ * renderer; a Read of a large file or a noisy build log must not be able to inflate either. Small on
+ * purpose: this is a glance at what the tool said, the full text lives in the transcript and the
+ * terminal. Both caps apply and the stricter one wins.
+ */
+export const TOOL_OUTPUT_MAX_CHARS = 4000;
+export const TOOL_OUTPUT_MAX_LINES = 60;
+/**
+ * How much of a raw result is even looked at before cleaning. Stripping escapes from a multi-megabyte
+ * result just to keep its first 4000 characters would stall the main process for nothing; the
+ * margin over the char cap leaves room for the escapes and control characters the cleaning removes.
+ */
+const TOOL_OUTPUT_SCAN_CHARS = TOOL_OUTPUT_MAX_CHARS * 16;
 
 export interface TranscriptUsage {
   /** input + cache creation + cache read of the LAST assistant message: what the context holds now. */
@@ -111,6 +138,70 @@ function userText(raw: string): { role: 'user' | 'system'; text: string } | unde
   // caveats, task notifications and other injected wrappers: not the operator's words
   if (/^<(local-command-caveat|task-notification|command-message|bash-input|bash-stdout|bash-stderr)\b/.test(s)) return undefined;
   return { role: 'user', text: s };
+}
+
+// ── tool result preview ─────────────────────────────────────────────────────
+
+/** CSI (`ESC [ … final`), OSC (`ESC ] … BEL|ST`, terminated only — an open one must not eat the rest) charset/mode escapes with intermediate bytes (`ESC ( B`) and the remaining two-character escapes. */
+// eslint-disable-next-line no-control-regex
+const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[ -/]+[0-~]|\x1b[@-Z\\-_]/g;
+/** Every control character except \n and \t (C0, DEL and C1), including a stray ESC left by a cut. */
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+/**
+ * The text of a `tool_result.content`, which is a string or an array of blocks. Only `text` blocks
+ * contribute their text; an image (or any other block type) becomes a short neutral marker so the
+ * reader sees that something was there without any binary or base64 reaching the view.
+ */
+function resultText(content: unknown): string | undefined {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return undefined;
+  const parts: string[] = [];
+  for (const b of content) {
+    if (!isObj(b)) continue;
+    if (b.type === 'text') { if (typeof b.text === 'string') parts.push(b.text); }
+    else parts.push(b.type === 'image' ? '[image]' : '[other]');
+  }
+  return parts.join('\n');
+}
+
+/**
+ * Turn a tool_result's content into the preview the chat shows, or undefined when there is nothing
+ * to show. Order matters: look at a bounded prefix, strip escapes, normalise carriage returns (a
+ * progress bar redraws with a bare \r, which would otherwise glue its frames together), drop
+ * the remaining control characters, THEN apply the caps — so they count what is really displayed.
+ *
+ * Deliberately NOT redacted (src/main/redact.ts is not applied here or in transcriptTail):
+ *  - redaction exists to guard text that LEAVES the machine (the "Report this" file). This text goes
+ *    only to our own renderer, and it is byte-for-byte what the terminal pane already shows and what
+ *    the transcript already holds on disk — masking it here protects nothing the operator cannot
+ *    already see in the same window;
+ *  - its patterns are heuristics (`password = …`, `token …`), and in a tool result they fire on
+ *    ordinary source code a Read returns, so the view would show "[redacted]" where the file has
+ *    text, and the operator would not be able to tell a mask from the file's content;
+ *  - this module is the pure core shared with the other front (no imports from src/main).
+ * If this preview is ever sent anywhere outside the window, redact at THAT boundary.
+ */
+export function previewToolOutput(content: unknown): { text: string; truncated: boolean } | undefined {
+  const raw = resultText(content);
+  if (raw === undefined) return undefined;
+  let truncated = raw.length > TOOL_OUTPUT_SCAN_CHARS;
+  let s = (truncated ? raw.slice(0, TOOL_OUTPUT_SCAN_CHARS) : raw)
+    .replace(ANSI, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(CONTROL, '')
+    .trimEnd();              // before counting lines: a final newline is not a line
+  const lines = s.split('\n');
+  if (lines.length > TOOL_OUTPUT_MAX_LINES) { s = lines.slice(0, TOOL_OUTPUT_MAX_LINES).join('\n'); truncated = true; }
+  if (s.length > TOOL_OUTPUT_MAX_CHARS) {
+    s = s.slice(0, TOOL_OUTPUT_MAX_CHARS);
+    // do not leave half of a surrogate pair at the cut
+    if (/[\ud800-\udbff]$/.test(s)) s = s.slice(0, -1);
+    truncated = true;
+  }
+  s = s.trimEnd();     // a cut can land right after a newline or a space
+  return s ? { text: s, truncated } : undefined;
 }
 
 export function createTranscriptTracker(): TranscriptTracker {
@@ -208,7 +299,15 @@ export function createTranscriptTracker(): TranscriptTracker {
         const item = id ? running.get(id) : undefined;
         if (id && item?.tool) {
           running.delete(id);
-          u.items.push({ ...item, tool: { ...item.tool, status: b.is_error === true ? 'error' : 'ok' } });
+          const out = previewToolOutput(b.content);
+          u.items.push({
+            ...item,
+            tool: {
+              ...item.tool,
+              status: b.is_error === true ? 'error' : 'ok',
+              ...(out ? { output: out.text, ...(out.truncated ? { outputTruncated: true } : {}) } : {}),
+            },
+          });
         }
         // a result means the model is mid-turn (it will read this next)
         setTurn(true, u);
