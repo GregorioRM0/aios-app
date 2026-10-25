@@ -76,6 +76,7 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --chat-meter-track: color-mix(in srgb, var(--ink) 13%, var(--surface));
   --chat-focus: color-mix(in srgb, var(--accent) 24%, transparent);       /* the composer's focus ring: the one place typing happens */
   --chat-on-accent: #fff;   /* the glyph on a coral button; white, as the house .vbtn.primary does */
+  --chat-meter-fill: color-mix(in srgb, var(--ink) 52%, var(--surface));   /* a usage bar in its normal range: neutral, so only 70+ and 90+ ever draw the eye */
   --chat-float: 0 18px 44px -20px rgba(0,0,0,.75), 0 3px 10px -4px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
   --chat-pop: 0 14px 36px -12px rgba(0,0,0,.7), 0 2px 8px -2px rgba(0,0,0,.4);   /* a menu floating over the conversation */
   --edge: inset 0 1px 0 rgba(255,255,255,.05);
@@ -635,6 +636,7 @@ body.light {
   --chat-meter-track: color-mix(in srgb, var(--ink) 11%, var(--surface));
   --chat-focus: color-mix(in srgb, var(--accent) 22%, transparent);
   --chat-on-accent: #fff;
+  --chat-meter-fill: color-mix(in srgb, var(--ink) 50%, var(--surface));
   --chat-float: 0 16px 36px -22px rgba(30,30,40,.38), 0 2px 8px -3px rgba(30,30,40,.16);
   --chat-pop: 0 14px 34px -14px rgba(30,30,40,.34), 0 2px 8px -2px rgba(30,30,40,.14);
 }
@@ -1572,12 +1574,16 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .chatskin[hidden], .chatskin [hidden] { display: none !important; }
 .pane.cs-strip > .chatskin { bottom: var(--cs-strip-h, 62%); min-height: 120px; border-bottom: 1px solid var(--line-strong); border-radius: 12px 12px 0 0; }
 .pane.cs-strip > .chatskin .chat-usage, .pane.cs-strip > .chatskin .chat-compose, .pane.cs-strip > .chatskin .cs-working { display: none; }
-.cs-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.cs-head { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 9px 14px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
 .cs-fill { flex: 1; }
-.cs-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-.cs-sw { background: transparent; border: 0; color: var(--subtle); font-family: var(--font); font-size: 11.5px; padding: 4px 12px; cursor: pointer; }
-.cs-sw:hover, .cs-sw:focus-visible { color: var(--ink); outline: none; }
-.cs-sw[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); box-shadow: inset 0 -1.5px 0 var(--accent); }
+/* The Terminal | Chat switch: a small segmented pill. The active half is a raised chip, not a coral underline —
+   coral stays for actions, and "which view am I in" is already clear from what is on screen. */
+.cs-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--chat-out-bg); }
+.cs-sw { background: transparent; border: 0; border-radius: 7px; color: var(--subtle); font-family: var(--font); font-size: 12px; padding: 4px 12px; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.cs-sw:hover { color: var(--ink); }
+.cs-sw:focus-visible { color: var(--ink); outline: 2px solid var(--chat-focus); outline-offset: 1px; }
+.cs-sw[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); box-shadow: var(--edge), 0 0 0 1px var(--line); }
+@media (prefers-reduced-motion: reduce) { .cs-sw { transition: none; } }
 .tab .tview { display: inline-flex; align-items: center; color: var(--faint); border-radius: 4px; padding: 1px; cursor: pointer; }
 .tab .tview:hover, .tab .tview:focus-visible { color: var(--accent-ink); outline: none; }
 .tab .tview.on { color: var(--accent-ink); }
@@ -1631,14 +1637,19 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .chat-pick { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 7px;
              font-family: var(--font); font-size: 11.5px; padding: 3px 6px; max-width: 150px; cursor: pointer; }
 .chat-pick:hover, .chat-pick:focus-visible { border-color: var(--accent); outline: none; }
-.chat-usage { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 6px 16px; border-bottom: 1px solid var(--line);
-              flex: 0 0 auto; font-size: 10.5px; color: var(--subtle); font-family: var(--mono); }
-.chat-usage .cu { display: inline-flex; gap: 5px; white-space: nowrap; }
-.chat-usage .cu-k { letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
-.chat-usage .cu-v { color: var(--ink); }
-.chat-usage .cu-v.mid { color: var(--st-warn-ink); }
-.chat-usage .cu-v.hi { color: var(--st-error-ink); }
+.chat-usage { display: flex; align-items: center; gap: 4px 16px; flex: 0 0 auto; min-width: 0; color: var(--subtle); font-size: 11px; }
+.chat-usage .cu { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.chat-usage .cu-k { color: var(--faint); }
+.chat-usage .cu-bar { position: relative; width: 38px; height: 4px; border-radius: 3px; background: var(--chat-meter-track); overflow: hidden; }
+.chat-usage .cu-bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--chat-meter-fill); transition: width .35s ease, background-color .2s ease; }
+.chat-usage .cu.mid .cu-bar i { background: var(--st-warn); }
+.chat-usage .cu.hi .cu-bar i { background: var(--st-error); }
+.chat-usage .cu-v { min-width: 2.2em; color: var(--ink); font-family: var(--mono); font-size: 10.5px; }
+.chat-usage .cu.mid .cu-v { color: var(--st-warn-ink); }
+.chat-usage .cu.hi .cu-v { color: var(--st-error-ink); }
 .chat-usage .cu-v.none { color: var(--faint); }
+@container (max-width: 640px) { .cs-head .chat-usage { order: 3; flex: 1 0 100%; justify-content: flex-start; } .cs-head .cs-fill { flex: 1 1 0; } }
+@media (prefers-reduced-motion: reduce) { .chat-usage .cu-bar i { transition: none; } }
 
 /* The conversation is ONE centred reading column. The log itself spans the pane (so its scrollbar
    sits at the pane's edge, where a hand looks for it) and the column is made with side padding:

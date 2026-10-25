@@ -7246,19 +7246,24 @@ function chatPaintUsage(cs) {
   for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
     const out = cs.usageVals[k];
     out.className = 'cu-v';
-    out.removeAttribute('title');
-    if (k === 'contextPct' && Number.isFinite(cs.ctxTokens)) {
-      out.textContent = chatTokens(cs.ctxTokens);
-      out.title = t('chat.usage.contextTokens');
+    if (kind === 'pct') {
+      const cell = out.parentElement;
+      const pct = cs.status[k];
+      const has = typeof pct === 'number' && Number.isFinite(pct);
+      const tokens = k === 'contextPct' && Number.isFinite(cs.ctxTokens);
+      // threshold colour follows the PERCENTAGE (70 warn, 90 error), whatever the number on show is
+      cell.className = 'cu' + (has ? (pct >= 90 ? ' hi' : pct >= 70 ? ' mid' : '') : ' none');
+      cell.querySelector('.cu-bar i').style.width = has ? Math.max(0, Math.min(100, pct)) + '%' : '0%';
+      const shown = tokens ? chatTokens(cs.ctxTokens) : has ? Math.round(pct) + '%' : '—';
+      out.textContent = shown;
+      if (shown === '—') out.classList.add('none');
+      const tip = t(label) + ': ' + (shown === '—' ? t('chat.usage.none') : shown)
+        + (tokens ? ' — ' + t('chat.usage.contextTokens') + (has ? ' (' + Math.round(pct) + '%)' : '') : '');
+      cell.title = tip; cell.setAttribute('aria-label', tip);
       continue;
     }
     const v = k === 'model' && cs.model ? cs.model : cs.status[k];
-    if (kind === 'pct') {
-      if (typeof v === 'number' && Number.isFinite(v)) {
-        out.textContent = Math.round(v) + '%';
-        if (v >= 90) out.classList.add('hi'); else if (v >= 70) out.classList.add('mid');
-      } else { out.textContent = '—'; out.classList.add('none'); }
-    } else if (v) { out.textContent = k === 'model' ? String(v).replace(/^claude-/, '') : String(v); }   // the full id stays in the tooltip
+    if (v) { out.textContent = k === 'model' ? String(v).replace(/^claude-/, '') : String(v); }   // the full id stays in the tooltip
     else { out.textContent = '—'; out.classList.add('none'); }
     if (kind === 'text') out.parentElement.title = t(label) + ': ' + (v || '—');
   }
@@ -7306,16 +7311,20 @@ function chatSkinBuild(id, p) {
   const sizeSel = el('select', 'chat-pick');
   sizeSel.title = t('chat.size.label'); sizeSel.setAttribute('aria-label', t('chat.size.label'));
   for (const s of CHAT_SIZES) { const o = el('option', '', String(s)); o.value = String(s); sizeSel.appendChild(o); }
-  head.append(sw, el('span', 'cs-fill'), fontSel, sizeSel);
-
   const usageEl = el('div', 'chat-usage');
   usageEl.setAttribute('aria-label', t('chat.usage.label'));
+  head.append(sw, el('span', 'cs-fill'), usageEl, fontSel, sizeSel);
   const usageVals = {};
   for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
     if (kind !== 'pct') continue;   // model and effort are chips on the composer, not meters
-    const cell = el('span', 'cu');
+    /* A meter: label, a thin bar, the value. The bar is the glance, the number is the fact; a reading we do
+       not have is a dash and an empty bar, never 0. Painted by chatPaintUsage. */
+    const cell = el('span', 'cu none');
+    cell.setAttribute('role', 'img');
     const v = el('span', 'cu-v none', '—');
-    cell.append(el('span', 'cu-k', t(label)), v);
+    const bar = el('span', 'cu-bar');
+    bar.appendChild(el('i'));
+    cell.append(el('span', 'cu-k', t(label)), bar, v);
     usageEl.appendChild(cell);
     usageVals[k] = v;
   }
@@ -7379,7 +7388,7 @@ function chatSkinBuild(id, p) {
   box.append(input, ccRow);
   compose.append(box, el('div', 'cc-hint', t('chat.inputHint')));
 
-  root.append(head, usageEl, log, alertEl, compose);
+  root.append(head, log, alertEl, compose);
   p.el.appendChild(root);
 
   const cs = {

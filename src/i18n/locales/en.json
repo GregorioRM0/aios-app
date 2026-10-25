@@ -1218,6 +1218,7 @@
   "chat.skin.tool.noOutput": "This tool returned no output.",
   "chat.skin.tool.runningNoOutput": "Still running. Its output appears here when it finishes.",
   "chat.skin.tool.truncated": "Only the start of the output is shown.",
+  "chat.usage.none": "no reading",
   "settings.chatViewDefault": "Open Claude sessions as chat",
   "settings.chatViewDefaultHint": "New Claude sessions start in the chat view. You can switch any tab back to the terminal at any time."
 }
