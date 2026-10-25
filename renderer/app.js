@@ -7356,7 +7356,16 @@ function chatSkinBuild(id, p) {
   const log = el('div', 'chat-log');
   log.setAttribute('role', 'log');
   log.setAttribute('aria-live', 'polite');
-  const stateEl = el('div', 'chat-note cs-state');   // connecting · waiting · empty · error — one line, first in the log
+  /* connecting · waiting · empty · error: ONE card, first in the log, centred while nothing else is
+     there. Icon, a short title, a sentence; the error one also offers the way back to the terminal. */
+  const stateEl = el('div', 'cs-card cs-state');
+  const stateIco = el('span', 'csc-ico');
+  const stateTitle = el('div', 'csc-title');
+  const stateText = el('div', 'csc-text');
+  const stateBtn = el('button', 'csc-btn', t('chat.skin.showTerminal'));
+  stateBtn.type = 'button';
+  stateBtn.hidden = true;
+  stateEl.append(stateIco, stateTitle, stateText, stateBtn);
   log.appendChild(stateEl);
 
   /* "Claude is working", inside the column and under the last message (it is the log's last child: new
@@ -7373,9 +7382,19 @@ function chatSkinBuild(id, p) {
   const alertEl = el('div', 'cs-alert');
   alertEl.hidden = true;
   alertEl.setAttribute('role', 'alert');
-  const alertText = el('span', 'cs-alert-text');
-  const alertBtn = el('button', 'vbtn primary', t('chat.skin.showTerminal'));
-  alertEl.append(alertText, alertBtn);
+  /* "The terminal needs you" (a dialog only the TUI can draw) or "nothing for a while" (stalled): a
+     card with an icon, a title, the sentence and, for the stalled case, the way to the terminal. In the
+     strip layout it docks onto the live terminal strip right below it. */
+  const alertIco = el('span', 'csa-ico');
+  const alertTitle = el('div', 'csa-title');
+  const alertText = el('div', 'cs-alert-text');
+  const alertBody = el('div', 'csa-body');
+  alertBody.append(alertTitle, alertText);
+  const alertBtn = el('button', 'csa-btn', t('chat.skin.showTerminal'));
+  alertBtn.type = 'button';
+  const alertPoint = csIcon('arrowDown', 16);   // under a dialog: "answer down there"
+  alertPoint.classList.add('csa-point');
+  alertEl.append(alertIco, alertBody, alertBtn, alertPoint);
 
   /* The composer: one big rounded card floating over the end of the conversation. The text grows
      with what is typed; under it a row carries the model and effort chips (read from the same usage
@@ -7416,7 +7435,7 @@ function chatSkinBuild(id, p) {
   p.el.appendChild(root);
 
   const cs = {
-    id, root, log, stateEl, workEl, alertEl, alertText, alertBtn, input, sendBtn, stopBtn, gear, menu, fontList, sizeList, usageEl, usageVals,
+    id, root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, input, sendBtn, stopBtn, gear, menu, fontList, sizeList, usageEl, usageVals,
     menuOpen: false, menuOff: null,
     swTerm, swChat,
     items: new Map(),            // transcript uuid -> { node, role, … }
@@ -7467,6 +7486,7 @@ function chatSkinBuild(id, p) {
   stopBtn.addEventListener('click', () => chatSkinInterrupt(id, p));
   swTerm.addEventListener('click', () => chatSkinSetView(id, 'term'));
   alertBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
+  stateBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
   gear.addEventListener('click', () => chatSkinMenu(cs, !cs.menuOpen));
   fontList.addEventListener('click', (e) => {
     const b = e.target instanceof Element ? e.target.closest('[role="radio"]') : null;
@@ -7609,17 +7629,34 @@ function chatSkinPaintAlert(p) {
   cs.alertEl.classList.toggle('prompt', !!cs.promptKind);
   cs.alertEl.title = cs.promptHint || '';
   cs.alertBtn.hidden = !!cs.promptKind;   // under a dialog the terminal is already in front; the header switch is still there
+  const kind = cs.promptKind ? 'prompt' : 'stalled';
+  if (text && cs.alertKind !== kind) {
+    cs.alertKind = kind;
+    cs.alertIco.replaceChildren(csIcon(kind === 'prompt' ? 'term' : 'alert', 18));
+    cs.alertTitle.textContent = t('chat.skin.alert.' + kind + '.title');
+  }
 }
+const CHAT_STATE_ICONS = { connecting: null, waiting: 'chat', empty: 'chat', error: 'alert' };
 function chatSkinPaintState(p) {
   const cs = p.chatSkin;
-  let text = '';
-  if (cs.state === 'error') text = t('chat.skin.error', { code: cs.errorCode || '?' });
-  else if (!cs.watched) text = t('chat.connecting');
-  else if (cs.state === 'waiting') text = t('chat.skin.waiting');
-  else if (cs.state === 'live' && cs.items.size === 0) text = t('chat.skin.empty');
-  cs.stateEl.hidden = !text;
-  cs.stateEl.textContent = text;
-  cs.stateEl.classList.toggle('error', cs.state === 'error');
+  let kind = '';
+  if (cs.state === 'error') kind = 'error';
+  else if (!cs.watched) kind = 'connecting';
+  else if (cs.state === 'waiting') kind = 'waiting';
+  else if (cs.state === 'live' && cs.items.size === 0) kind = 'empty';
+  cs.stateEl.hidden = !kind;
+  if (!kind) return;
+  const code = cs.errorCode || '?';
+  const key = 'chat.skin.state.' + kind;
+  cs.stateEl.dataset.kind = kind;
+  cs.stateTitle.textContent = t(key + '.title');
+  cs.stateText.textContent = t(key + '.text', { code });
+  cs.stateBtn.hidden = kind !== 'error';
+  if (cs.stateKind !== kind) {
+    cs.stateKind = kind;
+    // connecting shows the same quiet spinner as a running tool; the others get a glyph
+    cs.stateIco.replaceChildren(CHAT_STATE_ICONS[kind] ? csIcon(CHAT_STATE_ICONS[kind], 20) : el('span', 'ct-spin'));
+  }
 }
 /* The toggle on the tab (plus the header switch inside the overlay). Shown for panes that run
    Claude only; pressed state mirrors the view. */

@@ -122,6 +122,13 @@
         "fiveHourPct": 78,
         "sevenDayPct": 93
       }
+    ],
+    "connecting": [],
+    "error": [
+      {
+        "type": "error",
+        "code": "read-failed"
+      }
     ]
   },
   "shots": [

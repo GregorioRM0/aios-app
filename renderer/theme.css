@@ -1594,10 +1594,28 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cw-dots i:nth-child(2) { animation-delay: .16s; }
 .cw-dots i:nth-child(3) { animation-delay: .32s; }
 @keyframes cs-wave { 0%, 60%, 100% { transform: translateY(0); opacity: .35; } 30% { transform: translateY(-4px); opacity: 1; } }
-.cs-alert { --sc: var(--st-warn); display: flex; align-items: center; gap: 12px; padding: 8px 14px; flex: 0 0 auto; color: var(--ink); font-size: 12.5px;
-            background: color-mix(in srgb, var(--sc) 10%, var(--surface)); border-top: 1px solid color-mix(in srgb, var(--sc) 42%, transparent); }
+/* ── "the terminal needs you" / "quiet for a while": a status card in the column ──
+   --sc is the one hue of the card: --st-input (blue) when a dialog waits on the operator, --st-warn when a turn
+   has gone quiet. Never coral: it is not an action and it is not the brand. */
+.cs-alert { --sc: var(--st-warn); display: flex; align-items: center; gap: 13px; flex: 0 0 auto; box-sizing: border-box; padding: 11px 14px 11px 12px;
+            margin: 0 max(16px, calc((100% - var(--cs-col)) / 2)) 12px; color: var(--ink); font-size: 12.5px; line-height: 1.45;
+            background: color-mix(in srgb, var(--sc) 9%, var(--surface)); border: 1px solid color-mix(in srgb, var(--sc) 40%, transparent);
+            border-radius: 14px; box-shadow: var(--edge); }
 .cs-alert.prompt { --sc: var(--st-input); }   /* waiting on the operator: the same hue as everywhere else in the app */
-.cs-alert-text { flex: 1; min-width: 0; }
+.csa-ico { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 10px;
+           color: color-mix(in srgb, var(--sc) 80%, var(--ink)); background: color-mix(in srgb, var(--sc) 16%, var(--surface)); }
+.csa-body { flex: 1; min-width: 0; }
+.csa-title { font-weight: 640; font-size: 13px; margin-bottom: 1px; }
+.cs-alert-text { color: var(--subtle); }
+.csa-btn, .csc-btn { flex: 0 0 auto; height: 30px; padding: 0 14px; border: 1px solid var(--chat-composer-line); border-radius: 8px; background: var(--chat-composer-bg);
+                     color: var(--ink); font-family: var(--font); font-size: 12px; font-weight: 600; cursor: pointer; }
+.csa-btn:hover, .csc-btn:hover { background: var(--chat-row-hover); }
+.csa-btn:focus-visible, .csc-btn:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 2px; }
+.csa-point { display: none; flex: 0 0 auto; color: color-mix(in srgb, var(--sc) 75%, var(--ink)); }
+.cs-alert.prompt .csa-point { display: inline-flex; }
+/* With a dialog up the card is the last thing above the live terminal strip, so it docks onto it: squared bottom, no gap. */
+.pane.cs-strip > .chatskin .cs-alert { margin-bottom: 0; border-bottom: 0; border-radius: 14px 14px 0 0; }
+@container (max-width: 520px) { .cs-alert { flex-wrap: wrap; } .csa-btn { margin-left: 47px; } }
 .cs-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* ── tool rows: one compact line per call, joined into a card when they come in a run ── */
 .chat-tool { --tr: 11px; flex: 0 0 auto; min-width: 0; font-size: 12.5px; line-height: 1.4; color: var(--ink);
@@ -1740,11 +1758,20 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .chat-md hr { border: 0; border-top: 1px solid var(--line-strong); margin: 1.6em 0; }
 @keyframes chatpulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
-.chat-note { align-self: center; color: var(--subtle); font-size: .85em; text-align: center; padding: 2px 8px; }
-.chat-note.error { color: var(--st-error-ink); }
-.chat-note.busy::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%;
-                          background: var(--st-busy); vertical-align: middle; animation: chatpulse 1.1s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .chat-note.busy::before { animation: none; } }
+/* A system note inside the conversation (an interruption, an API error, a local command's output): a small centred pill. */
+.chat-note { align-self: center; margin: 10px 0; padding: 3px 12px; max-width: 100%; border-radius: 999px; background: var(--chat-out-bg); border: 1px solid var(--chat-claude-line);
+             color: var(--subtle); font-size: .82em; text-align: center; overflow-wrap: anywhere; white-space: pre-wrap; }
+/* ── connecting · waiting · empty · error: a card, centred while the log has nothing else ── */
+.cs-card { --sc: var(--faint); align-self: center; margin: auto; display: flex; flex-direction: column; align-items: center; max-width: 340px; padding: 8px 12px; text-align: center; }
+.cs-card[data-kind="connecting"] { --sc: var(--st-busy); }
+.cs-card[data-kind="error"] { --sc: var(--st-error); }
+.csc-ico { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; margin-bottom: 14px; border-radius: 16px; color: var(--subtle);
+           background: var(--chat-out-bg); border: 1px solid var(--line-strong); box-shadow: var(--edge); }
+.cs-card[data-kind="error"] .csc-ico { color: var(--st-error-ink); background: color-mix(in srgb, var(--st-error) 11%, var(--surface)); border-color: color-mix(in srgb, var(--st-error) 36%, transparent); }
+.csc-ico .ct-spin { width: 20px; height: 20px; border-width: 3px; }
+.csc-title { font-size: 1.07em; font-weight: 640; letter-spacing: -.005em; margin-bottom: 5px; }
+.csc-text { color: var(--subtle); font-size: .9em; line-height: 1.55; }
+.csc-btn { margin-top: 16px; }
 
 /* ── composer: a big rounded card floating over the end of the conversation ── */
 .chat-compose { position: relative; flex: 0 0 auto; padding: 0 max(16px, calc((100% - var(--cs-col)) / 2)) 12px; }
