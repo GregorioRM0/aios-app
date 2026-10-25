@@ -280,6 +280,42 @@
       ],
       "composer": "",
       "clip": "pane"
+    },
+    {
+      "name": "wide-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "size": {
+        "width": 1760,
+        "height": 1000
+      },
+      "js": [
+        "const row = ctx.$('.chat-tool[data-kind=\"search\"] .ct-head');",
+        "row.click();",
+        "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
+      ]
+    },
+    {
+      "name": "wide-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "size": {
+        "width": 1760,
+        "height": 1000
+      },
+      "js": [
+        "const row = ctx.$('.chat-tool[data-kind=\"search\"] .ct-head');",
+        "row.click();",
+        "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
+      ]
     }
   ]
 }
