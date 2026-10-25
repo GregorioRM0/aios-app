@@ -143,7 +143,8 @@
         "const row = ctx.$('.chat-tool[data-kind=\"search\"] .ct-head');",
         "row.click();",
         "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
-      ]
+      ],
+      "clip": "pane"
     },
     {
       "name": "chat-light",
@@ -156,7 +157,8 @@
         "const row = ctx.$('.chat-tool[data-kind=\"search\"] .ct-head');",
         "row.click();",
         "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
-      ]
+      ],
+      "clip": "pane"
     },
     {
       "name": "attention-dark",
@@ -165,7 +167,8 @@
         "conversation",
         "attention-prompt"
       ],
-      "terminal": "\u001b[2m╭──────────────────────────────────────────────────────────────╮\u001b[0m\n\u001b[2m│\u001b[0m \u001b[1mBash command\u001b[0m                                                 \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   npm test                                                   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   \u001b[2mRun the unit tests of the sync client\u001b[0m                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m Do you want to proceed?                                      \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m \u001b[36m❯ 1. Yes\u001b[0m                                                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   2. Yes, and don't ask again for npm test in this project   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   3. No, and tell Claude what to do differently \u001b[2m(esc)\u001b[0m         \u001b[2m│\u001b[0m\n\u001b[2m╰──────────────────────────────────────────────────────────────╯\u001b[0m"
+      "terminal": "\u001b[2m╭──────────────────────────────────────────────────────────────╮\u001b[0m\n\u001b[2m│\u001b[0m \u001b[1mBash command\u001b[0m                                                 \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   npm test                                                   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   \u001b[2mRun the unit tests of the sync client\u001b[0m                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m Do you want to proceed?                                      \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m \u001b[36m❯ 1. Yes\u001b[0m                                                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   2. Yes, and don't ask again for npm test in this project   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   3. No, and tell Claude what to do differently \u001b[2m(esc)\u001b[0m         \u001b[2m│\u001b[0m\n\u001b[2m╰──────────────────────────────────────────────────────────────╯\u001b[0m",
+      "clip": "pane"
     },
     {
       "name": "attention-light",
@@ -174,14 +177,16 @@
         "conversation",
         "attention-prompt"
       ],
-      "terminal": "\u001b[2m╭──────────────────────────────────────────────────────────────╮\u001b[0m\n\u001b[2m│\u001b[0m \u001b[1mBash command\u001b[0m                                                 \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   npm test                                                   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   \u001b[2mRun the unit tests of the sync client\u001b[0m                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m Do you want to proceed?                                      \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m \u001b[36m❯ 1. Yes\u001b[0m                                                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   2. Yes, and don't ask again for npm test in this project   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   3. No, and tell Claude what to do differently \u001b[2m(esc)\u001b[0m         \u001b[2m│\u001b[0m\n\u001b[2m╰──────────────────────────────────────────────────────────────╯\u001b[0m"
+      "terminal": "\u001b[2m╭──────────────────────────────────────────────────────────────╮\u001b[0m\n\u001b[2m│\u001b[0m \u001b[1mBash command\u001b[0m                                                 \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   npm test                                                   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   \u001b[2mRun the unit tests of the sync client\u001b[0m                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m Do you want to proceed?                                      \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m \u001b[36m❯ 1. Yes\u001b[0m                                                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   2. Yes, and don't ask again for npm test in this project   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   3. No, and tell Claude what to do differently \u001b[2m(esc)\u001b[0m         \u001b[2m│\u001b[0m\n\u001b[2m╰──────────────────────────────────────────────────────────────╯\u001b[0m",
+      "clip": "pane"
     },
     {
       "name": "empty-dark",
       "theme": "dark",
       "events": [
         "empty"
-      ]
+      ],
+      "clip": "pane"
     },
     {
       "name": "markdown-dark",
@@ -194,7 +199,8 @@
         "const row = ctx.$('.chat-row.who-claude');",
         "ctx.cs.stick = false;",
         "ctx.cs.log.scrollTop = row.offsetTop - 12;"
-      ]
+      ],
+      "clip": "pane"
     },
     {
       "name": "narrow-dark",
@@ -203,10 +209,11 @@
         "conversation"
       ],
       "size": {
-        "width": 720,
-        "height": 760
+        "width": 1000,
+        "height": 780
       },
-      "composer": "Short question?"
+      "composer": "Short question?",
+      "clip": "window"
     },
     {
       "name": "workbench-dark",
@@ -215,7 +222,8 @@
         "conversation"
       ],
       "layout": "workbench",
-      "composer": "Also check that the retry count is logged"
+      "composer": "Also check that the retry count is logged",
+      "clip": "window"
     },
     {
       "name": "settings-dark",
@@ -226,7 +234,8 @@
       "composer": "Also check that the retry count is logged",
       "js": [
         "ctx.cs.gear.click();"
-      ]
+      ],
+      "clip": "pane"
     },
     {
       "name": "settings-light",
@@ -237,7 +246,8 @@
       "composer": "Also check that the retry count is logged",
       "js": [
         "ctx.cs.gear.click();"
-      ]
+      ],
+      "clip": "pane"
     },
     {
       "name": "markdown-light",
@@ -250,14 +260,16 @@
         "const row = ctx.$('.chat-row.who-claude');",
         "ctx.cs.stick = false;",
         "ctx.cs.log.scrollTop = row.offsetTop - 12;"
-      ]
+      ],
+      "clip": "pane"
     },
     {
       "name": "empty-light",
       "theme": "light",
       "events": [
         "empty"
-      ]
+      ],
+      "clip": "pane"
     },
     {
       "name": "meters-dark",
@@ -266,7 +278,8 @@
         "conversation",
         "usage-high"
       ],
-      "composer": ""
+      "composer": "",
+      "clip": "pane"
     }
   ]
 }

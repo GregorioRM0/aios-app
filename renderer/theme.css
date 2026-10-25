@@ -1614,7 +1614,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .csa-point { display: none; flex: 0 0 auto; color: color-mix(in srgb, var(--sc) 75%, var(--ink)); }
 .cs-alert.prompt .csa-point { display: inline-flex; }
 /* With a dialog up the card is the last thing above the live terminal strip, so it docks onto it: squared bottom, no gap. */
-.pane.cs-strip > .chatskin .cs-alert { margin-bottom: 0; border-bottom: 0; border-radius: 14px 14px 0 0; }
+.pane.cs-strip > .chatskin .cs-alert { margin-top: 6px; margin-bottom: 0; border-bottom: 0; border-radius: 14px 14px 0 0; }
 @container (max-width: 520px) { .cs-alert { flex-wrap: wrap; } .csa-btn { margin-left: 47px; } }
 .cs-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* ── tool rows: one compact line per call, joined into a card when they come in a run ── */
@@ -1676,7 +1676,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .csm-sample { margin: 12px 2px 0; padding: 10px 12px; border-radius: 10px; background: var(--chat-out-bg); border: 1px solid var(--line);
               color: var(--ink); font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px); line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) { .cs-gear { transition: none; } }
-.chat-usage { display: flex; align-items: center; gap: 4px 16px; flex: 0 0 auto; min-width: 0; color: var(--subtle); font-size: 11px; }
+.chat-usage { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; flex: 0 0 auto; min-width: 0; color: var(--subtle); font-size: 11px; }
 .chat-usage .cu { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
 .chat-usage .cu-k { color: var(--faint); }
 .chat-usage .cu-bar { position: relative; width: 38px; height: 4px; border-radius: 3px; background: var(--chat-meter-track); overflow: hidden; }
@@ -1788,7 +1788,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cc-row { display: flex; align-items: center; gap: 8px; min-height: 34px; }
 .cc-chips { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .cc-chip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 10px; border-radius: 999px; box-sizing: border-box;
-           border: 1px solid var(--line-strong); color: var(--subtle); font-family: var(--mono); font-size: 11px; white-space: nowrap; max-width: 100%; }
+           border: 1px solid var(--line-strong); color: var(--subtle); font-family: var(--mono); font-size: 11px; white-space: nowrap; flex: 0 0 auto; }
 .cc-chip .cu-v { color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
 .cc-chip .cu-v.none { color: var(--faint); }
 .cc-k { font-family: var(--font); color: var(--faint); }
@@ -1803,6 +1803,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cc-send:focus-visible, .cc-stop:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 2px; }
 .cc-hint { margin-top: 7px; text-align: center; color: var(--faint); font-size: 11px; }
 @container (max-width: 520px) { .cc-hint { display: none; } .cc-chip.cc-effort .cc-k { display: none; } }
+@container (max-width: 300px) { .cc-chips { display: none; } }   /* a pane this narrow has room for the text and the button, not for chips */
 @media (prefers-reduced-motion: reduce) { .cc-box, .cc-send, .cc-stop { transition: none; } .cc-send:active:not(:disabled) { transform: none; } }
 /* ── motion that answers events: a new row rises a few px while it fades in; the "latest" button appears when the operator is away from the tail ── */
 .cs-in { animation: cs-in .34s cubic-bezier(.2, .7, .2, 1) both; }

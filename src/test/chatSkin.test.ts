@@ -338,7 +338,10 @@ test('the SDK pane\'s strings are gone from every locale', () => {
 });
 
 test('every colour the skin uses is a token (none minted in the skin\'s own rules), defined for both themes', () => {
-  const tokens = ['--chat-user-bg', '--chat-user-line', '--chat-claude-bg', '--chat-claude-line', '--chat-code-bg', '--chat-tool-ink'];
+  const tokens = ['--chat-user-bg', '--chat-user-line', '--chat-claude-bg', '--chat-claude-line', '--chat-code-bg', '--chat-tool-ink',
+    // the redesign's own (each must resolve against body.light's ink/surface, hence re-declared there)
+    '--chat-code-head', '--chat-out-bg', '--chat-row-hover', '--chat-table-head', '--chat-table-zebra', '--chat-quote-line', '--chat-composer-bg',
+    '--chat-composer-line', '--chat-meter-track', '--chat-meter-fill', '--chat-focus', '--chat-float', '--chat-pop', '--chat-on-accent'];
   const light = css.slice(css.indexOf('body.light {'));
   for (const tk of tokens) {
     assert.match(css, new RegExp(`:root \\{[^}]*${tk}:`), `${tk} must be minted in :root`);
@@ -637,4 +640,110 @@ test('chat-shot fixture: neutral by construction — no hex colors, no personal 
   const raw = read('src/test/fixtures/chat-shot.json');
   assert.equal(/#[0-9a-fA-F]{3,8}\b/.test(raw), false);
   assert.equal(/\/Users\/|\/home\/|C:\\\\|@gmail|\.aios\/|vault/i.test(raw), false);
+});
+
+// ── the "boxes" redesign: what it must never loosen ─────────────────────────
+
+guarded('the code header and the copy button are built AFTER the sanitiser, as DOM — a <button> can never come from model output',
+  (src) => {
+    const s = slice(src);
+    const render = fnBody(s, 'chatRender');
+    const deco = fnBody(s, 'chatDecorate');
+    const tags = /const CHAT_TAGS = new Set\(\[([\s\S]*?)\]\)/.exec(s)?.[1] ?? '';
+    return render.indexOf('chatSanitize(') > 0 && render.indexOf('chatSanitize(') < render.indexOf('chatDecorate(frag)')
+      && render.indexOf('chatDecorate(frag)') < render.indexOf('target.replaceChildren(frag)')
+      && /el\('button', 'cm-copy'\)/.test(deco) && !/innerHTML/.test(deco) && !/BUTTON/.test(tags)
+      && /glassShell\.copyText\(text\)/.test(deco) && /chat\.code\.copied/.test(deco);
+  },
+  (src) => src.replace('chatDecorate(frag);\n  target.replaceChildren(frag);', 'target.replaceChildren(frag);\n  chatDecorate(target);'));
+
+guarded('a tool\'s output is untrusted text: it only ever enters through textContent, and an open row stays open when its status moves',
+  (src) => {
+    const s = slice(src);
+    const paint = fnBody(s, 'chatSkinPaintTool');
+    const make = fnBody(s, 'chatSkinMakeTool');
+    return /x\.out\.textContent = text/.test(paint) && !/innerHTML/.test(paint) && !/innerHTML/.test(make)
+      && /aria-expanded/.test(make)
+      // the status moves on the same node: classes toggle, nothing is rebuilt, so `open` survives
+      && /rec\.node\.classList\.remove\('running', 'ok', 'error'\)/.test(paint) && !/rec\.node\.className\s*=/.test(paint)
+      && /rec\.node\.dataset\.kind/.test(paint) && /chatSkinPaintTool\(rec, item\)/.test(fnBody(s, 'chatSkinUpsert'));
+  },
+  (src) => src.replace('x.out.textContent = text;', 'x.out.innerHTML = text;'));
+
+test('tool kinds: each family gets its glyph by name, anchored, and anything else falls to the wrench', () => {
+  const s = slice(app);
+  const table = /const CHAT_TOOL_KINDS = \[[\s\S]*?\n\];/.exec(s)?.[0] ?? '';
+  const fn = fnBody(s, 'chatToolKind');
+  assert.ok(table && fn);
+  const kind = new Function(`${table}\n${fn}\nreturn chatToolKind;`)() as (n: string) => { kind: string; ico: string };
+  for (const [name, want] of [['Read', 'read'], ['NotebookRead', 'read'], ['Edit', 'edit'], ['Write', 'edit'], ['MultiEdit', 'edit'], ['NotebookEdit', 'edit'],
+    ['Bash', 'bash'], ['BashOutput', 'bash'], ['Grep', 'search'], ['Glob', 'search'], ['LS', 'search'], ['WebFetch', 'web'], ['WebSearch', 'web'],
+    ['Task', 'agent'], ['Agent', 'agent']] as Array<[string, string]>) assert.equal(kind(name).kind, want, name);
+  assert.equal(kind('mcp__drive__read_file').kind, 'tool', 'an MCP tool is generic');
+  assert.equal(kind('Bashful').kind, 'tool', 'control: the match is anchored, a name that merely starts like Bash is generic');
+  assert.equal(kind('').kind, 'tool');
+  // every glyph a kind points at exists in the icon table (a missing one would silently draw the file icon)
+  const have = new Set([...app.matchAll(/^  ([A-Za-z0-9]+): '</gm)].map((m) => m[1]).concat([...s.matchAll(/^  ([A-Za-z0-9]+): '</gm)].map((m) => m[1])));
+  for (const [, , ico] of [...table.matchAll(/\['(\w+)', \/[^/]+\/, '(\w+)'\]/g)].map((m) => [m[0], m[1], m[2]])) assert.ok(have.has(ico), `icon ${ico} exists`);
+});
+
+guarded('Esc closes the settings menu and does NOT cut the turn: its listener runs first and stops the event for the interrupt one',
+  (src) => {
+    const b = fnBody(slice(src), 'chatSkinBuild');
+    const menuAt = b.indexOf("e.key !== 'Escape' || !cs.menuOpen");
+    const intrAt = b.indexOf('chatSkinInterrupt(id, p);\n  });');
+    return menuAt > 0 && intrAt > menuAt && /stopImmediatePropagation\(\)/.test(b.slice(menuAt, intrAt))
+      && /chatSkinMenu\(cs, false, true\)/.test(b.slice(menuAt, intrAt))
+      && /pointerdown/.test(fnBody(slice(src), 'chatSkinMenu')) && /removeEventListener\('pointerdown'/.test(fnBody(slice(src), 'chatSkinMenu'));
+  },
+  (src) => src.replace('e.preventDefault(); e.stopImmediatePropagation();', 'e.preventDefault();'));
+
+test('the usage meters never paint a missing reading as zero, and carry their value for assistive tech', () => {
+  const paint = fnBody(skin, 'chatPaintUsage');
+  assert.match(paint, /const has = typeof pct === 'number' && Number\.isFinite\(pct\)/);
+  assert.match(paint, /style\.width = has \? /, 'the bar is empty without a reading');
+  assert.match(paint, /has \? Math\.round\(pct\) \+ '%' : '—'/, 'a missing reading shows a dash');
+  assert.match(paint, /pct >= 90 \? ' hi' : pct >= 70 \? ' mid'/, 'warn from 70, error from 90');
+  assert.match(paint, /setAttribute\('aria-label', tip\)/);
+  // control: a paint that coerced the absence to 0 would fail the dash rule
+  assert.doesNotMatch(paint.replace("has ? Math.round(pct) + '%' : '—'", 'Math.round(pct || 0) + \'%\''), /has \? Math\.round\(pct\) \+ '%' : '—'/);
+});
+
+test('every animation in the skin has a prefers-reduced-motion fallback that stops it', () => {
+  const sk = css.slice(css.indexOf('/* ═══ Chat skin')).replace(/\/\*[\s\S]*?\*\//g, '');
+  const reduced = [...sk.matchAll(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\}\s*(?=\n|$)/g)].map((m) => m[1]).join('\n');
+  const animated = [...sk.matchAll(/(?:^|\n)\s*([^@{}\n][^{}\n]*?)\s*\{[^}]*\banimation:\s*(?!none)[^;}]+/g)].map((m) => m[1].trim());
+  assert.ok(animated.length >= 3, `expected the skin's animated selectors, found ${animated.join(' | ')}`);
+  for (const sel of animated) assert.ok(reduced.includes(sel), `${sel} animates and has no reduced-motion rule`);
+  // control: a selector missing from the reduced block is caught by the same test
+  assert.equal(reduced.includes('.not-in-the-skin'), false);
+});
+
+test('every string the redesigned skin shows goes through t() and exists in every locale', () => {
+  // a literal key ending in a dot is a prefix (the kind or status is appended); those are expanded below
+  const keys = new Set<string>([...skin.matchAll(/\bt\('(chat\.[\w.]+)'/g)].map((m) => m[1]).filter((k) => !k.endsWith('.')));
+  for (const status of ['running', 'ok', 'error']) keys.add(`chat.skin.tool.${status}`);
+  for (const kind of ['connecting', 'waiting', 'empty', 'error']) for (const part of ['title', 'text']) keys.add(`chat.skin.state.${kind}.${part}`);
+  for (const kind of ['prompt', 'stalled']) keys.add(`chat.skin.alert.${kind}.title`);
+  for (const kind of ['permission', 'trust', 'select', 'question', 'model', 'other']) keys.add(`chat.skin.prompt.${kind}`);
+  for (const f of ['inherit', 'sans', 'serif', 'mono', 'inter']) keys.add(`chat.font.${f}`);
+  assert.ok(keys.size > 40, `found ${keys.size} keys`);
+  for (const l of Object.keys(loc)) for (const k of keys) assert.ok(typeof loc[l][k] === 'string' && loc[l][k].length > 0, `${l}.json lacks ${k}`);
+  // control: a key that is not there is reported
+  assert.equal(typeof loc.en['chat.skin.nothing.here'], 'undefined');
+});
+
+test('no coral in a status role: the cards and marks take their hue from --st-*, never --accent', () => {
+  const sk = css.slice(css.indexOf('/* ═══ Chat skin')).replace(/\/\*[\s\S]*?\*\//g, '');
+  const rule = (sel: string): string => new RegExp(`(?:^|\\n)${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{[^}]*\\}`).exec(sk)?.[0] ?? '';
+  for (const sel of ['.cs-alert', '.cs-alert.prompt', '.ct-spin', '.cw-dots i', '.chat-tool.error .ct-kind']) {
+    const r = rule(sel);
+    assert.ok(r, `${sel} exists`);
+    assert.doesNotMatch(r, /--accent/, `${sel} must not use coral`);
+  }
+  assert.match(rule('.cs-alert.prompt'), /--st-input/);
+  assert.match(rule('.cs-alert'), /--st-warn/);
+  assert.match(rule('.ct-spin'), /--st-busy/);
+  // control
+  assert.match('.cs-alert { --sc: var(--accent); }', /--accent/);
 });
