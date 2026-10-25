@@ -1586,12 +1586,41 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
             background: color-mix(in srgb, var(--sc) 10%, var(--surface)); border-top: 1px solid color-mix(in srgb, var(--sc) 42%, transparent); }
 .cs-alert.prompt { --sc: var(--st-input); }   /* waiting on the operator: the same hue as everywhere else in the app */
 .cs-alert-text { flex: 1; min-width: 0; }
-.chat-tool { align-self: flex-start; max-width: 100%; color: var(--chat-tool-ink); font-family: var(--mono); font-size: .8em;
-             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 4px; }
-.chat-tool::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--faint); vertical-align: middle; }
-.chat-tool.running::before { background: var(--st-busy); }
-.chat-tool.ok::before { background: var(--st-ok); }
-.chat-tool.error::before { background: var(--st-error); }
+.cs-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* ── tool rows: one compact line per call, joined into a card when they come in a run ── */
+.chat-tool { --tr: 11px; flex: 0 0 auto; min-width: 0; font-size: 12.5px; line-height: 1.4; color: var(--ink);
+             background: var(--chat-claude-bg); border: 1px solid var(--chat-claude-line); }
+.chat-tool.tg-solo, .chat-tool.tg-first { margin-top: 8px; border-radius: var(--tr) var(--tr) 0 0; }
+.chat-tool.tg-solo { border-radius: var(--tr); }
+.chat-tool.tg-mid, .chat-tool.tg-last { margin-top: -1px; border-radius: 0; }
+.chat-tool.tg-last { border-radius: 0 0 var(--tr) var(--tr); }
+.chat-tool.tg-solo, .chat-tool.tg-last { margin-bottom: 8px; }
+.chat-tool.tg-first, .chat-tool.tg-mid { margin-bottom: 0; }
+.ct-head { display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box; min-height: 36px; padding: 6px 12px 6px 9px;
+           background: none; border: 0; border-radius: inherit; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.ct-head:hover { background: var(--chat-row-hover); }
+.ct-head:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: -2px; }
+.ct-kind { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 24px; height: 24px; border-radius: 7px;
+           background: var(--chat-out-bg); border: 1px solid var(--chat-claude-line); color: var(--subtle); }
+.chat-tool.error .ct-kind { color: var(--st-error-ink); background: color-mix(in srgb, var(--st-error) 11%, var(--surface)); border-color: color-mix(in srgb, var(--st-error) 34%, transparent); }
+.ct-name { flex: 0 0 auto; font-weight: 620; letter-spacing: .005em; }
+.ct-arg { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtle); font-family: var(--mono); font-size: .94em; }
+.ct-state { display: inline-flex; align-items: center; flex: 0 0 auto; }
+.chat-tool.ok .ct-state { color: var(--st-ok-ink); }
+.chat-tool.error .ct-state { color: var(--st-error-ink); }
+.ct-spin { width: 12px; height: 12px; box-sizing: border-box; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--st-busy) 24%, transparent);
+           border-top-color: var(--st-busy); animation: cs-spin .8s linear infinite; }
+.ct-chev { color: var(--faint); transition: transform .16s ease; }
+.chat-tool.open .ct-chev { transform: rotate(90deg); }
+.ct-body { padding: 0 10px 10px; }
+.ct-out { margin: 0; max-height: 240px; overflow: auto; padding: 10px 12px; border: 1px solid var(--chat-claude-line); border-radius: 8px; background: var(--chat-out-bg);
+          color: var(--ink); font-family: var(--mono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.chat-tool.error .ct-out { border-color: color-mix(in srgb, var(--st-error) 38%, transparent); }
+.ct-note { margin-top: 6px; padding: 0 2px; color: var(--faint); font-size: 11.5px; }
+.ct-out:not([hidden]) + .ct-note { margin-top: 7px; }
+.ct-body:has(.ct-out[hidden]) .ct-note { padding: 8px 2px 0; }
+@keyframes cs-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ct-spin { animation: none; } .ct-chev { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .cs-working::before { animation: none; } }
 .chat-pick { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 7px;
              font-family: var(--font); font-size: 11.5px; padding: 3px 6px; max-width: 150px; cursor: pointer; }
@@ -1664,8 +1693,8 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cs-ico { display: inline-flex; flex: 0 0 auto; }
 .chat-md .cm-code pre { margin: 0; border: 0; border-radius: 0; background: transparent; padding: 12px 15px 13px; font-size: .94em; line-height: 1.6; }
 /* A table: its own scroll box with a hairline frame, a tinted header and a faint zebra. */
-.cm-table { margin: 0 0 1em; overflow-x: auto; border: 1px solid var(--line-strong); border-radius: 10px; }
-.chat-md .cm-table table { margin: 0; width: 100%; border-collapse: separate; border-spacing: 0; font-size: .94em; font-variant-numeric: tabular-nums; }
+.cm-table { margin: 0 0 1em; width: fit-content; max-width: 100%; overflow-x: auto; border: 1px solid var(--line-strong); border-radius: 10px; }
+.chat-md .cm-table table { margin: 0; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: .94em; font-variant-numeric: tabular-nums; }
 .chat-md th, .chat-md td { padding: 8px 15px; text-align: left; border: 0; border-bottom: 1px solid var(--line); }
 .chat-md th { background: var(--chat-table-head); font-weight: 620; white-space: nowrap; border-bottom-color: var(--line-strong); }
 .chat-md tbody tr:last-child td { border-bottom: 0; }

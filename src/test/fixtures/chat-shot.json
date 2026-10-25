@@ -37,17 +37,6 @@
             }
           },
           {
-            "uuid": "t-2",
-            "role": "tool",
-            "tool": {
-              "id": "tool-2",
-              "name": "Grep",
-              "summary": "delay( in src/ and test/",
-              "status": "ok",
-              "output": "src/sync/client.ts:7:      await sleep(delay(attempt));\nsrc/sync/backoff.ts:3:export function delay(attempt: number) {\nsrc/sync/backoff.ts:4:  return 500 * 2 ** attempt + Math.random() * 100;\ntest/sync/backoff.test.ts:12:  assert.ok(delay(10) > 60_000);"
-            }
-          },
-          {
             "uuid": "a-1",
             "role": "assistant",
             "text": "## Why the uploads stall\n\nThe retry loop in `uploadChunk` waits for the *previous* delay to finish **before** it computes the next one, so a burst of failures compounds instead of spreading out. Two things make it worse:\n\n- the delay doubles on every attempt but is never capped\n- the jitter is added to the delay instead of replacing part of it\n\n### What I would change\n\n1. Cap the delay at 30 seconds\n2. Apply *full jitter*, a random value between zero and the capped delay\n3. Stop after `maxAttempts` and surface the last error\n\nHere is the shape of the fix:\n\n```ts\nexport function nextDelay(attempt: number, base = 500, cap = 30_000): number {\n  const ceiling = Math.min(cap, base * 2 ** attempt);\n  return Math.floor(Math.random() * ceiling);\n}\n```\n\nAnd how to check it from the command line:\n\n```bash\nnpm test -- --grep \"nextDelay\"\nnode scripts/simulate-retries.mjs --attempts 8 --seed 7\n```\n\n| Attempt | Old delay | New ceiling |\n|---------|-----------|-------------|\n| 1       | 500 ms    | 500 ms      |\n| 4       | 4 s       | 4 s         |\n| 8       | 64 s      | 30 s        |\n\n> Backoff without a cap is a polite way of waiting forever.\n\nThe reasoning follows the [exponential backoff guide](https://example.com/docs/retries), which recommends full jitter for exactly this case."
@@ -61,6 +50,17 @@
             "uuid": "a-2",
             "role": "assistant",
             "text": "I'll patch the delay calculation in `backoff.ts` and run the suite."
+          },
+          {
+            "uuid": "t-2",
+            "role": "tool",
+            "tool": {
+              "id": "tool-2",
+              "name": "Grep",
+              "summary": "delay( in src/ and test/",
+              "status": "ok",
+              "output": "src/sync/client.ts:7:      await sleep(delay(attempt));\nsrc/sync/backoff.ts:3:export function delay(attempt: number) {\nsrc/sync/backoff.ts:4:  return 500 * 2 ** attempt + Math.random() * 100;\ntest/sync/backoff.test.ts:12:  assert.ok(delay(10) > 60_000);"
+            }
           },
           {
             "uuid": "t-3",
@@ -124,7 +124,12 @@
       "events": [
         "conversation"
       ],
-      "composer": "Also check that the retry count is logged"
+      "composer": "Also check that the retry count is logged",
+      "js": [
+        "const row = ctx.$('.chat-tool[data-kind=\"search\"] .ct-head');",
+        "row.click();",
+        "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
+      ]
     },
     {
       "name": "chat-light",
@@ -132,7 +137,12 @@
       "events": [
         "conversation"
       ],
-      "composer": "Also check that the retry count is logged"
+      "composer": "Also check that the retry count is logged",
+      "js": [
+        "const row = ctx.$('.chat-tool[data-kind=\"search\"] .ct-head');",
+        "row.click();",
+        "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
+      ]
     },
     {
       "name": "attention-dark",

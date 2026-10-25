@@ -7640,7 +7640,104 @@ function chatSkinAutosize(cs) {
   cs.input.style.height = 'auto';
   cs.input.style.height = Math.min(cs.input.scrollHeight + 2, Math.round(window.innerHeight * 0.4)) + 'px';
 }
-function chatSkinMakeItem(role) {
+/* Which glyph a tool wears, by its name: what it DOES, so a column of calls scans at a glance.
+   MCP and unknown tools fall through to the wrench. */
+const CHAT_TOOL_KINDS = [
+  ['read', /^(Read|NotebookRead)$/, 'eye'],
+  ['edit', /^(Edit|Write|MultiEdit|NotebookEdit)$/, 'design'],
+  ['bash', /^(Bash|BashOutput)$/, 'term'],
+  ['search', /^(Grep|Glob|LS)$/, 'search'],
+  ['web', /^(WebFetch|WebSearch)$/, 'globe'],
+  ['agent', /^(Task|Agent)$/, 'robot'],
+];
+function chatToolKind(name) {
+  for (const [kind, re, ico] of CHAT_TOOL_KINDS) if (re.test(String(name || ''))) return { kind, ico };
+  return { kind: 'tool', ico: 'wrench' };
+}
+let chatToolSeq = 0;
+/* A tool call is one compact row — kind glyph, name, its main argument (ellipsised), a state mark — that
+   opens on click to show what the tool returned. The output is untrusted text and only ever goes in
+   through textContent. */
+function chatSkinMakeTool(cs) {
+  const node = el('div', 'chat-tool running');
+  const head = el('button', 'ct-head');
+  head.type = 'button';
+  head.setAttribute('aria-expanded', 'false');
+  const kind = el('span', 'ct-kind');
+  kind.setAttribute('aria-hidden', 'true');
+  const name = el('span', 'ct-name');
+  const arg = el('span', 'ct-arg');
+  const state = el('span', 'ct-state');
+  const chev = csIcon('chevR', 12);
+  chev.classList.add('ct-chev');
+  head.append(kind, name, arg, state, chev);
+  const panel = el('div', 'ct-body');
+  panel.id = 'cs-tool-' + (++chatToolSeq);
+  panel.hidden = true;
+  head.setAttribute('aria-controls', panel.id);
+  const out = el('pre', 'ct-out');
+  const note = el('div', 'ct-note');
+  panel.append(out, note);
+  node.append(head, panel);
+  head.addEventListener('click', () => {
+    const open = head.getAttribute('aria-expanded') !== 'true';
+    head.setAttribute('aria-expanded', String(open));
+    panel.hidden = !open;
+    node.classList.toggle('open', open);
+    if (open) chatSkinScroll(cs);   // opening the last row must not push it below the fold while the view is following the tail
+  });
+  return { node, body: node, role: 'tool', tool: { head, kind, name, arg, state, out, note, kindName: '', status: '' } };
+}
+/* Paint a tool item IN PLACE: the row keeps its node (and so whether it was expanded) when the status
+   moves from running to ok/error or the output arrives. */
+function chatSkinPaintTool(rec, item) {
+  const tl = item.tool || {};
+  const status = tl.status === 'ok' || tl.status === 'error' ? tl.status : 'running';
+  const x = rec.tool;
+  const name = String(tl.name || '');
+  const summary = String(tl.summary || '');
+  const k = chatToolKind(name);
+  rec.node.classList.remove('running', 'ok', 'error');
+  rec.node.classList.add(status);
+  rec.node.dataset.kind = k.kind;
+  if (x.kindName !== k.ico) { x.kind.replaceChildren(csIcon(k.ico, 13)); x.kindName = k.ico; }
+  x.name.textContent = name;
+  x.arg.textContent = summary;
+  const label = t('chat.skin.tool.' + status);
+  x.head.title = (name + (summary ? ' · ' + summary : '')) + ' — ' + label;
+  if (x.status !== status) {
+    x.status = status;
+    const mark = status === 'running' ? el('span', 'ct-spin') : csIcon(status === 'ok' ? 'check' : 'x', 13);
+    mark.setAttribute('aria-hidden', 'true');
+    const sr = el('span', 'cs-sr', label);   // the mark is a picture; this is what a screen reader hears
+    x.state.replaceChildren(mark, sr);
+  }
+  const text = typeof tl.output === 'string' ? tl.output : '';
+  x.out.textContent = text;
+  x.out.hidden = !text;
+  const cut = tl.outputTruncated === true;
+  x.note.hidden = !!text && !cut;
+  x.note.textContent = cut ? t('chat.skin.tool.truncated') : text ? '' : t(status === 'running' ? 'chat.skin.tool.runningNoOutput' : 'chat.skin.tool.noOutput');
+}
+/* Consecutive tool rows read as ONE object: a joined card with shared hairlines. The runs are
+   recomputed from the visible rows after every batch (rows can arrive, hide or change in any order, and
+   a hidden row — an assistant message that was only tool calls — must not split a run). */
+function chatSkinRegroup(cs) {
+  let run = [];
+  const flush = () => {
+    run.forEach((n, i) => {
+      n.classList.remove('tg-solo', 'tg-first', 'tg-mid', 'tg-last');
+      n.classList.add(run.length === 1 ? 'tg-solo' : i === 0 ? 'tg-first' : i === run.length - 1 ? 'tg-last' : 'tg-mid');
+    });
+    run = [];
+  };
+  for (const n of cs.log.children) {
+    if (n.hidden) continue;
+    if (n.classList.contains('chat-tool')) run.push(n); else flush();
+  }
+  flush();
+}
+function chatSkinMakeItem(role, cs) {
   if (role === 'user' || role === 'assistant') {
     const row = el('div', 'chat-row who-' + (role === 'user' ? 'user' : 'claude'));
     const bubble = el('div', 'chat-bubble');
@@ -7649,10 +7746,7 @@ function chatSkinMakeItem(role) {
     if (role === 'assistant') bubble.appendChild(body);
     return { node: row, body, role };
   }
-  if (role === 'tool') {
-    const node = el('div', 'chat-tool');
-    return { node, body: node, role };
-  }
+  if (role === 'tool') return chatSkinMakeTool(cs);
   const node = el('div', 'chat-note');
   return { node, body: node, role: 'system' };
 }
@@ -7660,7 +7754,7 @@ function chatSkinUpsert(cs, item) {
   if (!item || typeof item !== 'object' || !item.uuid) return;
   let rec = cs.items.get(item.uuid);
   if (!rec) {
-    rec = chatSkinMakeItem(item.role);
+    rec = chatSkinMakeItem(item.role, cs);
     cs.items.set(item.uuid, rec);
     cs.log.appendChild(rec.node);
   }
@@ -7672,12 +7766,7 @@ function chatSkinUpsert(cs, item) {
     if (rec.text !== text) { rec.body.textContent = text; rec.text = text; }   // textContent: the operator's text is never parsed as HTML either
     rec.node.hidden = !text.trim();
   } else if (rec.role === 'tool') {
-    const tl = item.tool || {};
-    const status = tl.status === 'ok' || tl.status === 'error' ? tl.status : 'running';
-    const line = String(tl.name || '') + (tl.summary ? ' · ' + String(tl.summary) : '');
-    rec.node.className = 'chat-tool ' + status;
-    rec.node.textContent = line;
-    rec.node.title = line + ' — ' + t('chat.skin.tool.' + status);
+    chatSkinPaintTool(rec, item);
   } else {
     rec.body.textContent = text;
     rec.node.hidden = !text.trim();
@@ -7697,6 +7786,7 @@ function chatSkinHandleEvent(ev) {
       break;
     case 'items':
       if (Array.isArray(ev.items)) for (const it of ev.items) chatSkinUpsert(cs, it);
+      chatSkinRegroup(cs);
       cs.state = 'live'; cs.lastEventAt = Date.now(); cs.stalled = false;
       chatSkinScroll(cs);
       break;
