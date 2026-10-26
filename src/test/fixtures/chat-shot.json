@@ -13,7 +13,8 @@
         "effort": "high",
         "contextWindow": 200000,
         "fiveHourResetsAt": "+8280",
-        "sevenDayResetsAt": "+190000"
+        "sevenDayResetsAt": "+190000",
+        "sessionMatch": true
       },
       {
         "type": "usage",
@@ -105,7 +106,8 @@
         "fiveHourPct": 42,
         "sevenDayPct": 71,
         "model": "claude-sonnet-5-5",
-        "effort": "high"
+        "effort": "high",
+        "sessionMatch": true
       },
       {
         "type": "items",
@@ -126,7 +128,8 @@
         "sevenDayPct": 93,
         "fiveHourResetsAt": "+1500",
         "sevenDayResetsAt": "+90000",
-        "contextWindow": 200000
+        "contextWindow": 200000,
+        "sessionMatch": true
       },
       {
         "type": "usage",
@@ -150,7 +153,8 @@
         "fiveHourResetsAt": "+11400",
         "sevenDayResetsAt": "+420000",
         "model": "claude-sonnet-5-5",
-        "effort": "high"
+        "effort": "high",
+        "sessionMatch": true
       },
       {
         "type": "usage",
@@ -264,7 +268,8 @@
         "effort": "high",
         "contextWindow": 200000,
         "fiveHourResetsAt": "+8280",
-        "sevenDayResetsAt": "+190000"
+        "sevenDayResetsAt": "+190000",
+        "sessionMatch": true
       },
       {
         "type": "usage",
@@ -337,7 +342,8 @@
         "effort": "high",
         "contextWindow": 200000,
         "fiveHourResetsAt": "+8280",
-        "sevenDayResetsAt": "+190000"
+        "sevenDayResetsAt": "+190000",
+        "sessionMatch": true
       },
       {
         "type": "usage",
@@ -410,7 +416,8 @@
         "effort": "high",
         "contextWindow": 200000,
         "fiveHourResetsAt": "+8280",
-        "sevenDayResetsAt": "+190000"
+        "sevenDayResetsAt": "+190000",
+        "sessionMatch": true
       },
       {
         "type": "usage",
@@ -474,7 +481,8 @@
         "effort": "high",
         "contextWindow": 200000,
         "fiveHourResetsAt": "+8280",
-        "sevenDayResetsAt": "+190000"
+        "sevenDayResetsAt": "+190000",
+        "sessionMatch": true
       },
       {
         "type": "usage",
@@ -526,6 +534,30 @@
             "freeText": true
           }
         ]
+      }
+    ],
+    "bar-idle": [
+      {
+        "type": "turn",
+        "open": false
+      }
+    ],
+    "bar-hot": [
+      {
+        "type": "status",
+        "sessionMatch": true,
+        "fiveHourPct": 72,
+        "sevenDayPct": 38,
+        "model": "claude-opus-5-5",
+        "effort": "xhigh",
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+2400",
+        "sevenDayResetsAt": "+250000"
+      },
+      {
+        "type": "usage",
+        "contextTokens": 182000,
+        "model": "claude-opus-5-5"
       }
     ]
   },
@@ -738,132 +770,6 @@
         "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
       ],
       "clip": "pane"
-    },
-    {
-      "name": "usage-dark",
-      "theme": "dark",
-      "events": [
-        "conversation"
-      ],
-      "composer": "",
-      "clip": "pane",
-      "js": [
-        "ctx.cs.input.focus();"
-      ]
-    },
-    {
-      "name": "usage-light",
-      "theme": "light",
-      "events": [
-        "conversation"
-      ],
-      "composer": "",
-      "clip": "pane",
-      "js": [
-        "ctx.cs.input.focus();"
-      ]
-    },
-    {
-      "name": "usage-tip-dark",
-      "theme": "dark",
-      "events": [
-        "conversation"
-      ],
-      "composer": "Also check that the retry count is logged",
-      "clip": "pane",
-      "js": [
-        "chatSkinTip(ctx.$$('.chat-usage .cu')[0], true);"
-      ]
-    },
-    {
-      "name": "usage-tip-light",
-      "theme": "light",
-      "events": [
-        "conversation"
-      ],
-      "composer": "Also check that the retry count is logged",
-      "clip": "pane",
-      "js": [
-        "chatSkinTip(ctx.$$('.chat-usage .cu')[1], true);"
-      ]
-    },
-    {
-      "name": "usage-tip-context-dark",
-      "theme": "dark",
-      "events": [
-        "conversation"
-      ],
-      "clip": "pane",
-      "js": [
-        "chatSkinTip(ctx.$$('.chat-usage .cu')[2], true);"
-      ]
-    },
-    {
-      "name": "usage-tip-high-dark",
-      "theme": "dark",
-      "events": [
-        "conversation",
-        "usage-high"
-      ],
-      "clip": "pane",
-      "js": [
-        "chatSkinTip(ctx.$$('.chat-usage .cu')[1], true);"
-      ]
-    },
-    {
-      "name": "usage-tip-high-light",
-      "theme": "light",
-      "events": [
-        "conversation",
-        "usage-high"
-      ],
-      "clip": "pane",
-      "js": [
-        "chatSkinTip(ctx.$$('.chat-usage .cu')[0], true);"
-      ]
-    },
-    {
-      "name": "usage-none-dark",
-      "theme": "dark",
-      "events": [
-        "conversation"
-      ],
-      "clip": "pane",
-      "js": [
-        "ctx.cs.status = { model: 'claude-sonnet-5-5', effort: 'high' };",
-        "ctx.cs.ctxTokens = undefined;",
-        "chatPaintUsage(ctx.cs);",
-        "chatSkinTip(ctx.$$('.chat-usage .cu')[0], true);"
-      ]
-    },
-    {
-      "name": "usage-narrow-dark",
-      "theme": "dark",
-      "events": [
-        "conversation"
-      ],
-      "composer": "Short question?",
-      "clip": "pane",
-      "js": [
-        "ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = '400px'; ctx.p.el.style.alignSelf = 'flex-start';",
-        "await ctx.sleep(300);",
-        "chatSkinTip(ctx.$$('.chat-usage .cu')[2], true);"
-      ]
-    },
-    {
-      "name": "usage-narrow-light",
-      "theme": "light",
-      "events": [
-        "conversation",
-        "usage-high"
-      ],
-      "composer": "Short question?",
-      "clip": "pane",
-      "js": [
-        "ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = '400px'; ctx.p.el.style.alignSelf = 'flex-start';",
-        "await ctx.sleep(300);",
-        "chatSkinTip(ctx.$$('.chat-usage .cu')[1], true);"
-      ]
     },
     {
       "name": "slash-dark",
@@ -1180,6 +1086,453 @@
         "ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = '420px'; ctx.p.el.style.alignSelf = 'flex-start';",
         "await ctx.sleep(300);"
       ]
+    },
+    {
+      "name": "bar-minimal-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal');"
+      ]
+    },
+    {
+      "name": "bar-minimal-light-narrow",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Short question?",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal', { pane: 440 });"
+      ]
+    },
+    {
+      "name": "bar-minimal-light-tip",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal', { tip: 'fiveHourPct' });"
+      ]
+    },
+    {
+      "name": "bar-minimal-light-hot",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal');"
+      ]
+    },
+    {
+      "name": "bar-minimal-light-hot-tip",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal', { tip: 'contextPct' });"
+      ]
+    },
+    {
+      "name": "bar-minimal-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal');"
+      ]
+    },
+    {
+      "name": "bar-minimal-dark-narrow",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Short question?",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal', { pane: 440 });"
+      ]
+    },
+    {
+      "name": "bar-minimal-dark-tip",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal', { tip: 'fiveHourPct' });"
+      ]
+    },
+    {
+      "name": "bar-minimal-dark-hot",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal');"
+      ]
+    },
+    {
+      "name": "bar-minimal-dark-hot-tip",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'minimal', { tip: 'contextPct' });"
+      ]
+    },
+    {
+      "name": "bar-pills-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills');"
+      ]
+    },
+    {
+      "name": "bar-pills-light-narrow",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Short question?",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills', { pane: 440 });"
+      ]
+    },
+    {
+      "name": "bar-pills-light-tip",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills', { tip: 'fiveHourPct' });"
+      ]
+    },
+    {
+      "name": "bar-pills-light-hot",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills');"
+      ]
+    },
+    {
+      "name": "bar-pills-light-hot-tip",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills', { tip: 'contextPct' });"
+      ]
+    },
+    {
+      "name": "bar-pills-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills');"
+      ]
+    },
+    {
+      "name": "bar-pills-dark-narrow",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Short question?",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills', { pane: 440 });"
+      ]
+    },
+    {
+      "name": "bar-pills-dark-tip",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills', { tip: 'fiveHourPct' });"
+      ]
+    },
+    {
+      "name": "bar-pills-dark-hot",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills');"
+      ]
+    },
+    {
+      "name": "bar-pills-dark-hot-tip",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'pills', { tip: 'contextPct' });"
+      ]
+    },
+    {
+      "name": "bar-strip-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip');"
+      ]
+    },
+    {
+      "name": "bar-strip-light-narrow",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Short question?",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip', { pane: 440 });"
+      ]
+    },
+    {
+      "name": "bar-strip-light-tip",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip', { tip: 'fiveHourPct' });"
+      ]
+    },
+    {
+      "name": "bar-strip-light-hot",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip');"
+      ]
+    },
+    {
+      "name": "bar-strip-light-hot-tip",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip', { tip: 'contextPct' });"
+      ]
+    },
+    {
+      "name": "bar-strip-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip');"
+      ]
+    },
+    {
+      "name": "bar-strip-dark-narrow",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Short question?",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip', { pane: 440 });"
+      ]
+    },
+    {
+      "name": "bar-strip-dark-tip",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip', { tip: 'fiveHourPct' });"
+      ]
+    },
+    {
+      "name": "bar-strip-dark-hot",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip');"
+      ]
+    },
+    {
+      "name": "bar-strip-dark-hot-tip",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-hot"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "await barShot(ctx, 'strip', { tip: 'contextPct' });"
+      ]
+    },
+    {
+      "name": "bar-none-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "",
+      "clip": "pane",
+      "js": [
+        "ctx.cs.status = {};",
+        "ctx.cs.ctxTokens = undefined;",
+        "ctx.cs.model = '';",
+        "chatPaintUsage(ctx.cs);",
+        "await barShot(ctx, 'pills');"
+      ]
+    },
+    {
+      "name": "bar-nomatch-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "composer": "",
+      "clip": "pane",
+      "js": [
+        "// the conversation's own status (a matching payload) is wiped first, so the only payload this tab ever hears is one that is NOT its own",
+        "ctx.cs.status = {};",
+        "ctx.feed([{\"type\": \"status\", \"sessionMatch\": false, \"fiveHourPct\": 42, \"sevenDayPct\": 55, \"contextPct\": 97, \"model\": \"claude-opus-5-5\", \"effort\": \"max\", \"contextWindow\": 1000000, \"fiveHourResetsAt\": \"+8280\", \"sevenDayResetsAt\": \"+190000\"}]);",
+        "chatPaintUsage(ctx.cs);",
+        "await barShot(ctx, 'minimal');",
+        "if (ctx.cs.status.effort !== undefined || ctx.cs.status.model !== undefined || ctx.cs.status.contextWindow !== undefined) throw new Error('per-session fields were written from a payload that is not this tab\\'s');",
+        "if (!ctx.cs.barParts.effort.seg.hidden) throw new Error('the effort must be hidden when no matching payload ever reported it');",
+        "if (ctx.cs.barParts.model.v.textContent !== 'Sonnet 5.5') throw new Error('the model must come from the transcript: ' + ctx.cs.barParts.model.v.textContent);",
+        "if (ctx.cs.status.fiveHourPct !== 42) throw new Error('the account-wide 5 h reading must still be taken');"
+      ]
     }
+  ],
+  "setup": [
+    "// The status-bar shots share one helper: pick the look, optionally narrow the pane, focus the box (so the keys hint shows), force one detail card open and",
+    "// FAIL the run if that card reaches into the composer or past the bar: the whole point of the card is that it never covers what is being typed.",
+    "window.barShot = async (ctx, style, o) => {",
+    "  o = o || {};",
+    "  chatSkinSetBarStyle(style, false);",
+    "  if (o.pane) { ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = o.pane + 'px'; ctx.p.el.style.alignSelf = 'flex-start'; }",
+    "  if (o.focus !== false) ctx.cs.input.focus();",
+    "  await ctx.sleep(450);",
+    "  if (!o.tip) return;",
+    "  const seg = ctx.cs.barParts[o.tip].seg;",
+    "  chatSkinTip(seg, true);",
+    "  await ctx.sleep(300);",
+    "  const r = (e) => e.getBoundingClientRect();",
+    "  const tip = r(seg.querySelector('.cb-tip')), bar = r(ctx.cs.bar), box = r(ctx.cs.box);",
+    "  if (tip.top < box.bottom - 1.5) throw new Error('the detail card reaches into the composer');",
+    "  if (tip.top < bar.top - 0.5 || tip.bottom > bar.bottom + 0.5 || tip.left < bar.left - 0.5 || tip.right > bar.right + 0.5) throw new Error('the detail card leaves the bar');",
+    "};"
   ]
 }

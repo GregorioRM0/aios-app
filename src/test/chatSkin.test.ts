@@ -93,16 +93,17 @@ test('the skin only adds fields and DOM inside p.el: it never reassigns the pane
 guarded('the composer submits through submitToPty, never by writing a CR itself',
   (src) => {
     const s = slice(src);
-    const send = fnBody(s, 'chatSkinSendNow');
+    // the typed message and the bar's model button both end in chatSkinSubmit, the one place that hands text to submitToPty
+    const send = fnBody(s, 'chatSkinSubmit') + fnBody(s, 'chatSkinSendNow');
     // every direct pty write in the skin is the lone ESC, or one chunk of a dialog key inside the key chokepoint; nothing writes text or a CR
     const writes = [...s.replace(fnBody(s, 'chatSkinSendKey'), '').matchAll(/ptyWrite\(([^)]*)\)/g)].map((m) => m[1].replace(/\s+/g, ' ').trim());
-    return /submitToPty\(id, text\)/.test(send) && writes.length >= 1 && writes.every((w) => w === "id, '\\x1b'");
+    return /submitToPty\(id, text\)/.test(send) && /chatSkinSubmit\(id, p, text\)/.test(fnBody(s, 'chatSkinSendNow')) && writes.length >= 1 && writes.every((w) => w === "id, '\\x1b'");
   },
   (src) => src.replace('submitToPty(id, text);   // the one chokepoint', "window.glassShell.ptyWrite(id, text + '\\r');   // the one chokepoint"));
 
 guarded('slash commands are sent exactly like any other message (no filter, no special path)',
   (src) => {
-    const send = fnBody(slice(src), 'chatSkinSendNow');
+    const send = fnBody(slice(src), 'chatSkinSendNow') + fnBody(slice(src), 'chatSkinSubmit');
     return !/startsWith\('\/'\)\s*\)\s*return/.test(send) && !/ptyRun\(/.test(send) && /submitToPty\(id, text\)/.test(send);
   },
   (src) => src.replace('const text = cs.input.value.replace', "if (cs.input.value.startsWith('/')) return;\n  const text = cs.input.value.replace"));
@@ -257,11 +258,11 @@ test('there is always a way back to the terminal, and a stalled turn offers it',
 
 test('the usage bar prefers this session\'s own numbers over the global statusline payload', () => {
   const paint = fnBody(skin, 'chatPaintUsage');
-  assert.match(paint, /k === 'contextPct' && Number\.isFinite\(cs\.ctxTokens\)/);
-  assert.match(paint, /k === 'model' && cs\.model \? cs\.model : cs\.status\[k\]/);
-  assert.match(fnBody(skin, 'chatSkinRefreshStatus'), /gs\.chatStatus\(\)/);
+  assert.match(fnBody(skin, 'chatContextOf'), /Number\.isFinite\(cs\.ctxTokens\)/);
+  assert.match(paint, /const model = cs\.model \|\| cs\.status\.model;/);
+  assert.match(fnBody(skin, 'chatSkinRefreshStatus'), /gs\.chatStatus\(cs\.pane\.sessionId\)/);
   // an absent number is a dash, never a fabricated 0
-  assert.match(fnBody(skin, 'chatApplyStatus'), /s\[k\] !== undefined && s\[k\] !== null && s\[k\] !== ''/);
+  assert.match(fnBody(skin, 'chatApplyStatus'), /s\[k\] === undefined \|\| s\[k\] === null \|\| s\[k\] === ''\) continue;/);
 });
 
 // ── untrusted model text ────────────────────────────────────────────────────
@@ -341,7 +342,9 @@ test('every colour the skin uses is a token (none minted in the skin\'s own rule
   const tokens = ['--chat-user-bg', '--chat-user-line', '--chat-claude-bg', '--chat-claude-line', '--chat-code-bg', '--chat-tool-ink',
     // the redesign's own (each must resolve against body.light's ink/surface, hence re-declared there)
     '--chat-code-head', '--chat-out-bg', '--chat-row-hover', '--chat-table-head', '--chat-table-zebra', '--chat-quote-line', '--chat-composer-bg',
-    '--chat-composer-line', '--chat-meter-track', '--chat-meter-fill', '--chat-focus', '--chat-float', '--chat-pop', '--chat-on-accent'];
+    '--chat-composer-line', '--chat-meter-track', '--chat-meter-fill', '--chat-focus', '--chat-float', '--chat-pop', '--chat-on-accent',
+    // the status bar's own
+    '--chat-meter-warn', '--chat-meter-hot', '--chat-warn-ink', '--chat-hot-ink', '--chat-bar-bg', '--chat-bar-line', '--chat-bar-sep', '--chat-warn-bg', '--chat-warn-line', '--chat-hot-bg', '--chat-hot-line'];
   const light = css.slice(css.indexOf('body.light {'));
   for (const tk of tokens) {
     assert.match(css, new RegExp(`:root \\{[^}]*${tk}:`), `${tk} must be minted in :root`);
@@ -598,7 +601,7 @@ interface FxTool { id: string; name: string; summary: string; status: string; ou
 interface FxItem { uuid: string; role: string; text?: string; tool?: FxTool }
 interface FxEvent { type: string; items?: FxItem[]; kind?: string; open?: boolean; [k: string]: unknown }
 interface FxShot { name: string; theme?: string; events?: Array<string | FxEvent>; composer?: string; terminal?: string; js?: string | string[]; size?: { width: number; height: number }; layout?: string }
-const fixture = JSON.parse(read('src/test/fixtures/chat-shot.json')) as { version: number; streams: Record<string, FxEvent[]>; shots: FxShot[] };
+const fixture = JSON.parse(read('src/test/fixtures/chat-shot.json')) as { version: number; setup?: string | string[]; streams: Record<string, FxEvent[]>; shots: FxShot[] };
 
 test('chat-shot fixture: parses, has the minimum shots, and every shot resolves to real streams', () => {
   assert.equal(fixture.version, 1);
@@ -700,17 +703,6 @@ guarded('Esc closes the settings menu and does NOT cut the turn: its listener ru
       && /pointerdown/.test(fnBody(slice(src), 'chatSkinMenu')) && /removeEventListener\('pointerdown'/.test(fnBody(slice(src), 'chatSkinMenu'));
   },
   (src) => src.replace('e.preventDefault(); e.stopImmediatePropagation();', 'e.preventDefault();'));
-
-test('the usage meters never paint a missing reading as zero, and carry their value for assistive tech (source)', () => {
-  const paint = fnBody(skin, 'chatPaintUsage');
-  assert.match(paint, /const has = typeof pct === 'number' && Number\.isFinite\(pct\)/);
-  assert.match(paint, /setProperty\('--p', has \? /, 'the ring is empty without a reading');
-  assert.match(paint, /has \? Math\.round\(pct\) \+ '%' : '—'/, 'a missing reading shows a dash');
-  assert.match(paint, /pct >= 90 \? ' hi' : pct >= 70 \? ' mid'/, 'warn from 70, error from 90');
-  assert.match(paint, /cell\.setAttribute\('aria-label', \[/, 'the accessible name carries the value and the detail');
-  // control: a paint that coerced the absence to 0 would fail the dash rule
-  assert.doesNotMatch(paint.replace("has ? Math.round(pct) + '%' : '—'", 'Math.round(pct || 0) + \'%\''), /has \? Math\.round\(pct\) \+ '%' : '—'/);
-});
 
 test('every animation in the skin has a prefers-reduced-motion fallback that stops it', () => {
   const sk = css.slice(css.indexOf('/* ═══ Chat skin')).replace(/\/\*[\s\S]*?\*\//g, '');
@@ -815,128 +807,192 @@ test('tool rows are dense: a short row, small type for the name and the argument
   assert.equal(36 >= 26 && 36 <= 30, false);
 });
 
-// ── the usage row under the composer ────────────────────────────────────────
+// ── the status bar under the composer ───────────────────────────────────────
 
-/** chatPaintUsage and the helpers it needs, evaluated against a hand-made stand-in for the DOM: the real
+/** chatPaintUsage, chatApplyStatus and the helpers they need, evaluated against a hand-made stand-in for the DOM: the real
  *  code, run for real, with `t` echoing its key so a test can see which sentence was chosen. */
-function loadUsage(): { paint: (cs: unknown) => void; left: (sec: number, now: number) => string; when: (sec: number, now: number) => string; fake: () => FakeEl } {
+function loadUsage(): { paint: (cs: unknown) => void; apply: (cs: unknown, s: unknown) => void; left: (sec: number, now: number) => string; when: (sec: number, now: number) => string; label: (id: string) => string; fake: () => FakeEl } {
   const s = skin;
-  const from = s.indexOf('const CHAT_USAGE_FIELDS = [');
+  const from = s.indexOf('const CHAT_METERS = [');
   const to = s.indexOf('function chatSkinTip(');
   assert.ok(from > 0 && to > from, 'the usage block was found');
   const src = s.slice(from, to);
   const fake = (): FakeEl => {
     const e: FakeEl = {
-      className: '', textContent: '', title: '', attrs: {}, props: {}, kids: [], parentElement: null, q: {},
+      className: '', textContent: '', title: '', hidden: false, attrs: {}, props: {}, kids: [], q: {},
       classList: {
-        add(c: string) { const set = new Set(e.className.split(/\s+/).filter(Boolean)); set.add(c); e.className = [...set].join(' '); },
         toggle(c: string, on: boolean) { const set = new Set(e.className.split(/\s+/).filter(Boolean)); if (on) set.add(c); else set.delete(c); e.className = [...set].join(' '); },
       },
       style: { setProperty(k: string, v: string) { e.props[k] = v; } },
       setAttribute(k: string, v: string) { e.attrs[k] = v; },
       replaceChildren(...n: FakeEl[]) { e.kids = n; },
-      querySelector(sel: string) { return e.q[sel] ?? null; },
     };
     return e;
   };
-  const make = new Function('t', 'el', 'window', `${src}\nreturn { paint: chatPaintUsage, left: chatResetLeft, when: chatResetWhen };`) as
-    (t: (k: string, v?: Record<string, unknown>) => string, el: (tag: string, cls?: string, text?: string) => FakeEl, w: unknown) => { paint: (cs: unknown) => void; left: (sec: number, now: number) => string; when: (sec: number, now: number) => string };
+  type Api = { paint: (cs: unknown) => void; apply: (cs: unknown, s: unknown) => void; left: (sec: number, now: number) => string; when: (sec: number, now: number) => string; label: (id: string) => string };
+  const make = new Function('t', 'el', 'window', `${src}\nreturn { paint: chatPaintUsage, apply: chatApplyStatus, left: chatResetLeft, when: chatResetWhen, label: chatModelLabel };`) as
+    (t: (k: string, v?: Record<string, unknown>) => string, el: (tag: string, cls?: string, text?: string) => FakeEl, w: unknown) => Api;
   const t = (k: string, v?: Record<string, unknown>): string => (v ? `${k}${JSON.stringify(v)}` : k);
   const el = (_tag: string, cls = '', text = ''): FakeEl => { const n = fake(); n.className = cls; n.textContent = text; return n; };
   return { ...make(t, el, { i18n: { getLocale: () => 'en' } }), fake };
 }
 interface FakeEl {
-  className: string; textContent: string; title: string; attrs: Record<string, string>; props: Record<string, string>; kids: FakeEl[]; parentElement: FakeEl | null; q: Record<string, FakeEl>;
-  classList: { add(c: string): void; toggle(c: string, on: boolean): void }; style: { setProperty(k: string, v: string): void };
-  setAttribute(k: string, v: string): void; replaceChildren(...n: FakeEl[]): void; querySelector(sel: string): FakeEl | null;
+  className: string; textContent: string; title: string; hidden: boolean; attrs: Record<string, string>; props: Record<string, string>; kids: FakeEl[]; q: Record<string, FakeEl>;
+  classList: { toggle(c: string, on: boolean): void }; style: { setProperty(k: string, v: string): void };
+  setAttribute(k: string, v: string): void; replaceChildren(...n: FakeEl[]): void;
 }
-/** A composer-shaped `cs` with the three meters and the two chips, as chatSkinBuild makes them. */
-function usageCs(u: ReturnType<typeof loadUsage>, status: Record<string, unknown>, extra: Record<string, unknown> = {}): { cs: Record<string, unknown>; cells: Record<string, FakeEl>; vals: Record<string, FakeEl> } {
-  const cells: Record<string, FakeEl> = {};
-  const vals: Record<string, FakeEl> = {};
-  for (const k of ['fiveHourPct', 'sevenDayPct', 'contextPct']) {
-    const cell = u.fake(), v = u.fake(), tip = u.fake();
-    v.parentElement = cell;
-    cell.q['.cu-tip'] = tip;
-    for (const part of ['.cut-h', '.cut-v', '.cut-d']) tip.q[part] = u.fake();
-    cells[k] = cell; vals[k] = v;
-  }
-  for (const k of ['model', 'effort']) { const chip = u.fake(), v = u.fake(); v.parentElement = chip; vals[k] = v; }
-  return { cs: { status, usageVals: vals, ...extra }, cells, vals };
+interface Part { seg: FakeEl; v: FakeEl; of: FakeEl; tipH: FakeEl; tipV: FakeEl; tipD: FakeEl }
+/** A `cs` with the three meters, the model and the effort, shaped as chatSkinBuild makes them (`barParts`). */
+function usageCs(u: ReturnType<typeof loadUsage>, status: Record<string, unknown>, extra: Record<string, unknown> = {}): { cs: Record<string, unknown>; parts: Record<string, Part> } {
+  const parts: Record<string, Part> = {};
+  for (const k of ['fiveHourPct', 'sevenDayPct', 'contextPct', 'model', 'effort']) parts[k] = { seg: u.fake(), v: u.fake(), of: u.fake(), tipH: u.fake(), tipV: u.fake(), tipD: u.fake() };
+  return { cs: { status, barParts: parts, ...extra }, parts };
 }
-const tipOf = (cell: FakeEl): { h: string; v: string; d: string[] } => {
-  const tip = cell.q['.cu-tip'];
-  return { h: tip.q['.cut-h'].textContent, v: tip.q['.cut-v'].textContent, d: tip.q['.cut-d'].kids.map((k) => k.textContent) };
-};
+const tipOf = (p: Part): { h: string; v: string; d: string[] } => ({ h: p.tipH.textContent, v: p.tipV.textContent, d: p.tipD.kids.map((k) => k.textContent) });
 
-test('usage row, run for real: a missing reading is a dash and an empty ring; a present one is the percentage, coloured at 70 and 90', () => {
+test('status bar, run for real: a missing reading is a dash and an empty ring; a present one is the percentage, amber from 60 and red from 85', () => {
   const u = loadUsage();
   const none = usageCs(u, {});
   u.paint(none.cs);
   for (const k of ['fiveHourPct', 'sevenDayPct', 'contextPct']) {
-    assert.equal(none.vals[k].textContent, '—', `${k}: a dash, never 0`);
-    assert.equal(none.cells[k].props['--p'], '0');
-    assert.match(none.cells[k].className, /\bnone\b/);
-    assert.equal(tipOf(none.cells[k]).v, 'chat.usage.none');
-    assert.deepEqual(tipOf(none.cells[k]).d, [], 'no invented detail');
+    assert.equal(none.parts[k].v.textContent, '—', `${k}: a dash, never 0`);
+    assert.equal(none.parts[k].seg.props['--p'], '0');
+    assert.match(none.parts[k].seg.className, /\bnone\b/);
+    assert.equal(tipOf(none.parts[k]).v, 'chat.usage.none');
+    assert.deepEqual(tipOf(none.parts[k]).d, [], 'no invented detail');
   }
+  const band = (pct: number): string => { const x = usageCs(u, { fiveHourPct: pct }); u.paint(x.cs); return x.parts.fiveHourPct.seg.className; };
+  assert.doesNotMatch(band(42), /\b(warn|hot|none)\b/, 'neutral at 42');
+  assert.doesNotMatch(band(59), /\b(warn|hot)\b/, 'neutral just under 60');
+  assert.match(band(60), /\bwarn\b/, 'amber from 60');
+  assert.match(band(72), /\bwarn\b/);
+  assert.match(band(84), /\bwarn\b/);
+  assert.doesNotMatch(band(84), /\bhot\b/);
+  assert.match(band(85), /\bhot\b/, 'red from 85');
+  assert.doesNotMatch(band(85), /\bwarn\b/, 'one colour at a time');
+  assert.match(band(100), /\bhot\b/);
   const some = usageCs(u, { fiveHourPct: 42, sevenDayPct: 71, contextPct: 93 });
   u.paint(some.cs);
-  assert.equal(some.vals.fiveHourPct.textContent, '42%');
-  assert.equal(some.cells.fiveHourPct.props['--p'], '42');
-  assert.doesNotMatch(some.cells.fiveHourPct.className, /\b(mid|hi|none)\b/, 'neutral below 70');
-  assert.match(some.cells.sevenDayPct.className, /\bmid\b/);
-  assert.match(some.cells.contextPct.className, /\bhi\b/);
-  assert.match(some.cells.fiveHourPct.attrs['aria-label'], /42%/, 'the value is in the accessible name');
+  assert.equal(some.parts.fiveHourPct.v.textContent, '42%');
+  assert.equal(some.parts.fiveHourPct.seg.props['--p'], '42');
+  assert.match(some.parts.fiveHourPct.seg.attrs['aria-label'], /42%/, 'the value is in the accessible name');
+  assert.equal(tipOf(some.parts.sevenDayPct).v, 'chat.usage.tip.used{"pct":71}');
   // an honest zero is a zero (a real reading), unlike an absent one
   const zero = usageCs(u, { fiveHourPct: 0 });
   u.paint(zero.cs);
-  assert.equal(zero.vals.fiveHourPct.textContent, '0%');
-  assert.doesNotMatch(zero.cells.fiveHourPct.className, /\bnone\b/);
+  assert.equal(zero.parts.fiveHourPct.v.textContent, '0%');
+  assert.doesNotMatch(zero.parts.fiveHourPct.seg.className, /\bnone\b/);
+  // repainting keeps the classes the painter does not own (the hover card is "tip-open")
+  const open = usageCs(u, { fiveHourPct: 70 });
+  open.parts.fiveHourPct.seg.className = 'cb-m tip-open';
+  u.paint(open.cs);
+  assert.match(open.parts.fiveHourPct.seg.className, /\btip-open\b/);
 });
 
-test('usage row, run for real: resets appear only when the payload carried them, and a reset already behind us marks the reading stale', () => {
+test('status bar, run for real: resets appear only when the payload carried them, and a reset already behind us marks the reading stale', () => {
   const u = loadUsage();
   const now = Date.now();
   const sec = (ms: number): number => Math.floor((now + ms) / 1000);
   const without = usageCs(u, { fiveHourPct: 42, sevenDayPct: 10 });
   u.paint(without.cs);
-  assert.deepEqual(tipOf(without.cells.fiveHourPct).d, [], 'no reset in the payload → no reset line (nothing is derived from "5 hours")');
-  assert.deepEqual(tipOf(without.cells.sevenDayPct).d, []);
+  assert.deepEqual(tipOf(without.parts.fiveHourPct).d, [], 'no reset in the payload → no reset line (nothing is derived from "5 hours")');
+  assert.deepEqual(tipOf(without.parts.sevenDayPct).d, []);
   const withR = usageCs(u, { fiveHourPct: 42, sevenDayPct: 10, fiveHourResetsAt: sec(2 * 3600e3 + 10 * 60e3), sevenDayResetsAt: sec(50 * 3600e3) });
   u.paint(withR.cs);
-  assert.match(tipOf(withR.cells.fiveHourPct).d[0], /^chat\.usage\.tip\.resets\{/);
-  assert.match(tipOf(withR.cells.fiveHourPct).d[0], /"left":"chat\.usage\.unit\.h\{\\"n\\":2\}[^"]*chat\.usage\.unit\.m\{\\"n\\":(9|10)\}"/, 'in 2 h 10 min');
-  assert.match(tipOf(withR.cells.sevenDayPct).d[0], /"left":"chat\.usage\.unit\.d\{\\"n\\":2\} chat\.usage\.unit\.h\{\\"n\\":2\}"/, 'in 2 d 2 h (no minutes once days are shown)');
+  assert.match(tipOf(withR.parts.fiveHourPct).d[0], /^chat\.usage\.tip\.resets\{/);
+  assert.match(tipOf(withR.parts.fiveHourPct).d[0], /"left":"chat\.usage\.unit\.h\{\\"n\\":2\}[^"]*chat\.usage\.unit\.m\{\\"n\\":(9|10)\}"/, 'in 2 h 10 min');
+  assert.match(tipOf(withR.parts.sevenDayPct).d[0], /"left":"chat\.usage\.unit\.d\{\\"n\\":2\} chat\.usage\.unit\.h\{\\"n\\":2\}"/, 'in 2 d 2 h (no minutes once days are shown)');
   const stale = usageCs(u, { fiveHourPct: 90, fiveHourResetsAt: sec(-60e3) });
   u.paint(stale.cs);
-  assert.deepEqual(tipOf(stale.cells.fiveHourPct).d, ['chat.usage.tip.stale']);
-  assert.match(stale.cells.fiveHourPct.className, /\bstale\b/);
-  assert.doesNotMatch(withR.cells.fiveHourPct.className, /\bstale\b/);
+  assert.deepEqual(tipOf(stale.parts.fiveHourPct).d, ['chat.usage.tip.stale']);
+  assert.match(stale.parts.fiveHourPct.seg.className, /\bstale\b/);
+  assert.doesNotMatch(withR.parts.fiveHourPct.seg.className, /\bstale\b/);
   // control: a reset line for a meter that has no reset field (context) never appears
-  assert.deepEqual(tipOf(withR.cells.contextPct).d, []);
+  assert.deepEqual(tipOf(withR.parts.contextPct).d, []);
 });
 
-test('usage row, run for real: the context meter is this pane\'s own tokens over the window, and says so only when they agree', () => {
+test('status bar, run for real: the context is this pane\'s own tokens over the window — used / limit with a bar — and says so only when they agree', () => {
   const u = loadUsage();
   const ok = usageCs(u, { contextPct: 5, contextWindow: 200000 }, { ctxTokens: 84000 });
   u.paint(ok.cs);
-  assert.equal(ok.vals.contextPct.textContent, '84k');
-  assert.equal(ok.cells.contextPct.props['--p'], '42', 'own tokens / window, not the global payload\'s percentage');
-  assert.match(tipOf(ok.cells.contextPct).d[0], /^chat\.usage\.tip\.ctxOf\{"used":"84,000","total":"200,000"\}$/);
-  // tokens above the payload's window: the payload describes another session's model — tokens only, no percentage
+  assert.equal(ok.parts.contextPct.v.textContent, '84k');
+  assert.equal(ok.parts.contextPct.of.textContent, '/ 200k', 'used / limit');
+  assert.equal(ok.parts.contextPct.seg.props['--p'], '42', 'own tokens / window, not the global payload\'s percentage');
+  assert.match(tipOf(ok.parts.contextPct).d[0], /^chat\.usage\.tip\.ctxOf\{"used":"84,000","total":"200,000"\}$/);
+  assert.match(ok.parts.contextPct.seg.attrs['aria-label'], /84k \/ 200k \(42%\)/);
+  // tokens above the payload's window: the payload describes another session's model — tokens only, no percentage, no limit
   const clash = usageCs(u, { contextPct: 5, contextWindow: 200000 }, { ctxTokens: 300000 });
   u.paint(clash.cs);
-  assert.equal(clash.vals.contextPct.textContent, '300k');
-  assert.equal(clash.cells.contextPct.props['--p'], '0');
-  assert.match(tipOf(clash.cells.contextPct).d[0], /^chat\.usage\.tip\.ctxUsed\{/);
-  // no window size known: the payload's own percentage still drives the ring, the tokens are what is shown
+  assert.equal(clash.parts.contextPct.v.textContent, '300k');
+  assert.equal(clash.parts.contextPct.of.textContent, '');
+  assert.equal(clash.parts.contextPct.seg.props['--p'], '0');
+  assert.match(tipOf(clash.parts.contextPct).d[0], /^chat\.usage\.tip\.ctxUsed\{/);
+  // no window size known: the payload's own percentage still drives the bar, the tokens are what is shown, and there is no limit to show
   const nowin = usageCs(u, { contextPct: 31 }, { ctxTokens: 62000 });
   u.paint(nowin.cs);
-  assert.equal(nowin.cells.contextPct.props['--p'], '31');
+  assert.equal(nowin.parts.contextPct.v.textContent, '62k');
+  assert.equal(nowin.parts.contextPct.of.textContent, '');
+  assert.equal(nowin.parts.contextPct.seg.props['--p'], '31');
+  // no tokens at all, only a percentage that is this tab's: the percentage; nothing: a dash
+  const pctOnly = usageCs(u, { contextPct: 38 });
+  u.paint(pctOnly.cs);
+  assert.equal(pctOnly.parts.contextPct.v.textContent, '38%');
+  // colour follows the percentage of the WINDOW, not the token count: 182k of 200k is red
+  const hot = usageCs(u, { contextWindow: 200000 }, { ctxTokens: 182000 });
+  u.paint(hot.cs);
+  assert.match(hot.parts.contextPct.seg.className, /\bhot\b/);
 });
 
-test('usage row: the reset formatters give the two largest units, and a clock time today or weekday + time otherwise', () => {
+test('status bar, run for real: the payload is global, so model, effort, context and window are only taken when it is THIS tab\'s (sessionMatch === true)', () => {
+  const u = loadUsage();
+  const payload = { fiveHourPct: 42, sevenDayPct: 55, fiveHourResetsAt: 2e9, sevenDayResetsAt: 2e9, model: 'claude-opus-5-5', effort: 'max', contextPct: 97, contextWindow: 1000000 };
+  const foreign = usageCs(u, {});
+  u.apply(foreign.cs, { ...payload, sessionMatch: false });
+  assert.deepEqual(foreign.cs.status, { fiveHourPct: 42, sevenDayPct: 55, fiveHourResetsAt: 2e9, sevenDayResetsAt: 2e9 }, 'only the account-wide windows and their resets');
+  assert.equal(foreign.parts.effort.seg.hidden, true, 'no effort has ever been reported by this tab\'s own payload: the segment is not there (not a dash)');
+  // anything but a literal true is a no: a missing flag (an older main) and truthy look-alikes
+  for (const flag of [undefined, null, 'true', 1, {}]) {
+    const x = usageCs(u, {});
+    u.apply(x.cs, { ...payload, sessionMatch: flag });
+    assert.equal((x.cs.status as Record<string, unknown>).effort, undefined, `sessionMatch ${JSON.stringify(flag)} must not write the effort`);
+    assert.equal((x.cs.status as Record<string, unknown>).model, undefined);
+  }
+  const mine = usageCs(u, {});
+  u.apply(mine.cs, { ...payload, sessionMatch: true });
+  assert.equal((mine.cs.status as Record<string, unknown>).effort, 'max');
+  assert.equal((mine.cs.status as Record<string, unknown>).contextWindow, 1000000);
+  assert.equal(mine.parts.effort.seg.hidden, false);
+  assert.equal(mine.parts.effort.v.textContent, 'chat.bar.effort.max');
+  // an effort this build does not know is shown as it came, never swallowed
+  const odd = usageCs(u, {});
+  u.apply(odd.cs, { effort: 'ultra', sessionMatch: true });
+  assert.equal(odd.parts.effort.v.textContent, 'ultra');
+  // a later payload that is not this tab's changes nothing it already knew
+  u.apply(mine.cs, { effort: 'low', model: 'claude-haiku-4-5', sessionMatch: false });
+  assert.equal((mine.cs.status as Record<string, unknown>).effort, 'max');
+  // the model: this tab's own transcript wins, then a matching payload, and never a foreign one
+  const tr = usageCs(u, {}, { model: 'claude-sonnet-5-5' });
+  u.apply(tr.cs, { model: 'claude-opus-5-5', sessionMatch: false });
+  assert.equal(tr.parts.model.v.textContent, 'Sonnet 5.5');
+  const fromPayload = usageCs(u, {});
+  u.apply(fromPayload.cs, { model: 'claude-opus-5-5', sessionMatch: true });
+  assert.equal(fromPayload.parts.model.v.textContent, 'Opus 5.5');
+  const nobody = usageCs(u, {});
+  u.paint(nobody.cs);
+  assert.equal(nobody.parts.model.v.textContent, '—');
+});
+
+test('status bar: model names read as a person says them, and an id nobody taught us is shown as it came', () => {
+  const u = loadUsage();
+  assert.equal(u.label('claude-sonnet-5-5'), 'Sonnet 5.5');
+  assert.equal(u.label('claude-opus-5'), 'Opus 5');
+  assert.equal(u.label('claude-haiku-4-5-20251001'), 'Haiku 4.5');
+  assert.equal(u.label('claude-opus-4-1[1m]'), 'Opus 4.1');
+  assert.equal(u.label('claude-3-5-sonnet-20241022'), 'Sonnet 3.5');
+  assert.equal(u.label('some-other-model'), 'some-other-model');
+});
+
+test('status bar: the reset formatters give the two largest units, and a clock time today or weekday + time otherwise', () => {
   const u = loadUsage();
   const now = new Date(2026, 9, 26, 12, 0, 0).getTime();
   const at = (ms: number): number => Math.floor((now + ms) / 1000);
@@ -948,69 +1004,194 @@ test('usage row: the reset formatters give the two largest units, and a clock ti
   assert.match(u.when(at(30 * 3600e3), now), /^[A-Za-z]{3}\.? \d{1,2}:\d{2}/, 'another day: weekday and time');
 });
 
-guarded('the meters left the header: the usage row is built into the compose block, under the card, and the header carries only the switch and the settings',
+test('status bar: the thresholds are 60 and 85, named once, and the painter reads those names (no stray 70 or 90)', () => {
+  assert.match(skin, /const CHAT_WARN_PCT = 60, CHAT_HOT_PCT = 85;/);
+  const paint = fnBody(skin, 'chatPaintUsage');
+  assert.match(paint, /pct >= CHAT_WARN_PCT && pct < CHAT_HOT_PCT/);
+  assert.match(paint, /pct >= CHAT_HOT_PCT/);
+  assert.doesNotMatch(paint, /\b(70|90)\b/);
+  assert.match(paint, /const has = typeof pct === 'number' && Number\.isFinite\(pct\)/);
+  assert.match(paint, /setProperty\('--p', has \? /, 'the ring and the bar are empty without a reading');
+  assert.match(paint, /\.\.\.lines\]\.join\(' — '\)/, 'the accessible name carries the value and the detail');
+});
+
+guarded('the status payload is asked for with THIS tab\'s session id, and per-session fields are written only when main says it matches',
+  (src) => {
+    const s = slice(src);
+    const apply = fnBody(s, 'chatApplyStatus');
+    const refresh = fnBody(s, 'chatSkinRefreshStatus');
+    return /gs\.chatStatus\(cs\.pane\.sessionId\)/.test(refresh)
+      && /const CHAT_STATUS_OWN = \['contextPct', 'model', 'effort', 'contextWindow'\];/.test(s)
+      && /CHAT_STATUS_OWN\.includes\(k\) && s\.sessionMatch !== true\) continue;/.test(apply)
+      && /s\[k\] === undefined \|\| s\[k\] === null \|\| s\[k\] === ''\) continue;/.test(apply);
+  },
+  (src) => src.replace('if (CHAT_STATUS_OWN.includes(k) && s.sessionMatch !== true) continue;', ''));
+
+guarded('the status bar is built UNDER the card, and the card holds only the text and send/stop (no chips, no usage row)',
   (src) => {
     const b = fnBody(slice(src), 'chatSkinBuild');
     const head = /head\.append\((.*)\);/.exec(b)?.[1] ?? '';
-    return head.length > 0 && !/usageEl|chat-usage/.test(head) && /sw, el\('span', 'cs-fill'\), gear, menu/.test(head)
-      && /meta\.append\(usageEl, hint\)/.test(b) && /compose\.append\(jumpBtn, wrap, meta\)/.test(b)
+    return head.length > 0 && !/bar|usage/i.test(head) && /sw, el\('span', 'cs-fill'\), gear, menu/.test(head)
+      && /meta\.appendChild\(bar\)/.test(b) && /compose\.append\(jumpBtn, wrap, meta\)/.test(b)
+      && /box\.append\(input, ccRow, dropEl\)/.test(b) && /ccRow\.append\(stopBtn, sendBtn\)/.test(b)
+      && !/cc-chip|chat-usage|usageEl|usageVals/.test(slice(src))
       && b.indexOf('wrap.append(slashPop, box)') > 0 && b.indexOf('wrap.append(slashPop, box)') < b.indexOf('compose.append(')
-      && !/\.cs-head \.chat-usage/.test(css);
+      && !/\.cs-head \.chat-bar/.test(css) && !/cc-chip|chat-usage/.test(css);
   },
-  (src) => src.replace("head.append(sw, el('span', 'cs-fill'), gear, menu);", "head.append(sw, el('span', 'cs-fill'), usageEl, gear, menu);"));
+  (src) => src.replace("head.append(sw, el('span', 'cs-fill'), gear, menu);", "head.append(sw, el('span', 'cs-fill'), bar, gear, menu);"));
 
-guarded('every meter answers hover AND keyboard focus with a tooltip of its own, aria-labelled, and the tooltip is not read twice',
+guarded('every meter answers hover AND keyboard focus with its detail card, aria-labelled, and the card is not read twice',
   (src) => {
     const b = fnBody(slice(src), 'chatSkinBuild');
     const tip = fnBody(slice(src), 'chatSkinTip');
-    return /cell\.tabIndex = 0/.test(b) && /cell\.addEventListener\('pointerenter', \(\) => chatSkinTip\(cell, true\)\)/.test(b)
-      && /cell\.addEventListener\('focus', \(\) => chatSkinTip\(cell, true\)\)/.test(b) && /cell\.addEventListener\('blur', \(\) => chatSkinTip\(cell, false\)\)/.test(b)
-      && /tip\.setAttribute\('aria-hidden', 'true'\)/.test(b)
+    return /seg\.tabIndex = 0/.test(b) && /seg\.addEventListener\('pointerenter', \(\) => chatSkinTip\(seg, true\)\)/.test(b)
+      && /seg\.addEventListener\('focus', \(\) => chatSkinTip\(seg, true\)\)/.test(b) && /seg\.addEventListener\('blur', \(\) => chatSkinTip\(seg, false\)\)/.test(b)
+      && /tip\.setAttribute\('aria-hidden', 'true'\)/.test(b) && /seg\.setAttribute\('role', 'img'\)/.test(b)
       && /classList\.toggle\('tip-open', on\)/.test(tip)
-      && !/cell\.title\s*=|\.parentElement\.title = tip/.test(fnBody(slice(src), 'chatPaintUsage').split("if (kind === 'text')")[0]);   // no native title on a meter: the tooltip is ours
+      && /bar\.setAttribute\('aria-label', t\('chat\.bar\.label', \{ name: chatSkinWho\(p\) \}\)\)/.test(b)   // the session's name, from the one function that knows it
+      && !/seg\.title\s*=/.test(fnBody(slice(src), 'chatPaintUsage').split('/* Model:')[0]);   // no native title on a meter: the card is ours
   },
-  (src) => src.replace("cell.addEventListener('focus', () => chatSkinTip(cell, true));", ''));
+  (src) => src.replace("seg.addEventListener('focus', () => chatSkinTip(seg, true));", ''));
 
-test('the usage row\'s CSS: own tooltip, ring arc from --p, neutral until 70/90, hidden with the rest of the compose block under a dialog strip, hint only with focus', () => {
+guarded('the model in the bar sends /model through the same chokepoint as a typed message — and never while a turn runs or a dialog is open',
+  (src) => {
+    const s = slice(src);
+    const menu = fnBody(s, 'chatSkinModelMenu');
+    const submit = fnBody(s, 'chatSkinSubmit');
+    return /chatSkinSubmit\(id, p, '\/model'\)/.test(menu) && /cs\.promptKind \|\| chatSkinWorking\(p\)/.test(menu) && !/ptyWrite|ptyRun/.test(menu)
+      && /submitToPty\(id, text\)/.test(submit) && /chatSkinSubmit\(id, p, text\)/.test(fnBody(s, 'chatSkinSendNow'))
+      && /modelSeg\.addEventListener\('click', \(\) => chatSkinModelMenu\(id, p\)\)/.test(fnBody(s, 'chatSkinBuild'))
+      && /cs\.modelSeg\.disabled = working \|\| !!cs\.promptKind \|\| !!p\.exited/.test(fnBody(s, 'chatSkinControls'));
+  },
+  (src) => src.replace("chatSkinSubmit(id, p, '/model');", "window.glassShell.ptyWrite(id, '/model\\r');"));
+
+test('the bar has three looks, one setting switches them, and the choice is remembered', () => {
+  assert.match(skin, /const CHAT_BAR_STYLES = \['minimal', 'pills', 'strip'\];/);
+  const def = /const CHAT_BAR_DEFAULT = '(\w+)';/.exec(skin)?.[1] ?? '';
+  assert.ok(['minimal', 'pills', 'strip'].includes(def), `the default is one of the three (${def})`);
+  const set = fnBody(skin, 'chatSkinSetBarStyle');
+  assert.match(set, /CHAT_BAR_STYLES\.includes\(style\)/, 'an unknown style is refused, not stored');
+  assert.match(set, /localStorage\.setItem\('chatStatusBarStyle', style\)/);
+  assert.match(set, /persist !== false/, 'a fixture can switch without persisting');
+  assert.match(set, /for \(const p of panes\.values\(\)\) if \(p\.chatSkin\) chatSkinApplyBarStyle\(p\.chatSkin\)/, 'every open chat view follows at once');
+  assert.match(fnBody(skin, 'chatSkinApplyBarStyle'), /cs\.compose\.classList\.toggle\('bar-' \+ s, s === chatStatusBarStyle\)/);
+  assert.match(fnBody(skin, 'chatSkinBuild'), /chatSkinApplyBarStyle\(cs\);/, 'a view built later wears the current look from its first paint');
+  assert.match(skin, /localStorage\.getItem\('chatStatusBarStyle'\)/);
+  const rules = skinRules(css).map(([s]) => s).join('\n');
+  for (const s of ['minimal', 'pills', 'strip']) assert.match(rules, new RegExp(`\\.bar-${s}\\b`), `${s} has CSS of its own`);
+});
+
+test('the bar\'s CSS: thresholds through --chat-* tokens, the detail card on the bar\'s own line, hint only with focus, hidden under a dialog strip', () => {
   const rules = skinRules(css);
   const rule = (sel: string): string => rules.find(([s]) => s === sel)?.[1] ?? '';
   assert.match(rule('.cu-ring .r-val'), /stroke-dasharray: var\(--p, 0\) 100/);
-  assert.match(rule('.chat-usage .cu.mid .r-val'), /--st-warn/);
-  assert.match(rule('.chat-usage .cu.hi .r-val'), /--st-error/);
-  assert.match(rule('.cu-tip'), /position: absolute/);
-  assert.match(rule('.cu.tip-open .cu-tip'), /opacity: 1/);
-  const strip = rules.find(([s]) => s.startsWith('.pane.cs-strip > .chatskin .chat-usage'));
-  assert.ok(strip && /\.cc-meta/.test(strip[0]) && /\.chat-compose/.test(strip[0]) && /display: none/.test(strip[1]), 'the strip rule hides the usage row (and the whole compose block) for a live dialog');
-  assert.match(rule('.cc-hint'), /opacity: 0/, 'the keys hint is invisible until the box has focus');
-  assert.match(rule('.cc-wrap:focus-within + .cc-meta .cc-hint'), /opacity: 1/);
-  // control: the old always-visible grey line (a centred 11 px hint under the card) is gone
-  assert.equal(rule('.cc-hint').includes('text-align: center'), false);
-  // the tooltip's animation has a reduced-motion fallback (the generic animation test only sees `animation:`, this one is a transition)
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.chat-usage \.cu, \.cu-ring \.r-val, \.cu-tip \{ transition: none; \}/);
+  assert.match(rule('.cb-m.warn .r-val'), /var\(--chat-meter-warn\)/);
+  assert.match(rule('.cb-m.hot .r-val'), /var\(--chat-meter-hot\)/);
+  assert.match(rule('.cb-m.warn .cb-meter i'), /var\(--chat-meter-warn\)/);
+  assert.match(rule('.cb-m.hot .cb-meter i'), /var\(--chat-meter-hot\)/);
+  assert.match(rule('.cb-meter i'), /width: calc\(var\(--p, 0\) \* 1%\)/);
+  assert.match(rule('.cb-m.warn .cb-v'), /var\(--chat-warn-ink\)/);
+  assert.match(rule('.cb-m.hot .cb-v'), /var\(--chat-hot-ink\)/);
+  // the amber and the red are the house's status hues, and never the coral
+  const dark = css.slice(0, css.indexOf('body.light {'));
+  assert.match(dark, /--chat-meter-warn: var\(--st-warn\);/);
+  assert.match(dark, /--chat-meter-hot: var\(--st-error\);/);
+  assert.deepEqual(coralTokens(css), []);
+  // the detail card lies over the bar's own line: it is positioned against the bar, fills it, and nothing in its rule lifts it above
+  const tip = rule('.cb-tip');
+  assert.match(tip, /position: absolute/);
+  assert.match(tip, /inset: 0/);
+  assert.doesNotMatch(tip, /\bbottom:|\btop:\s*-|calc\(100%/, 'a card that opened upward would cover the text being typed');
+  assert.match(rule('.chat-bar'), /position: relative/, 'the bar is what the card is placed against');
+  assert.match(rule('.cb-m'), /flex: 0 0 auto/);
+  assert.doesNotMatch(rule('.cb-m'), /position:/, 'a meter is not the containing block of its card (the bar is)');
+  assert.match(rule('.cb-m.tip-open .cb-tip'), /opacity: 1/);
+  const strip = rules.find(([s]) => s.startsWith('.pane.cs-strip > .chatskin .chat-bar'));
+  assert.ok(strip && /\.cc-meta/.test(strip[0]) && /\.chat-compose/.test(strip[0]) && /display: none/.test(strip[1]), 'the strip rule hides the bar (and the whole compose block) for a live dialog');
+  assert.match(rule('.cb-hint'), /opacity: 0/, 'the keys hint is invisible until the box has focus');
+  assert.match(rule('.cc-wrap:focus-within + .cc-meta .cb-hint'), /opacity: 1/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.cb-m, \.cu-ring \.r-val, \.cb-meter i, \.cb-tip, \.cb-hint, \.chat-bar \{ transition: none; \}/);
+  // control: the old floating card (up and away from its meter) would trip the same check
+  assert.match(rule('.cb-tip').replace('inset: 0;', 'bottom: calc(100% + 8px);'), /calc\(100%/);
 });
 
-test('the usage row\'s sentences exist in every locale (the three built at run time included), with the same placeholders', () => {
-  const keys = ['chat.hintShort', 'chat.usage.tip.fiveHour', 'chat.usage.tip.sevenDay', 'chat.usage.tip.context', 'chat.usage.tip.used', 'chat.usage.tip.resets', 'chat.usage.tip.stale',
-    'chat.usage.tip.ctxOf', 'chat.usage.tip.ctxUsed', 'chat.usage.unit.d', 'chat.usage.unit.h', 'chat.usage.unit.m'];
+test('a narrow pane gives up the labels first, then the "of 200k", then the effort, and only then the numbers — rings and bars never', () => {
+  const widths = (sel: RegExp): number[] => [...css.matchAll(/@container \(max-width: (\d+)px\) \{([^@\n]*)\}/g)].filter((m) => sel.test(m[2])).map((m) => Number(m[1]));
+  const labels = Math.max(...widths(/\.cb-k \{ display: none/));
+  const of = Math.max(...widths(/\.cb-of \{ display: none/));
+  const effort = Math.max(...widths(/\.cb-effort \{ display: none/));
+  const valuesCapsule = Math.max(...widths(/\.bar-pills \.cb-m \.cb-v/));
+  const valuesAll = Math.max(...widths(/^\s*\.cb-m \.cb-v \{ display: none/));
+  assert.ok(labels > 0 && of > 0 && effort > 0 && valuesCapsule > 0 && valuesAll > 0, `all the steps exist (${[labels, of, effort, valuesCapsule, valuesAll]})`);
+  assert.ok(labels > of && of >= effort - 20 && effort > valuesCapsule && valuesCapsule > valuesAll, `order of loss by width: labels ${labels} > of ${of} > effort ${effort} > capsule numbers ${valuesCapsule} > ring numbers ${valuesAll}`);
+  // nothing ever hides the ring or the bar itself
+  assert.doesNotMatch(css, /@container[^{]*\{[^}]*(\.cu-ring|\.cb-meter)(?! i)[^}]*display: none/);
+  // the bar is its own size container, so the steps follow the bar and not the window
+  assert.match(skinRules(css).find(([s]) => s === '.cc-meta')?.[1] ?? '', /container-type: inline-size/);
+});
+
+test('the status bar\'s sentences exist in every locale (the ones built at run time included), with the same placeholders', () => {
+  const keys = ['chat.hintShort', 'chat.bar.hintTiny', 'chat.bar.label', 'chat.bar.modelTip', 'chat.bar.modelPick', 'chat.bar.modelAria', 'chat.usage.tip.fiveHour', 'chat.usage.tip.sevenDay', 'chat.usage.tip.context',
+    'chat.usage.tip.used', 'chat.usage.tip.resets', 'chat.usage.tip.stale', 'chat.usage.tip.ctxOf', 'chat.usage.tip.ctxUsed', 'chat.usage.unit.d', 'chat.usage.unit.h', 'chat.usage.unit.m', 'chat.usage.none',
+    'chat.usage.fiveHour', 'chat.usage.sevenDay', 'chat.usage.context', 'chat.usage.effort'];
+  const efforts = /const CHAT_EFFORTS = \[([^\]]+)\]/.exec(skin)?.[1].match(/'(\w+)'/g)?.map((x) => x.slice(1, -1)) ?? [];
+  assert.deepEqual(efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  for (const e of efforts) keys.push('chat.bar.effort.' + e);
   for (const k of keys) for (const l of Object.keys(loc)) assert.ok(typeof loc[l][k] === 'string' && loc[l][k].length > 0, `${l}.json lacks ${k}`);
   const holes = (s: string): string => (s.match(/\{[a-zA-Z]+\}/g) || []).sort().join(',');
   for (const k of keys) for (const l of ['es', 'pt-br']) assert.equal(holes(loc[l][k]), holes(loc.en[k]), `${l} ${k}`);
   assert.equal(holes(loc.en['chat.usage.tip.resets']), '{left},{when}');
-  // every key the paint code builds at run time is in the list above
-  assert.deepEqual([...skin.matchAll(/t\('chat\.usage\.tip\.' \+ \(k === 'fiveHourPct' \? '(\w+)' : k === 'sevenDayPct' \? '(\w+)' : '(\w+)'\)\)/g)].flatMap((m) => m.slice(1)), ['fiveHour', 'sevenDay', 'context']);
-  assert.equal(typeof loc.en['chat.usage.contextTokens'], 'undefined', 'the old title-attribute sentence is gone with the title attribute');
+  assert.equal(holes(loc.en['chat.bar.label']), '{name}', 'the bar is named after the session, like every other sentence about it');
+  assert.equal(holes(loc.en['chat.bar.modelAria']), '{model}');
+  // every key the painter builds at run time is in the list above
+  assert.deepEqual([...skin.matchAll(/\['(?:fiveHourPct|sevenDayPct|contextPct)', 'chat\.usage\.\w+', '(chat\.usage\.tip\.\w+)'\]/g)].map((m) => m[1]), ['chat.usage.tip.fiveHour', 'chat.usage.tip.sevenDay', 'chat.usage.tip.context']);
+  assert.match(skin, /t\('chat\.bar\.effort\.' \+ effort\)/);
+  // the old row is gone with its sentence
+  assert.equal(typeof loc.en['chat.usage.contextTokens'], 'undefined');
 });
 
-test('chat-shot fixture: the usage row (resting, hover tooltip on each meter, high, empty, narrow) and the dense tool rows are shot in dark and light', () => {
+test('chat-shot fixture: the three bars × light/dark × wide/narrow/card open/hot values, plus a payload that is not this tab\'s', () => {
   const byName = (n: string): FxShot | undefined => fixture.shots.find((s) => s.name === n);
-  for (const n of ['usage-dark', 'usage-light', 'usage-tip-dark', 'usage-tip-light', 'usage-tip-context-dark', 'usage-tip-high-dark', 'usage-tip-high-light', 'usage-none-dark', 'usage-narrow-dark', 'usage-narrow-light', 'tools-dense-dark', 'tools-dense-light']) assert.ok(byName(n), `missing shot ${n}`);
-  for (const n of ['usage-tip-dark', 'usage-tip-light', 'usage-tip-context-dark', 'usage-tip-high-dark', 'usage-none-dark', 'usage-narrow-dark']) assert.match(String([byName(n)?.js].flat().join('\n')), /chatSkinTip\(/, `${n} forces its tooltip open`);
+  const js = (n: string): string => String([byName(n)?.js].flat().join('\n'));
+  for (const v of ['minimal', 'pills', 'strip']) for (const th of ['light', 'dark']) {
+    for (const suffix of ['', '-narrow', '-tip', '-hot', '-hot-tip']) {
+      const n = `bar-${v}-${th}${suffix}`;
+      assert.ok(byName(n), `missing shot ${n}`);
+      assert.equal(byName(n)?.theme, th);
+      assert.match(js(n), new RegExp(`barShot\\(ctx, '${v}'`), `${n} wears the ${v} look`);
+    }
+    for (const suffix of ['-tip', '-hot-tip']) assert.match(js(`bar-${v}-${th}${suffix}`), /tip: '(fiveHourPct|contextPct)'/, 'the card is forced open');
+    assert.match(js(`bar-${v}-${th}-narrow`), /pane: \d+/, 'a narrow pane (the window width alone would only shrink the layout around it)');
+    assert.deepEqual(byName(`bar-${v}-${th}-hot`)?.events, ['conversation', 'bar-hot']);
+  }
+  // the helper fails the run when the card reaches into the composer or leaves the bar
+  const setup = [fixture.setup].flat().join('\n');
+  assert.match(setup, /tip\.top < box\.bottom/);
+  assert.match(setup, /tip\.top < bar\.top[\s\S]*tip\.right > bar\.right/);
+  assert.match(setup, /chatSkinSetBarStyle\(style, false\)/);
+  // hot values: amber on the 5 h, red on the context (tokens of the window)
+  const hot = fixture.streams['bar-hot'];
+  const st = hot.find((e) => e.type === 'status') as FxEvent;
+  const us = hot.find((e) => e.type === 'usage') as FxEvent;
+  assert.ok(Number(st.fiveHourPct) >= 60 && Number(st.fiveHourPct) < 85, 'amber');
+  assert.ok(Number(us.contextTokens) / Number(st.contextWindow) >= 0.85, 'red');
+  // every status event that carries a per-session field says whether it is this tab's
+  for (const [name, evs] of Object.entries(fixture.streams)) for (const e of evs) {
+    if (e.type === 'status' && ['model', 'effort', 'contextPct', 'contextWindow'].some((k) => k in e)) assert.equal(typeof e.sessionMatch, 'boolean', `${name}: a status event with per-session fields declares sessionMatch`);
+  }
+  assert.equal((fixture.streams.conversation.find((e) => e.type === 'status') as FxEvent).sessionMatch, true);
+  // the payload that is not this tab's: the shot feeds one and FAILS if the effort shows or the model is not the transcript's
+  const nm = js('bar-nomatch-dark');
+  assert.match(nm, /"sessionMatch": false/);
+  assert.match(nm, /barParts\.effort\.seg\.hidden\) throw/);
+  assert.match(nm, /'Sonnet 5\.5'/);
   // resets in the fixture are relative ("+seconds"), never an instant that would be in the past by the next run
-  const resets = Object.values(fixture.streams).flat().flatMap((e) => Object.entries(e).filter(([k]) => /ResetsAt$/.test(k)).map(([, v]) => v));
+  const resets = [...Object.values(fixture.streams).flat(), ...fixture.shots.flatMap((s) => [s.js].flat().join('\n').match(/"[a-zA-Z]+ResetsAt": ("[^"]*"|\d+)/g) ?? [])]
+    .flatMap((e) => (typeof e === 'string' ? [e.split(': ')[1].replace(/"/g, '')] : Object.entries(e).filter(([k]) => /ResetsAt$/.test(k)).map(([, v]) => v)));
   assert.ok(resets.length >= 4 && resets.every((v) => typeof v === 'string' && /^\+\d+$/.test(v)), `relative resets only (${resets.join(', ')})`);
   assert.match(main, /\/ResetsAt\$\/\.test\(k\) && typeof s\[k\] === 'string' && \/\^\\\+\\d\+\$\/\.test\(s\[k\]\)/, 'the driver understands them');
-  // the three states of the tooltip (window usage with resets, tokens of context, no reading) are all covered
-  assert.ok(fixture.streams.conversation[0].contextWindow && fixture.streams['usage-high'].some((e) => e.type === 'usage'));
+  // and the dense tool rows are still shot
+  for (const n of ['tools-dense-dark', 'tools-dense-light']) assert.ok(byName(n), `missing shot ${n}`);
 });
 
 // ── the slash-command popup ─────────────────────────────────────────────────

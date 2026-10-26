@@ -7092,6 +7092,7 @@ Object.assign(ICONS, {
   eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
   alert: '<path d="M10.3 3.9 2.4 17.5a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9.5v4"/><path d="M12 17h.01"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  chevUpDown: '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
   textSize: '<path d="M3 19 8.5 5 14 19"/><path d="M5 14.5h7"/><path d="M15.5 19l2.8-7 2.7 7"/><path d="M16.6 16.7h3.4"/>',
 });
 /* An icon as an element. The markup comes from the static ICONS table above, never from model text,
@@ -7267,19 +7268,25 @@ function chatReadPrefs(c) {
   if (Number.isFinite(n) && n >= 8 && n <= 40) chatPrefs.size = n;
 }
 
-/* ── usage bar ────────────────────────────────────────────────────────────── */
-const CHAT_USAGE_FIELDS = [
-  ['fiveHourPct', 'chat.usage.fiveHour', 'pct'],
-  ['sevenDayPct', 'chat.usage.sevenDay', 'pct'],
-  ['contextPct', 'chat.usage.context', 'pct'],
-  ['model', 'chat.usage.model', 'text'],
-  ['effort', 'chat.usage.effort', 'text'],
+/* ── status bar: model · effort · 5 h · week · context, in ONE bar under the composer ───────────────────────
+   The card above holds only the text and send/stop; everything the operator wants to know about what answers
+   and what it costs lives here. THREE looks share one markup and one painter (the class on the compose block
+   picks the look, see chatSkinSetBarStyle): minimal (a thin line with rings), pills (a capsule per metric with a
+   slim bar) and strip (a rounded strip glued under the card, segments with dividers). */
+const CHAT_METERS = [
+  ['fiveHourPct', 'chat.usage.fiveHour', 'chat.usage.tip.fiveHour'],
+  ['sevenDayPct', 'chat.usage.sevenDay', 'chat.usage.tip.sevenDay'],
+  ['contextPct', 'chat.usage.context', 'chat.usage.tip.context'],
 ];
-const chatTokens = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n)));
-/* Fields the usage row reads besides the meters' own percentages: when a window resets (Unix seconds) and the
-   context window size, both from the statusline payload and only ever when it carries them. */
-const CHAT_STATUS_EXTRA = ['fiveHourResetsAt', 'sevenDayResetsAt', 'contextWindow'];
+/* What the statusline payload may carry. The payload is GLOBAL (whichever session wrote it last), so the fields
+   that describe ONE session are only taken when main says the payload is this tab's (sessionMatch === true). */
+const CHAT_STATUS_FIELDS = ['fiveHourPct', 'sevenDayPct', 'contextPct', 'model', 'effort', 'fiveHourResetsAt', 'sevenDayResetsAt', 'contextWindow'];
+const CHAT_STATUS_OWN = ['contextPct', 'model', 'effort', 'contextWindow'];
 const CHAT_RESET_OF = { fiveHourPct: 'fiveHourResetsAt', sevenDayPct: 'sevenDayResetsAt' };
+/* Neutral below 60, amber from 60, red from 85: the amber has to leave room to act before the red says "now". */
+const CHAT_WARN_PCT = 60, CHAT_HOT_PCT = 85;
+const CHAT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+const chatTokens = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n)));
 /* Intl wants a BCP-47 tag; the app's locale ids are en · es · pt-br. */
 const chatIntlLocale = () => { const l = window.i18n ? window.i18n.getLocale() : 'en'; return l === 'pt-br' ? 'pt-BR' : l; };
 /* "in 2 d 3 h" · "in 2 h 10 min" · "in 14 min": the two largest units, never a seconds counter (the payload is minutes-accurate at best). */
@@ -7299,86 +7306,132 @@ function chatResetWhen(sec, now) {
   const time = d.toLocaleTimeString(loc, { hour: '2-digit', minute: '2-digit' });
   return d.toDateString() === new Date(now).toDateString() ? time : d.toLocaleDateString(loc, { weekday: 'short' }) + ' ' + time;
 }
-/* chatStatus() is the statusline payload, which is GLOBAL: whichever session wrote it last, not
-   necessarily this one. So it only fills what this session's own usage event cannot say, and the
-   per-session numbers (model, context tokens) win whenever they exist. */
+/* "claude-sonnet-5-5" → "Sonnet 5.5". Family names are product names, not prose, so they are not translated; an id this
+   does not recognise is shown as it came (minus the vendor prefix and a date or context-size suffix) rather than guessed at. */
+function chatModelLabel(id) {
+  const s = String(id).replace(/^claude-/, '').replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, '');
+  const cap = (f) => f.charAt(0).toUpperCase() + f.slice(1);
+  let m = /^(opus|sonnet|haiku)-(\d+)(?:-(\d+))?$/.exec(s);
+  if (m) return cap(m[1]) + ' ' + m[2] + (m[3] ? '.' + m[3] : '');
+  m = /^(\d+)(?:-(\d+))?-(opus|sonnet|haiku)$/.exec(s);
+  if (m) return cap(m[3]) + ' ' + m[1] + (m[2] ? '.' + m[2] : '');
+  return s;
+}
+/* chatStatus(sessionId) is the statusline payload, which is GLOBAL: whichever session wrote it last, not necessarily this
+   one. Main compares it with the session id it was asked about and answers sessionMatch; when that is not true it has
+   already dropped model/effort/context from the payload, and this is the second lock on the same door: those fields are
+   never written from a payload that is not this tab's. The 5 h and weekly windows belong to the ACCOUNT and always are.
+   MERGE, don't replace: an absent value is simply never written, so it stays '—' (or hidden, for the effort), never 0. */
 function chatApplyStatus(cs, s) {
   if (!s || typeof s !== 'object') return;
-  /* MERGE, don't replace: an absent value is simply never written, so it stays '—' — never 0. */
-  for (const k of [...CHAT_USAGE_FIELDS.map((f) => f[0]), ...CHAT_STATUS_EXTRA]) if (s[k] !== undefined && s[k] !== null && s[k] !== '') cs.status[k] = s[k];
+  for (const k of CHAT_STATUS_FIELDS) {
+    if (s[k] === undefined || s[k] === null || s[k] === '') continue;
+    if (CHAT_STATUS_OWN.includes(k) && s.sessionMatch !== true) continue;
+    cs.status[k] = s[k];
+  }
   chatPaintUsage(cs);
+}
+/* The context meter: this pane's own tokens over the window size the payload reports, when they agree. The window size
+   is global like the rest of the payload; tokens above it can only mean the payload describes another session's model,
+   so then there is no percentage to draw, only the tokens we do know. */
+function chatContextOf(cs) {
+  const tokens = Number.isFinite(cs.ctxTokens) ? cs.ctxTokens : undefined;
+  const win = cs.status.contextWindow > 0 ? cs.status.contextWindow : 0;
+  const fromPayload = typeof cs.status.contextPct === 'number' && Number.isFinite(cs.status.contextPct) ? cs.status.contextPct : undefined;
+  if (tokens !== undefined && win > 0) return tokens <= win ? { tokens, win, pct: (tokens / win) * 100, fits: true } : { tokens, win, pct: undefined, fits: false };
+  return { tokens, win, pct: fromPayload, fits: false };
 }
 function chatPaintUsage(cs) {
   const now = Date.now();
-  for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
-    const out = cs.usageVals[k];
-    out.className = 'cu-v';
-    if (kind === 'pct') {
-      const cell = out.parentElement;
-      const tokens = k === 'contextPct' && Number.isFinite(cs.ctxTokens);
-      /* The context meter: this pane's own tokens over the window size the payload reports, when they agree. The
-         window size is global like the rest of the payload; tokens above it can only mean the payload describes
-         another session's model, so then there is no percentage to draw, only the tokens we do know. */
-      const win = cs.status.contextWindow;
-      const own = tokens && win > 0 ? (cs.ctxTokens <= win ? (cs.ctxTokens / win) * 100 : null) : undefined;
-      const pct = k === 'contextPct' && own !== undefined ? (own === null ? undefined : own) : cs.status[k];
-      const has = typeof pct === 'number' && Number.isFinite(pct);
-      // threshold colour follows the PERCENTAGE (70 warn, 90 error), whatever the number on show is
-      cell.className = 'cu' + (has ? (pct >= 90 ? ' hi' : pct >= 70 ? ' mid' : '') : ' none');
-      cell.style.setProperty('--p', has ? String(Math.max(0, Math.min(100, Math.round(pct)))) : '0');   // the ring's arc, 0-100; empty without a reading
-      const shown = tokens ? chatTokens(cs.ctxTokens) : has ? Math.round(pct) + '%' : '—';
-      out.textContent = shown;
-      if (shown === '—') out.classList.add('none');
-      /* The tooltip: what the glance cannot say. Resets only when the payload carried them, and a reset that
-         is already behind us means the reading is from the previous window. */
-      const lines = [];
-      const resetKey = CHAT_RESET_OF[k];
-      const resetAt = resetKey ? cs.status[resetKey] : undefined;
-      let stale = false;
-      if (typeof resetAt === 'number' && Number.isFinite(resetAt)) {
-        if (resetAt * 1000 <= now) { stale = true; lines.push(t('chat.usage.tip.stale')); }
-        else lines.push(t('chat.usage.tip.resets', { when: chatResetWhen(resetAt, now), left: chatResetLeft(resetAt, now) }));
-      }
-      if (k === 'contextPct' && tokens) {
-        lines.unshift(win > 0 && own !== null ? t('chat.usage.tip.ctxOf', { used: cs.ctxTokens.toLocaleString(chatIntlLocale()), total: win.toLocaleString(chatIntlLocale()) })
-          : t('chat.usage.tip.ctxUsed', { used: cs.ctxTokens.toLocaleString(chatIntlLocale()) }));
-      }
-      cell.classList.toggle('stale', stale);
-      const tipEl = cell.querySelector('.cu-tip');
-      tipEl.querySelector('.cut-h').textContent = t('chat.usage.tip.' + (k === 'fiveHourPct' ? 'fiveHour' : k === 'sevenDayPct' ? 'sevenDay' : 'context'));
-      tipEl.querySelector('.cut-v').textContent = has ? t('chat.usage.tip.used', { pct: Math.round(pct) }) : t('chat.usage.none');
-      tipEl.querySelector('.cut-d').replaceChildren(...lines.map((l) => el('span', 'cut-line', l)));
-      cell.setAttribute('aria-label', [t(label) + ': ' + (shown === '—' ? t('chat.usage.none') : shown) + (tokens && has ? ' (' + Math.round(pct) + '%)' : ''), ...lines].join(' — '));
-      continue;
+  const parts = cs.barParts;
+  for (const [k, label, tipKey] of CHAT_METERS) {
+    const part = parts[k];
+    const ctx = k === 'contextPct' ? chatContextOf(cs) : null;
+    const pct = ctx ? ctx.pct : cs.status[k];
+    const has = typeof pct === 'number' && Number.isFinite(pct);
+    const hasTokens = !!ctx && ctx.tokens !== undefined;
+    const shown = hasTokens ? chatTokens(ctx.tokens) : has ? Math.round(pct) + '%' : '—';
+    const of = ctx && ctx.fits ? '/ ' + chatTokens(ctx.win) : '';
+    const seg = part.seg;
+    // threshold colour follows the PERCENTAGE, whatever the number on show is
+    seg.classList.toggle('none', !has && shown === '—');
+    seg.classList.toggle('warn', has && pct >= CHAT_WARN_PCT && pct < CHAT_HOT_PCT);
+    seg.classList.toggle('hot', has && pct >= CHAT_HOT_PCT);
+    seg.style.setProperty('--p', has ? String(Math.max(0, Math.min(100, Math.round(pct)))) : '0');   // the ring's arc and the bar's fill, 0-100; empty without a reading
+    part.v.textContent = shown;
+    part.v.classList.toggle('none', shown === '—');
+    part.of.textContent = of;
+    /* The tooltip: what the glance cannot say. Resets only when the payload carried them, and a reset that
+       is already behind us means the reading is from the previous window. */
+    const lines = [];
+    const resetKey = CHAT_RESET_OF[k];
+    const resetAt = resetKey ? cs.status[resetKey] : undefined;
+    let stale = false;
+    if (typeof resetAt === 'number' && Number.isFinite(resetAt)) {
+      if (resetAt * 1000 <= now) { stale = true; lines.push(t('chat.usage.tip.stale')); }
+      else lines.push(t('chat.usage.tip.resets', { when: chatResetWhen(resetAt, now), left: chatResetLeft(resetAt, now) }));
     }
-    const v = k === 'model' && cs.model ? cs.model : cs.status[k];
-    if (v) { out.textContent = k === 'model' ? String(v).replace(/^claude-/, '') : String(v); }   // the full id stays in the tooltip
-    else { out.textContent = '—'; out.classList.add('none'); }
-    if (kind === 'text') out.parentElement.title = t(label) + ': ' + (v || '—');
+    if (hasTokens) {
+      lines.unshift(ctx.fits ? t('chat.usage.tip.ctxOf', { used: ctx.tokens.toLocaleString(chatIntlLocale()), total: ctx.win.toLocaleString(chatIntlLocale()) })
+        : t('chat.usage.tip.ctxUsed', { used: ctx.tokens.toLocaleString(chatIntlLocale()) }));
+    }
+    seg.classList.toggle('stale', stale);
+    part.tipH.textContent = t(tipKey);
+    part.tipV.textContent = has ? t('chat.usage.tip.used', { pct: Math.round(pct) }) : t('chat.usage.none');
+    part.tipD.replaceChildren(...lines.map((l) => el('span', 'cut-line', l)));
+    seg.setAttribute('aria-label', [t(label) + ': ' + (shown === '—' ? t('chat.usage.none') : shown + (of ? ' ' + of : '')) + (hasTokens && has ? ' (' + Math.round(pct) + '%)' : ''), ...lines].join(' — '));
+  }
+  /* Model: this tab's own transcript wins, then a payload that is this tab's. */
+  const model = cs.model || cs.status.model;
+  const mp = parts.model;
+  mp.v.textContent = model ? chatModelLabel(model) : '—';
+  mp.v.classList.toggle('none', !model);
+  mp.seg.title = model ? t('chat.bar.modelTip', { id: String(model) }) : t('chat.bar.modelPick');
+  mp.seg.setAttribute('aria-label', t('chat.bar.modelAria', { model: model ? chatModelLabel(model) : t('chat.usage.none') }));
+  /* Effort: absent until a payload that is THIS tab's has said it. A dash would read as a failure; the segment just is not there. */
+  const effort = cs.status.effort;
+  const ep = parts.effort;
+  ep.seg.hidden = !effort;
+  if (effort) {
+    const word = CHAT_EFFORTS.includes(String(effort)) ? t('chat.bar.effort.' + effort) : String(effort);
+    ep.v.textContent = word;
+    ep.seg.title = t('chat.usage.effort') + ': ' + word;
   }
 }
-/* Show or hide one meter's tooltip. Hover and keyboard focus call it; a fixture can force it open. It is placed
-   against the usage row: left-aligned with the meter, pulled back inside the composer's right edge when the meter
-   sits far enough along that the card would overflow a narrow pane. */
-function chatSkinTip(cell, on) {
-  cell.classList.toggle('tip-open', on);
-  const tip = cell.querySelector('.cu-tip');
-  if (!on || !tip) return;
-  tip.style.left = '0px';
-  const edge = cell.closest('.chat-compose');
-  let shift = 0;
-  if (edge) {
-    const over = cell.getBoundingClientRect().left + tip.offsetWidth - (edge.getBoundingClientRect().right - 8);
-    if (over > 0) shift = -Math.round(over);
-  }
-  tip.style.left = shift + 'px';
-  tip.style.setProperty('--ax', Math.round(cell.offsetWidth / 2 - shift) + 'px');   // the little arrow stays over the meter, wherever the card ended up
+/* Show or hide one meter's detail card. Hover and keyboard focus call it; a fixture can force it open. The card is drawn
+   by CSS over the bar's own line (see .cb-tip): it never opens upward, where the text being typed is, and needs no
+   measuring because it cannot go anywhere else. */
+function chatSkinTip(seg, on) {
+  seg.classList.toggle('tip-open', on);
 }
 function chatSkinRefreshStatus(cs) {
   const gs = window.glassShell;
   if (typeof gs.chatStatus !== 'function') return;
   cs.statusAt = Date.now();
-  Promise.resolve(gs.chatStatus()).then((s) => { chatApplyStatus(cs, s); }).catch(() => { /* the bar keeps its dashes */ });
+  // the session id lets main say whether the payload is THIS tab's (sessionMatch) before any per-session field is trusted
+  Promise.resolve(gs.chatStatus(cs.pane.sessionId)).then((s) => { chatApplyStatus(cs, s); }).catch(() => { /* the bar keeps its dashes */ });
+}
+/* Which of the three looks the bar wears. A viewing preference of this window, not a setting of the shell, so it lives
+   in localStorage like the other layout choices; a fixture or a later settings row switches it with chatSkinSetBarStyle.
+   DEFAULT: see CHAT_BAR_DEFAULT. */
+const CHAT_BAR_STYLES = ['minimal', 'pills', 'strip'];
+/* DEFAULT = pills. Of the three it is the one whose state survives a glance at the corner of the eye (an amber or red capsule and
+   a bar that is visibly full, where minimal's small ring asks to be read), it carries the most information in the least width
+   (the bar IS the number, so a narrow pane drops the digits and keeps the meaning), and it continues the capsule grammar the
+   model and effort chips already had in the card. Minimal is the quietest and strip the most "part of the card"; both stay one setting away. */
+const CHAT_BAR_DEFAULT = 'pills';
+let chatStatusBarStyle = (() => {
+  try { const v = localStorage.getItem('chatStatusBarStyle'); return CHAT_BAR_STYLES.includes(v) ? v : CHAT_BAR_DEFAULT; } catch { return CHAT_BAR_DEFAULT; }
+})();
+function chatSkinApplyBarStyle(cs) {
+  for (const s of CHAT_BAR_STYLES) cs.compose.classList.toggle('bar-' + s, s === chatStatusBarStyle);
+}
+function chatSkinSetBarStyle(style, persist) {
+  if (!CHAT_BAR_STYLES.includes(style)) return false;
+  chatStatusBarStyle = style;
+  if (persist !== false) { try { localStorage.setItem('chatStatusBarStyle', style); } catch { /* private mode: the choice lasts until the window closes */ } }
+  for (const p of panes.values()) if (p.chatSkin) chatSkinApplyBarStyle(p.chatSkin);
+  return true;
 }
 
 /* ── eligibility ──────────────────────────────────────────────────────────── */
@@ -7433,32 +7486,57 @@ function chatSkinBuild(id, p) {
   for (const s of CHAT_SIZES) sizeList.appendChild(chatSkinOpt(String(s), String(s)));
   menu.append(el('div', 'csm-h', t('chat.font.label')), fontList, el('div', 'csm-h', t('chat.size.label')), sizeList, el('div', 'csm-sample', t('chat.settings.sample')));
   head.append(sw, el('span', 'cs-fill'), gear, menu);
-  /* The usage row lives UNDER the composer (built further down, in the compose block): the header is for
-     switching view and reading settings, and the numbers belong next to the box they are the cost of. */
-  const usageEl = el('div', 'chat-usage');
-  usageEl.setAttribute('role', 'group');
-  usageEl.setAttribute('aria-label', t('chat.usage.label'));
-  const usageVals = {};
-  for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
-    if (kind !== 'pct') continue;   // model and effort are chips INSIDE the composer card (they say what will answer this message), not ambient meters
-    /* A meter: a small ring (the glance), the label, the value (the fact). A reading we do not have is a dash and
-       an empty ring, never 0. It is focusable and answers hover AND focus with the same tooltip (the detail:
-       resets, tokens). Painted by chatPaintUsage; the arc is the --p custom property (0-100). */
-    const cell = el('span', 'cu none');
-    cell.setAttribute('role', 'img');
-    cell.tabIndex = 0;
-    const v = el('span', 'cu-v none', '—');
-    const tip = el('span', 'cu-tip');
-    tip.setAttribute('aria-hidden', 'true');   // the same words are the cell's aria-label
-    tip.append(el('span', 'cut-h'), el('span', 'cut-v'), el('span', 'cut-d'));
-    cell.append(csRing(), el('span', 'cu-k', t(label)), v, tip);
-    cell.addEventListener('pointerenter', () => chatSkinTip(cell, true));
-    cell.addEventListener('pointerleave', () => { if (document.activeElement !== cell) chatSkinTip(cell, false); });
-    cell.addEventListener('focus', () => chatSkinTip(cell, true));
-    cell.addEventListener('blur', () => chatSkinTip(cell, false));
-    usageEl.appendChild(cell);
-    usageVals[k] = v;
+  /* The status bar lives UNDER the composer (built further down, in the compose block): the header is for
+     switching view and reading settings, and what answers, and what it costs, belongs next to the box it is the cost of. */
+  const barParts = {};
+  const bar = el('div', 'chat-bar');
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', t('chat.bar.label', { name: chatSkinWho(p) }));
+  /* Left: what will answer. The model is a button (it asks for /model, whose own menu card does the choosing); the
+     effort is plain text, and is not drawn at all until a payload that is THIS tab's has reported it. */
+  const idBox = el('div', 'cb-id');
+  const modelSeg = el('button', 'cb-model');
+  modelSeg.type = 'button';
+  modelSeg.append(el('span', 'cb-v none', '—'), csIcon('chevUpDown', 12));   // the chevrons say "this opens a choice"
+  const effortSeg = el('span', 'cb-effort');
+  effortSeg.hidden = true;
+  effortSeg.append(el('span', 'cb-v'));
+  idBox.append(modelSeg, effortSeg);
+  barParts.model = { seg: modelSeg, v: modelSeg.querySelector('.cb-v') };
+  barParts.effort = { seg: effortSeg, v: effortSeg.querySelector('.cb-v') };
+  /* Right: the three meters. Each is a ring (minimal) AND a slim bar (pills, strip): both are in the markup and the
+     class on the compose block shows one. A reading we do not have is a dash and an empty ring/bar, never 0. It is
+     focusable and answers hover AND focus with the same detail card (resets, tokens). Painted by chatPaintUsage;
+     the fill is the --p custom property (0-100). */
+  const metersBox = el('div', 'cb-meters');
+  for (const [k, label] of CHAT_METERS) {
+    const seg = el('span', 'cb-m none');
+    seg.setAttribute('role', 'img');
+    seg.tabIndex = 0;
+    const v = el('span', 'cb-v none', '—');
+    const of = el('span', 'cb-of');
+    const tipH = el('span', 'cut-h'), tipV = el('span', 'cut-v'), tipD = el('span', 'cut-d');
+    const tip = el('span', 'cb-tip');
+    tip.setAttribute('aria-hidden', 'true');   // the same words are the segment's aria-label
+    tip.append(el('span', 'cut-top'), tipD);
+    tip.firstChild.append(tipH, tipV);
+    const meter = el('span', 'cb-meter');
+    meter.setAttribute('aria-hidden', 'true');
+    meter.appendChild(el('i'));
+    seg.append(csRing(), el('span', 'cb-k', t(label)), meter, v, of, tip);
+    seg.addEventListener('pointerenter', () => chatSkinTip(seg, true));
+    seg.addEventListener('pointerleave', () => { if (document.activeElement !== seg) chatSkinTip(seg, false); });
+    seg.addEventListener('focus', () => chatSkinTip(seg, true));
+    seg.addEventListener('blur', () => chatSkinTip(seg, false));
+    metersBox.appendChild(seg);
+    barParts[k] = { seg, v, of, tipH, tipV, tipD };
   }
+  /* The keys hint sits in the bar's middle, faint, and only shows while the caret is in the box (and when there is room). */
+  const hint = el('span', 'cb-hint');
+  // two lengths of the same hint, both children so the hint box can be a size container: the whole sentence when it fits, "↵ send" when only that fits, nothing otherwise (see .cb-hint)
+  hint.append(el('span', 'cb-hint-t', t('chat.hintShort')), el('span', 'cb-hint-s', t('chat.bar.hintTiny')));
+  hint.setAttribute('aria-hidden', 'true');   // the full sentence is the textarea's title and its description for assistive tech
+  bar.append(idBox, hint, metersBox);
 
   const log = el('div', 'chat-log');
   log.setAttribute('role', 'log');
@@ -7507,10 +7585,10 @@ function chatSkinBuild(id, p) {
   alertBack.hidden = true;
   alertEl.append(alertIco, alertBody, alertBtn, alertBack, alertPoint);
 
-  /* The composer: one big rounded card floating over the end of the conversation. The text grows
-     with what is typed; under it a row carries the model and effort chips (read from the same usage
-     data as the meters) and, on the right, a round send button that becomes a stop button while
-     Claude is working. */
+  /* The composer: one big rounded card floating over the end of the conversation. It holds the text and
+     nothing else but a round send button on the right, which becomes a stop button while Claude is working;
+     the text grows with what is typed and the buttons stay at the bottom edge. Model, effort and usage are
+     in the bar under the card. */
   const compose = el('div', 'chat-compose');
   const jumpBtn = el('button', 'cs-jump');   // shown only while the operator has scrolled away from the end
   jumpBtn.type = 'button';
@@ -7523,16 +7601,6 @@ function chatSkinBuild(id, p) {
   input.placeholder = t('chat.placeholder', { name: chatSkinWho(p) });
   input.setAttribute('aria-label', input.placeholder);
   input.title = t('chat.inputHint');   // the full key hints live in the tooltip; the row under the card shows a short version only while the box has focus (a long placeholder wraps and clips in a narrow dock)
-  const chips = el('div', 'cc-chips');
-  for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
-    if (kind !== 'text') continue;
-    const chip = el('span', 'cc-chip cc-' + k);
-    const v = el('span', 'cu-v none', '—');
-    if (k === 'effort') chip.append(el('span', 'cc-k', t(label)));
-    chip.appendChild(v);
-    chips.appendChild(chip);
-    usageVals[k] = v;
-  }
   const sendBtn = el('button', 'cc-send');
   sendBtn.type = 'button';
   sendBtn.append(csIcon('arrowUp', 16));
@@ -7542,15 +7610,14 @@ function chatSkinBuild(id, p) {
   stopBtn.append(csIcon('stop', 14));
   stopBtn.title = t('chat.stopHint'); stopBtn.setAttribute('aria-label', t('chat.stop'));
   stopBtn.hidden = true;
-  const ccRow = el('div', 'cc-row');
-  ccRow.append(chips, el('span', 'cs-fill'), stopBtn, sendBtn);
+  const ccRow = el('div', 'cc-btns');
+  ccRow.append(stopBtn, sendBtn);
   /* The drop affordance: a quiet veil over the card while a file is dragged across it (see chatSkinDropBind). */
   const dropEl = el('div', 'cc-drop', t('chat.drop.label'));
   dropEl.setAttribute('aria-hidden', 'true');
   box.append(input, ccRow, dropEl);
   /* The box sits in its own wrapper so anything that floats against the card (the slash popup) is positioned
-     against the card, not the whole compose block. Under it, the meta row: the meters on the left, and on the
-     right the keys hint, which only shows while the caret is in the box. */
+     against the card, not the whole compose block. Under it, the meta block: the status bar. */
   const wrap = el('div', 'cc-wrap');
   /* The slash-command popup floats over the end of the log, right above the card. A container (the shadow, the
      footer line) around a listbox that holds ONLY options; the footer is a hint for sighted users and is hidden
@@ -7571,16 +7638,14 @@ function chatSkinBuild(id, p) {
   input.setAttribute('aria-expanded', 'false');
   input.setAttribute('aria-controls', slashList.id);
   const meta = el('div', 'cc-meta');
-  const hint = el('div', 'cc-hint', t('chat.hintShort'));
-  hint.setAttribute('aria-hidden', 'true');   // the full sentence is the textarea's title and its description for assistive tech
-  meta.append(usageEl, hint);
+  meta.appendChild(bar);
   compose.append(jumpBtn, wrap, meta);
 
   root.append(head, log, alertEl, compose);
   p.el.appendChild(root);
 
   const cs = {
-    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, alertBack, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, compose, box, wrap, meta, usageEl, usageVals,
+    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, alertBack, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, compose, box, wrap, meta, bar, barParts, modelSeg,
     menuOpen: false, menuOff: null,
     slash: { open: false, items: [], index: 0, seq: 0, pop: slashPop, list: slashList },   // the slash popup: see chatSkinSlashRefresh
     swTerm, swChat,
@@ -7598,6 +7663,7 @@ function chatSkinBuild(id, p) {
   };
   p.chatSkin = cs;
   chatStyleSkin(cs);
+  chatSkinApplyBarStyle(cs);
   chatPaintUsage(cs);
 
   // follow the tail unless the operator scrolled up to read — and resume once they return to it
@@ -7651,6 +7717,7 @@ function chatSkinBuild(id, p) {
     chatSkinInterrupt(id, p);
   });
   sendBtn.addEventListener('click', () => chatSkinSendNow(id, p));
+  modelSeg.addEventListener('click', () => chatSkinModelMenu(id, p));
   stopBtn.addEventListener('click', () => chatSkinInterrupt(id, p));
   swTerm.addEventListener('click', () => chatSkinSetView(id, 'term'));
   alertBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
@@ -7788,6 +7855,7 @@ function chatSkinControls(p) {
   cs.stopBtn.hidden = !working;
   cs.sendBtn.hidden = working && !cs.input.value.trim();
   cs.sendBtn.disabled = !cs.input.value.trim() || !!cs.promptKind || !!p.exited;
+  cs.modelSeg.disabled = working || !!cs.promptKind || !!p.exited;   // see chatSkinModelMenu
   const showWork = working && !cs.promptKind;
   /* A tab renamed mid-session (/rename) changes who is talking: follow it on the next repaint. */
   const who = chatSkinWho(p);
@@ -8649,12 +8717,24 @@ function chatSkinSendNow(id, p) {
   cs.input.value = '';
   chatSkinAutosize(cs);
   chatSkinSlashClose(cs);
+  chatSkinSubmit(id, p, text);
+}
+/* The one way a line of text reaches the pty from the chat view: the typed message and the model button both end here. */
+function chatSkinSubmit(id, p, text) {
+  const cs = p.chatSkin;
   cs.lastSubmitAt = Date.now();
   cs.stick = true;
   submitToPty(id, text);   // the one chokepoint: text, then CR as a separate write (slash commands go the same way)
   // /clear and /resume swap the session under this pty: look again shortly after, so the view follows it
   if (text.startsWith('/')) setTimeout(() => { if (panes.get(id) === p && p.view === 'chat') { p.chatSkin.idChecks = 0; chatSkinRecheckId(id, p); } }, 2500);
   chatSkinControls(p);
+}
+/* The model in the bar asks for /model, exactly as if it had been typed: Claude Code answers with its own picker and the
+   dialog card draws it. Not while a turn runs or a dialog is open (a typed line would land in the wrong place). */
+function chatSkinModelMenu(id, p) {
+  const cs = p.chatSkin;
+  if (!cs || p.exited || cs.promptKind || chatSkinWorking(p)) return;
+  chatSkinSubmit(id, p, '/model');
 }
 /* Esc cuts a running turn, exactly as in the terminal. Only while something is running: an idle
    Esc is not harmless in Claude Code (a second one opens the rewind menu). */
