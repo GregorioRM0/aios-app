@@ -7376,7 +7376,7 @@ function chatSkinBuild(id, p) {
   const dots = el('span', 'cw-dots');
   dots.setAttribute('aria-hidden', 'true');
   dots.append(el('i'), el('i'), el('i'));
-  workEl.append(dots, el('span', 'cw-t', t('chat.skin.working')));
+  workEl.append(dots, el('span', 'cw-t', t('chat.skin.working', { name: chatSkinWho(p) })));
   workEl.hidden = true;
   workEl.setAttribute('role', 'status');
   log.appendChild(workEl);
@@ -7411,8 +7411,8 @@ function chatSkinBuild(id, p) {
   const box = el('div', 'cc-box');
   const input = el('textarea', 'chat-input');
   input.rows = 1;
-  input.placeholder = t('chat.placeholder');
-  input.setAttribute('aria-label', t('chat.placeholder'));
+  input.placeholder = t('chat.placeholder', { name: chatSkinWho(p) });
+  input.setAttribute('aria-label', input.placeholder);
   input.title = t('chat.inputHint');   // the key hints live in the tooltip and in the faint line under the card: a long placeholder wraps and clips in a narrow dock
   const chips = el('div', 'cc-chips');
   for (const [k, label, kind] of CHAT_USAGE_FIELDS) {
@@ -7442,7 +7442,7 @@ function chatSkinBuild(id, p) {
   p.el.appendChild(root);
 
   const cs = {
-    id, root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, usageEl, usageVals,
+    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, usageEl, usageVals,
     menuOpen: false, menuOff: null,
     swTerm, swChat,
     items: new Map(),            // transcript uuid -> { node, role, … }
@@ -7630,13 +7630,23 @@ function chatSkinControls(p) {
   cs.sendBtn.hidden = working && !cs.input.value.trim();
   cs.sendBtn.disabled = !cs.input.value.trim() || !!cs.promptKind || !!p.exited;
   const showWork = working && !cs.promptKind;
+  /* A tab renamed mid-session (/rename) changes who is talking: follow it on the next repaint. */
+  const who = chatSkinWho(p);
+  if (cs.who !== who) {
+    cs.who = who;
+    cs.input.placeholder = t('chat.placeholder', { name: who });
+    cs.input.setAttribute('aria-label', cs.input.placeholder);
+    const wt = cs.workEl.querySelector('.cw-t');
+    if (wt) wt.textContent = t('chat.skin.working', { name: who });
+  }
   if (cs.workEl.hidden === showWork) { cs.workEl.hidden = !showWork; if (showWork) chatSkinScroll(cs); }   // appearing pushes the end of the log down: follow it if the view is following the tail
 }
 function chatSkinPaintAlert(p) {
   const cs = p.chatSkin;
   let text = '';
-  if (cs.promptKind) text = t('chat.skin.prompt.' + cs.promptKind);
-  else if (cs.stalled) text = t('chat.skin.stalled');
+  const name = chatSkinWho(p);
+  if (cs.promptKind) text = t('chat.skin.prompt.' + cs.promptKind, { name });
+  else if (cs.stalled) text = t('chat.skin.stalled', { name });
   cs.alertEl.hidden = !text;
   cs.alertText.textContent = text;
   cs.alertEl.classList.toggle('prompt', !!cs.promptKind);
@@ -7662,7 +7672,7 @@ function chatSkinPaintState(p) {
   const code = cs.errorCode || '?';
   const key = 'chat.skin.state.' + kind;
   cs.stateEl.dataset.kind = kind;
-  cs.stateTitle.textContent = t(key + '.title');
+  cs.stateTitle.textContent = t(key + '.title', { name: chatSkinWho(p) });
   cs.stateText.textContent = t(key + '.text', { code });
   cs.stateBtn.hidden = kind !== 'error';
   if (cs.stateKind !== kind) {
@@ -7907,11 +7917,15 @@ function chatSkinRegroup(cs) {
   }
   flush();
 }
+/* The session's own name stands in for "Claude" across the chat view: the operator runs several
+   named sessions side by side (the primary, agents, rituals) and wants to see which one is talking.
+   An unnamed pane falls back to the product name. */
+function chatSkinWho(p) { const n = p && (p.name || '').trim(); return n && n !== 'terminal' ? n : 'Claude'; }
 function chatSkinMakeItem(role, cs) {
   if (role === 'user' || role === 'assistant') {
     const row = el('div', 'chat-row who-' + (role === 'user' ? 'user' : 'claude'));
     const bubble = el('div', 'chat-bubble');
-    row.append(el('div', 'chat-who', t(role === 'user' ? 'chat.you' : 'chat.claude')), bubble);
+    row.append(el('div', 'chat-who', role === 'user' ? t('chat.you') : t('chat.claude', { name: chatSkinWho(cs.pane) })), bubble);
     const body = role === 'assistant' ? el('div', 'chat-md') : bubble;
     if (role === 'assistant') bubble.appendChild(body);
     return { node: row, body, role };

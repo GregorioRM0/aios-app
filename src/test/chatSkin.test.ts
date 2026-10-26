@@ -747,3 +747,23 @@ test('no coral in a status role: the cards and marks take their hue from --st-*,
   // control
   assert.match('.cs-alert { --sc: var(--accent); }', /--accent/);
 });
+
+test('the chat view names the session that is talking, never a hardcoded "Claude"', () => {
+  /* The operator runs several named sessions side by side and wants to see which one answers:
+     the placeholder, the working line, the attention cards and the connecting card all carry the
+     pane's name. "Claude" survives only as the fallback for an unnamed pane. */
+  const keys = ['chat.claude', 'chat.placeholder', 'chat.skin.working', 'chat.skin.stalled',
+    'chat.skin.prompt.permission', 'chat.skin.prompt.trust', 'chat.skin.prompt.select',
+    'chat.skin.prompt.question', 'chat.skin.prompt.other', 'chat.skin.state.connecting.title'];
+  for (const lang of ['en', 'es', 'pt-br']) {
+    const loc = JSON.parse(fs.readFileSync(`src/i18n/locales/${lang}.json`, 'utf8'));
+    for (const k of keys) {
+      assert.match(loc[k], /\{name\}/, `${lang} ${k} must name the session`);
+      assert.doesNotMatch(loc[k], /Claude/, `${lang} ${k} still says Claude`);
+    }
+  }
+  const src = fs.readFileSync('renderer/app.js', 'utf8');
+  assert.match(src, /function chatSkinWho\(p\)/, 'one helper decides the name');
+  assert.match(src, /t\('chat\.placeholder', \{ name: (chatSkinWho\(p\)|who) \}\)/, 'the composer placeholder carries the name');
+  assert.match(src, /t\('chat\.skin\.prompt\.' \+ cs\.promptKind, \{ name \}\)/, 'the attention card carries the name');
+});
