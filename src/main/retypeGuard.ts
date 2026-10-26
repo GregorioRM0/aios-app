@@ -16,3 +16,15 @@ import { verifyVerdict } from '../core/sendQueue';
 export function landedBeforeRetype(typedOnce: boolean, before: number, now: number): boolean {
   return typedOnce && verifyVerdict(before, now) !== 'pending';
 }
+
+/**
+ * #81 (Luigi, 26 Oct: "sessions jump in" while he types). Is the operator writing in the target's
+ * pane? The renderer reports its own keystrokes: composing = keys since the last Enter / Ctrl-C /
+ * Ctrl-U; `at` = the last key. A bus message is never typed into a draft (it lands inside it), so
+ * the bus treats a composing target like a busy one: it holds, through its own budgets and
+ * readiness checks, and never types from anywhere else.
+ */
+export const COMPOSE_QUIET_MS = 8000;
+export function operatorComposing(rec: { composing: boolean; at: number } | undefined, now: number): boolean {
+  return !!rec && (rec.composing || now - rec.at < COMPOSE_QUIET_MS);
+}

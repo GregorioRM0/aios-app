@@ -90,6 +90,8 @@ contextBridge.exposeInMainWorld('glassShell', {
   /* AI-66 pt3 — the renderer tells the bus whether a send actually landed, so a request that
      cannot be delivered here is retired at once instead of waiting out a verification window. */
   busSendResult: (name: string, ok: boolean, reason: string): void => { ipcRenderer.send('bus:sendResult', { name, ok, reason }); },
+  /* #81 — the operator is writing in this session's pane: the bus holds its message (commandBus). */
+  busComposing: (name: string, composing: boolean): void => { ipcRenderer.send('bus:composing', { name, composing }); },
   vaultRoot: (): Promise<string | null> => ipcRenderer.invoke('shell:vaultRoot'),
   fsWrite: (p: string, content: string): Promise<boolean> => ipcRenderer.invoke('fs:write', p, content),
   setupCheck: (): Promise<{ id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[]> => ipcRenderer.invoke('setup:check'),
