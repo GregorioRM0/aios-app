@@ -12,7 +12,7 @@ import { operatorComposing, COMPOSE_QUIET_MS, COMPOSE_STALE_MS } from '../main/r
 
 const app = fs.readFileSync('renderer/app.js', 'utf8');
 const bus = fs.readFileSync('src/main/commandBus.ts', 'utf8');
-const fn = /function noteOperatorKeys\(p, d\) \{[\s\S]*?\n\}/.exec(app)?.[0] ?? '';
+const fn = (/const TERM_REPLY = [^\n]+/.exec(app)?.[0] ?? '') + '\n' + (/function noteOperatorKeys\(p, d\) \{[\s\S]*?\n\}/.exec(app)?.[0] ?? '');
 
 function keys() {
   const sent: Array<[string, boolean]> = [];
@@ -102,4 +102,14 @@ test('a draft report goes stale; an ended pane clears its draft', () => {
 
 test('an earlier copy that landed is found before any draft hold or its timeout', () => {
   assert.ok(bus.indexOf('landedBeforeRetype(!!firstTypedAt') < bus.indexOf('if (operatorComposing(composing.get'));
+});
+
+test('terminal replies (focus, cursor position, device attributes, mouse) never make a draft', () => {
+  const { note } = keys(); const p: Record<string, unknown> = { name: 'a' };
+  for (const r of ['\x1b[I', '\x1b[O', '\x1b[12;40R', '\x1b[?1;2c', '\x1b[>0;10;1c', '\x1b]11;rgb:0000/0000/0000\x07', '\x1b[<0;10;5M', '\x1b[?2004;1$y']) {
+    note(p, r);
+    assert.notEqual(p.composing, true, JSON.stringify(r));
+  }
+  assert.equal(p.lastKeyAt, undefined, 'and they do not count as a key');
+  note(p, 'x'); assert.equal(p.composing, true);
 });
