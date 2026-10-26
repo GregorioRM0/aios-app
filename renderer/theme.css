@@ -1835,6 +1835,30 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cc-stop:hover { background: var(--chat-row-hover); }
 .cc-send:focus-visible, .cc-stop:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 2px; }
 .cc-wrap { position: relative; }
+/* ── the slash-command popup: floats over the end of the log, right above the card, as wide as the card ──
+   Neutral like every other popover here (no coral): the highlighted row is a step of tone, not a colour. */
+.cc-slash { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 7; display: flex; flex-direction: column; box-sizing: border-box;
+            max-height: min(332px, 52vh); border-radius: 14px; overflow: hidden;
+            background: var(--chat-tip-bg); border: 1px solid var(--chat-composer-line); box-shadow: var(--chat-pop); }
+.csl-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 5px; overscroll-behavior: contain;
+            display: grid; grid-template-columns: fit-content(15em) fit-content(9em) minmax(0, 1fr) auto; column-gap: 12px; align-content: start; }   /* one set of columns for every row, so the descriptions line up */
+.csl-row { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: baseline; padding: 6px 10px; border-radius: 9px; cursor: pointer; font-size: 12.5px; line-height: 1.4; }
+.csl-row.on { background: var(--chat-row-hover); box-shadow: inset 0 0 0 1px var(--line); }
+.csl-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.csl-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.csl-desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtle); }
+.csl-row.on .csl-desc { color: var(--ink); }
+.csl-tag { align-self: center; justify-self: end; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--faint); font-size: 10px; line-height: 16px; }
+.csl-foot { flex: 0 0 auto; padding: 7px 14px 8px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10.5px; letter-spacing: .01em; }
+/* a narrow pane has no room for four columns: name and usage on the first line, what it does under them */
+@container (max-width: 480px) {
+  .csl-list { display: block; }
+  .csl-row { display: flex; flex-wrap: wrap; gap: 0 8px; }
+  .csl-hint { flex: 0 1 auto; max-width: 60%; }
+  .csl-desc { flex: 1 1 100%; order: 3; }
+  .csl-tag { margin-left: auto; }
+  .csl-foot { display: none; }
+}
 /* Under the card: the meters on the left, the keys hint on the right. The hint is for the moment the operator is typing,
    so it only shows while the caret is in the box (the full sentence stays in the textarea's tooltip). */
 .cc-meta { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; margin-top: 4px; padding: 0 2px; }

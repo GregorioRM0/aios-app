@@ -590,6 +590,114 @@
         "await ctx.sleep(300);",
         "chatSkinTip(ctx.$$('.chat-usage .cu')[1], true);"
       ]
+    },
+    {
+      "name": "slash-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.cs.input.value = \"/\";",
+        "ctx.cs.input.focus();",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "chatSkinSlashShow(ctx.cs, [{\"name\": \"deploy-staging\", \"description\": \"Push the branch to the staging environment\", \"argumentHint\": \"[branch]\", \"source\": \"project\"}, {\"name\": \"release-check\", \"description\": \"Run the pre-release checklist\", \"argumentHint\": \"<version>\", \"source\": \"project\"}, {\"name\": \"standup\", \"description\": \"Draft today's stand-up from yesterday's notes\", \"source\": \"user\"}, {\"name\": \"weekly:plan\", \"description\": \"Plan the week from the open threads\", \"argumentHint\": \"[focus]\", \"source\": \"plugin\", \"plugin\": \"weekly\"}, {\"name\": \"weekly:review\", \"description\": \"Review what shipped and what slipped\", \"source\": \"plugin\", \"plugin\": \"weekly\"}, {\"name\": \"clear\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.clear\", \"argumentHint\": \"[name]\", \"source\": \"builtin\"}, {\"name\": \"compact\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.compact\", \"argumentHint\": \"<optional custom summarization instructions>\", \"source\": \"builtin\"}, {\"name\": \"help\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.help\", \"source\": \"builtin\"}, {\"name\": \"init\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.init\", \"source\": \"builtin\"}, {\"name\": \"model\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.model\", \"argumentHint\": \"[model]\", \"source\": \"builtin\"}, {\"name\": \"resume\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.resume\", \"argumentHint\": \"[conversation id or search term]\", \"source\": \"builtin\"}]);",
+        "chatSkinSlashMove(ctx.cs, 2, true);"
+      ]
+    },
+    {
+      "name": "slash-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.cs.input.value = \"/\";",
+        "ctx.cs.input.focus();",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "chatSkinSlashShow(ctx.cs, [{\"name\": \"deploy-staging\", \"description\": \"Push the branch to the staging environment\", \"argumentHint\": \"[branch]\", \"source\": \"project\"}, {\"name\": \"release-check\", \"description\": \"Run the pre-release checklist\", \"argumentHint\": \"<version>\", \"source\": \"project\"}, {\"name\": \"standup\", \"description\": \"Draft today's stand-up from yesterday's notes\", \"source\": \"user\"}, {\"name\": \"weekly:plan\", \"description\": \"Plan the week from the open threads\", \"argumentHint\": \"[focus]\", \"source\": \"plugin\", \"plugin\": \"weekly\"}, {\"name\": \"weekly:review\", \"description\": \"Review what shipped and what slipped\", \"source\": \"plugin\", \"plugin\": \"weekly\"}, {\"name\": \"clear\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.clear\", \"argumentHint\": \"[name]\", \"source\": \"builtin\"}, {\"name\": \"compact\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.compact\", \"argumentHint\": \"<optional custom summarization instructions>\", \"source\": \"builtin\"}, {\"name\": \"help\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.help\", \"source\": \"builtin\"}, {\"name\": \"init\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.init\", \"source\": \"builtin\"}, {\"name\": \"model\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.model\", \"argumentHint\": \"[model]\", \"source\": \"builtin\"}, {\"name\": \"resume\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.resume\", \"argumentHint\": \"[conversation id or search term]\", \"source\": \"builtin\"}]);",
+        "chatSkinSlashMove(ctx.cs, 3, true);"
+      ]
+    },
+    {
+      "name": "slash-filter-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.cs.input.value = \"/co\";",
+        "ctx.cs.input.focus();",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "chatSkinSlashShow(ctx.cs, [{\"name\": \"compact\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.compact\", \"argumentHint\": \"<optional custom summarization instructions>\", \"source\": \"builtin\"}, {\"name\": \"config\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.config\", \"argumentHint\": \"key=value\", \"source\": \"builtin\"}, {\"name\": \"context\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.context\", \"argumentHint\": \"[all]\", \"source\": \"builtin\"}, {\"name\": \"copy\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.copy\", \"source\": \"builtin\"}]);",
+        "chatSkinSlashMove(ctx.cs, 1, true);"
+      ]
+    },
+    {
+      "name": "slash-filter-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.cs.input.value = \"/co\";",
+        "ctx.cs.input.focus();",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "chatSkinSlashShow(ctx.cs, [{\"name\": \"compact\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.compact\", \"argumentHint\": \"<optional custom summarization instructions>\", \"source\": \"builtin\"}, {\"name\": \"config\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.config\", \"argumentHint\": \"key=value\", \"source\": \"builtin\"}, {\"name\": \"context\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.context\", \"argumentHint\": \"[all]\", \"source\": \"builtin\"}, {\"name\": \"copy\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.copy\", \"source\": \"builtin\"}]);",
+        "chatSkinSlashMove(ctx.cs, 0, true);"
+      ]
+    },
+    {
+      "name": "slash-live-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.cs.input.focus();",
+        "ctx.cs.input.value = '/comp';",
+        "ctx.cs.input.dispatchEvent(new Event('input', { bubbles: true }));",
+        "await ctx.sleep(600);"
+      ]
+    },
+    {
+      "name": "slash-narrow-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = '400px'; ctx.p.el.style.alignSelf = 'flex-start';",
+        "await ctx.sleep(300);",
+        "ctx.cs.input.value = \"/\";",
+        "ctx.cs.input.focus();",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "chatSkinSlashShow(ctx.cs, [{\"name\": \"deploy-staging\", \"description\": \"Push the branch to the staging environment\", \"argumentHint\": \"[branch]\", \"source\": \"project\"}, {\"name\": \"release-check\", \"description\": \"Run the pre-release checklist\", \"argumentHint\": \"<version>\", \"source\": \"project\"}, {\"name\": \"standup\", \"description\": \"Draft today's stand-up from yesterday's notes\", \"source\": \"user\"}, {\"name\": \"weekly:plan\", \"description\": \"Plan the week from the open threads\", \"argumentHint\": \"[focus]\", \"source\": \"plugin\", \"plugin\": \"weekly\"}, {\"name\": \"weekly:review\", \"description\": \"Review what shipped and what slipped\", \"source\": \"plugin\", \"plugin\": \"weekly\"}, {\"name\": \"clear\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.clear\", \"argumentHint\": \"[name]\", \"source\": \"builtin\"}, {\"name\": \"compact\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.compact\", \"argumentHint\": \"<optional custom summarization instructions>\", \"source\": \"builtin\"}, {\"name\": \"help\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.help\", \"source\": \"builtin\"}, {\"name\": \"init\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.init\", \"source\": \"builtin\"}, {\"name\": \"model\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.model\", \"argumentHint\": \"[model]\", \"source\": \"builtin\"}, {\"name\": \"resume\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.resume\", \"argumentHint\": \"[conversation id or search term]\", \"source\": \"builtin\"}]);",
+        "chatSkinSlashMove(ctx.cs, 1, true);"
+      ]
+    },
+    {
+      "name": "slash-narrow-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = '400px'; ctx.p.el.style.alignSelf = 'flex-start';",
+        "await ctx.sleep(300);",
+        "ctx.cs.input.value = \"/co\";",
+        "ctx.cs.input.focus();",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "chatSkinSlashShow(ctx.cs, [{\"name\": \"compact\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.compact\", \"argumentHint\": \"<optional custom summarization instructions>\", \"source\": \"builtin\"}, {\"name\": \"config\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.config\", \"argumentHint\": \"key=value\", \"source\": \"builtin\"}, {\"name\": \"context\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.context\", \"argumentHint\": \"[all]\", \"source\": \"builtin\"}, {\"name\": \"copy\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.copy\", \"source\": \"builtin\"}]);",
+        "chatSkinSlashMove(ctx.cs, 0, true);"
+      ]
     }
   ]
 }

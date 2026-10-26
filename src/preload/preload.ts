@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 // types only: nothing from core is bundled into the preload
 import type { ChatStatus } from '../core/chatEvents';
+import type { SlashCommand } from '../core/slashCommands';
 import type { ChatItem } from '../core/transcriptChat';
 import type { TuiPromptKind } from '../core/tuiPrompt';
 
@@ -58,6 +59,8 @@ contextBridge.exposeInMainWorld('glassShell', {
   chatSkinScreen: (paneId: number, text: string): void => { ipcRenderer.send('chatSkin:screen', paneId, text); },
   onChatSkinEvent: (cb: (ev: ChatSkinEvent) => void): void => { ipcRenderer.on('chatSkin:event', (_e, ev) => cb(ev)); },
   chatStatus: (): Promise<ChatStatus> => ipcRenderer.invoke('chat:status'),
+  /* The chat composer's slash popup: the rows for what is in the box (built-in, project, user and plugin commands, ranked), [] for no popup. */
+  slashCommands: (cwd: string | null, text: string): Promise<SlashCommand[]> => ipcRenderer.invoke('slashCommands:list', cwd, text),
   ptyWrite: (id: number, data: string) => ipcRenderer.send('pty:write', { id, data }),
   programStatus: (sessionId: string, data: string, at: number) => ipcRenderer.send('pty:programStatus', { sessionId, data, at }),
   paneSessions: (ids: string[]) => ipcRenderer.send('panes:sessions', ids),

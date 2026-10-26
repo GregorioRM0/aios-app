@@ -692,8 +692,10 @@ guarded('Esc closes the settings menu and does NOT cut the turn: its listener ru
     const b = fnBody(slice(src), 'chatSkinBuild');
     const menuAt = b.indexOf("e.key !== 'Escape' || !cs.menuOpen");
     const intrAt = b.indexOf('chatSkinInterrupt(id, p);\n  });');
-    return menuAt > 0 && intrAt > menuAt && /stopImmediatePropagation\(\)/.test(b.slice(menuAt, intrAt))
-      && /chatSkinMenu\(cs, false, true\)/.test(b.slice(menuAt, intrAt))
+    const nextAt = b.indexOf("e.key !== 'Escape' || !cs.slash.open");   // the popup's own Esc listener follows the menu's: the stop must be IN the menu's
+    const menuEnd = nextAt > menuAt ? nextAt : intrAt;
+    return menuAt > 0 && intrAt > menuAt && /stopImmediatePropagation\(\)/.test(b.slice(menuAt, menuEnd))
+      && /chatSkinMenu\(cs, false, true\)/.test(b.slice(menuAt, menuEnd))
       && /pointerdown/.test(fnBody(slice(src), 'chatSkinMenu')) && /removeEventListener\('pointerdown'/.test(fnBody(slice(src), 'chatSkinMenu'));
   },
   (src) => src.replace('e.preventDefault(); e.stopImmediatePropagation();', 'e.preventDefault();'));
@@ -951,7 +953,7 @@ guarded('the meters left the header: the usage row is built into the compose blo
     const head = /head\.append\((.*)\);/.exec(b)?.[1] ?? '';
     return head.length > 0 && !/usageEl|chat-usage/.test(head) && /sw, el\('span', 'cs-fill'\), gear, menu/.test(head)
       && /meta\.append\(usageEl, hint\)/.test(b) && /compose\.append\(jumpBtn, wrap, meta\)/.test(b)
-      && b.indexOf('wrap.appendChild(box)') > 0 && b.indexOf('wrap.appendChild(box)') < b.indexOf('compose.append(')
+      && b.indexOf('wrap.append(slashPop, box)') > 0 && b.indexOf('wrap.append(slashPop, box)') < b.indexOf('compose.append(')
       && !/\.cs-head \.chat-usage/.test(css);
   },
   (src) => src.replace("head.append(sw, el('span', 'cs-fill'), gear, menu);", "head.append(sw, el('span', 'cs-fill'), usageEl, gear, menu);"));
@@ -1008,4 +1010,248 @@ test('chat-shot fixture: the usage row (resting, hover tooltip on each meter, hi
   assert.match(main, /\/ResetsAt\$\/\.test\(k\) && typeof s\[k\] === 'string' && \/\^\\\+\\d\+\$\/\.test\(s\[k\]\)/, 'the driver understands them');
   // the three states of the tooltip (window usage with resets, tokens of context, no reading) are all covered
   assert.ok(fixture.streams.conversation[0].contextWindow && fixture.streams['usage-high'].some((e) => e.type === 'usage'));
+});
+
+// ── the slash-command popup ─────────────────────────────────────────────────
+
+/** A stand-in element rich enough for the popup code: attributes, classes, children, listeners. */
+class FakeNode {
+  tag: string; className = ''; textContent = ''; id = ''; hidden = false; value = ''; scrollTop = 0;
+  attrs: Record<string, string> = {}; children: FakeNode[] = []; handlers: Record<string, Array<(e: unknown) => void>> = {};
+  selection: [number, number] | null = null;
+  constructor(tag: string, cls = '', text = '') { this.tag = tag; this.className = cls; this.textContent = text; }
+  classList = {
+    toggle: (c: string, on: boolean): void => { const s = new Set(this.className.split(/\s+/).filter(Boolean)); if (on) s.add(c); else s.delete(c); this.className = [...s].join(' '); },
+  };
+  setAttribute(k: string, v: string): void { this.attrs[k] = v; }
+  removeAttribute(k: string): void { delete this.attrs[k]; }
+  appendChild(n: FakeNode): FakeNode { this.children.push(n); return n; }
+  replaceChildren(...n: FakeNode[]): void { this.children = n; }
+  addEventListener(ev: string, fn: (e: unknown) => void): void { (this.handlers[ev] ||= []).push(fn); }
+  scrollIntoView(): void { /* layout is not under test */ }
+  setSelectionRange(a: number, b: number): void { this.selection = [a, b]; }
+  focus(): void { /* focus is not under test */ }
+}
+interface SlashHarness {
+  cs: { slash: { open: boolean; items: unknown[]; index: number; seq: number; pop: FakeNode; list: FakeNode }; input: FakeNode; pane: unknown };
+  fns: { refresh: (cs: unknown, p: unknown) => void; show: (cs: unknown, rows: unknown[]) => void; move: (cs: unknown, to: number, scroll?: boolean) => void; close: (cs: unknown) => void; pick: (cs: unknown, i: number) => void; key: (cs: unknown, e: Record<string, unknown>) => boolean };
+  calls: string[]; asked: Array<[unknown, string]>; answer: (rows: unknown[]) => Promise<void>;
+}
+/** The popup's functions, from the real source, wired to fakes. `answer` resolves the pending slashCommands() call. */
+function slashHarness(src: string = skin): SlashHarness {
+  const from = src.indexOf('function chatSkinSlashRefresh(');
+  const to = src.indexOf('/* Which glyph a tool wears');
+  assert.ok(from > 0 && to > from, 'the popup block was found');
+  const calls: string[] = [];
+  const asked: Array<[unknown, string]> = [];
+  let resolve: (rows: unknown[]) => void = () => undefined;
+  const glassShell = { slashCommands: (cwd: unknown, text: string): Promise<unknown[]> => { asked.push([cwd, text]); return new Promise((r) => { resolve = r; }); }, ptyWrite: (): void => { calls.push('ptyWrite'); } };
+  const input = new FakeNode('textarea');
+  const cs = { slash: { open: false, items: [] as unknown[], index: 0, seq: 0, pop: new FakeNode('div'), list: new FakeNode('div') }, input, pane: { view: 'chat' }, promptKind: null };
+  cs.slash.pop.hidden = true;
+  cs.slash.list.id = 'cs-slash-7';
+  const make = new Function('window', 'el', 't', 'chatSkinAutosize', 'chatSkinControls',
+    `${src.slice(from, to)}\nreturn { refresh: chatSkinSlashRefresh, show: chatSkinSlashShow, move: chatSkinSlashMove, close: chatSkinSlashClose, pick: chatSkinSlashPick, key: chatSkinSlashKey };`) as
+    (w: unknown, el: (tag: string, cls?: string, text?: string) => FakeNode, t: (k: string) => string, auto: () => void, controls: () => void) => SlashHarness['fns'];
+  const fns = make({ glassShell }, (tag, cls, text) => new FakeNode(tag, cls, text), (k) => `«${k}»`, () => calls.push('autosize'), () => calls.push('controls'));
+  return { cs, fns, calls, asked, answer: async (rows) => { resolve(rows); await new Promise((r) => setTimeout(r, 0)); } };
+}
+const ROWS = [
+  { name: 'compact', description: '', descKey: 'chat.slash.cmd.compact', argumentHint: '<optional custom summarization instructions>', source: 'builtin' },
+  { name: 'deploy', description: 'Push to staging', argumentHint: '[branch]', source: 'project' },
+  { name: 'aios:today', description: 'Daily plan', source: 'plugin', plugin: 'aios' },
+];
+const keyEv = (key: string, o: Record<string, unknown> = {}): Record<string, unknown> & { prevented: boolean } => {
+  const e = { key, keyCode: key === 'Enter' ? 13 : 0, shiftKey: false, isComposing: false, altKey: false, metaKey: false, ctrlKey: false, prevented: false, preventDefault() { e.prevented = true; }, ...o };
+  return e;
+};
+
+test('slash popup, run for real: "/" asks main with the pane\'s folder, shows the rows as an accessible listbox, and a stale answer is ignored', async () => {
+  const h = slashHarness();
+  h.cs.input.value = '/';
+  (h.cs.pane as { cwd?: string }).cwd = '/work/app';
+  h.fns.refresh(h.cs, h.cs.pane);
+  assert.deepEqual(h.asked, [['/work/app', '/']], 'main is asked with the pane\'s folder and the text');
+  await h.answer(ROWS);
+  const s = h.cs.slash;
+  assert.equal(s.open, true);
+  assert.equal(s.pop.hidden, false);
+  assert.equal(s.list.children.length, 3);
+  const rows = s.list.children;
+  assert.ok(rows.every((r) => r.attrs.role === 'option' && /^cs-slash-7-\d$/.test(r.id)), 'options with ids the box can point at');
+  assert.deepEqual(rows.map((r) => r.attrs['aria-selected']), ['true', 'false', 'false']);
+  assert.equal(h.cs.input.attrs['aria-activedescendant'], rows[0].id);
+  assert.equal(h.cs.input.attrs['aria-expanded'], 'true');
+  // built-ins are described through t(); a file's description is shown as written; a project command carries its tag, a plugin's name is already the prefix
+  assert.deepEqual(rows[0].children.map((c) => c.textContent), ['/compact', '<optional custom summarization instructions>', '«chat.slash.cmd.compact»']);
+  assert.deepEqual(rows[1].children.map((c) => c.textContent), ['/deploy', '[branch]', 'Push to staging', '«chat.slash.src.project»']);
+  assert.deepEqual(rows[2].children.map((c) => c.textContent), ['/aios:today', '', 'Daily plan'], 'an empty usage cell keeps the columns aligned');
+  // a text that no longer starts with a slash closes it, and an answer that arrives late does not bring it back
+  h.cs.input.value = '/c';
+  h.fns.refresh(h.cs, h.cs.pane);
+  h.cs.input.value = 'hello';
+  h.fns.refresh(h.cs, h.cs.pane);
+  assert.equal(s.open, false);
+  await h.answer(ROWS);
+  assert.equal(s.open, false, 'the late answer for "/c" is dropped');
+  assert.equal(h.asked.length, 2, 'prose never asks main at all');
+  // an empty answer (no match, or a finished command) means no popup
+  h.cs.input.value = '/zzz';
+  h.fns.refresh(h.cs, h.cs.pane);
+  await h.answer([]);
+  assert.equal(s.open, false);
+  assert.ok(!h.calls.includes('ptyWrite'), 'nothing here ever touches the pty');
+});
+
+test('slash popup, run for real: arrows move the choice and wrap, Enter and Tab complete into the box and are CONSUMED (so Enter cannot send), Shift+Enter and IME are left alone', async () => {
+  const h = slashHarness();
+  h.cs.input.value = '/';
+  h.fns.refresh(h.cs, h.cs.pane);
+  await h.answer(ROWS);
+  const s = h.cs.slash;
+  const down = keyEv('ArrowDown');
+  assert.equal(h.fns.key(h.cs, down), true);
+  assert.equal(down.prevented, true);
+  assert.equal(s.index, 1);
+  assert.equal(h.cs.input.attrs['aria-activedescendant'], 'cs-slash-7-1');
+  h.fns.key(h.cs, keyEv('ArrowDown')); h.fns.key(h.cs, keyEv('ArrowDown'));
+  assert.equal(s.index, 0, 'wraps past the last row');
+  h.fns.key(h.cs, keyEv('ArrowUp'));
+  assert.equal(s.index, 2, 'wraps before the first row');
+  // modified or composing keys are not the popup's
+  for (const o of [{ isComposing: true }, { keyCode: 229 }, { metaKey: true }, { ctrlKey: true }, { altKey: true }]) assert.equal(h.fns.key(h.cs, keyEv('ArrowDown', o)), false, JSON.stringify(o));
+  assert.equal(h.fns.key(h.cs, keyEv('Enter', { shiftKey: true })), false, 'Shift+Enter is a newline, and a newline closes the popup');
+  assert.equal(h.fns.key(h.cs, keyEv('a')), false, 'typing is the box\'s own');
+  // Enter completes the highlighted row — consumed, nothing sent, nothing written to the pty
+  h.fns.move(h.cs, 1);
+  const enter = keyEv('Enter');
+  assert.equal(h.fns.key(h.cs, enter), true, 'Enter is consumed while the popup is open');
+  assert.equal(enter.prevented, true);
+  assert.equal(h.cs.input.value, '/deploy ', 'the command and a space, ready for its arguments');
+  assert.deepEqual(h.cs.input.selection, [8, 8], 'the caret goes to the end');
+  assert.equal(s.open, false);
+  assert.equal(h.cs.input.attrs['aria-expanded'], 'false');
+  assert.equal(h.cs.input.attrs['aria-activedescendant'], undefined);
+  assert.ok(!h.calls.includes('ptyWrite'));
+  // closed again: the same Enter is NOT consumed, so the sending listener gets it
+  assert.equal(h.fns.key(h.cs, keyEv('Enter')), false);
+  // Tab completes too
+  h.cs.input.value = '/'; h.fns.refresh(h.cs, h.cs.pane); await h.answer(ROWS);
+  assert.equal(h.fns.key(h.cs, keyEv('Tab')), true);
+  assert.equal(h.cs.input.value, '/compact ');
+  // a click completes the clicked row
+  h.cs.input.value = '/'; h.fns.refresh(h.cs, h.cs.pane); await h.answer(ROWS);
+  s.list.children[2].handlers.click[0]({});
+  assert.equal(h.cs.input.value, '/aios:today ');
+  // hover moves the choice (mousemove, not mouseover)
+  h.cs.input.value = '/'; h.fns.refresh(h.cs, h.cs.pane); await h.answer(ROWS);
+  s.list.children[1].handlers.mousemove[0]({});
+  assert.equal(s.index, 1);
+  assert.equal(s.list.children[0].handlers.mouseover, undefined);
+});
+
+guarded('Enter with the popup open completes and does NOT send: its listener is registered first and stops the event for the sending one',
+  (src) => {
+    const b = fnBody(slice(src), 'chatSkinBuild');
+    const popAt = b.indexOf("input.addEventListener('keydown', (e) => { if (chatSkinSlashKey(cs, e)) e.stopImmediatePropagation(); });");
+    const sendAt = b.indexOf('e.preventDefault();\n    chatSkinSendNow(id, p);');
+    const key = fnBody(slice(src), 'chatSkinSlashKey');
+    return popAt > 0 && sendAt > popAt
+      && /e\.key === 'Enter' \|\| e\.key === 'Tab'\) && !e\.shiftKey\) \{ e\.preventDefault\(\); chatSkinSlashPick\(cs, s\.index\); return true; \}/.test(key)
+      && !/chatSkinSendNow|submitToPty|ptyWrite/.test(key + fnBody(slice(src), 'chatSkinSlashPick'));
+  },
+  (src) => src.replace("if (chatSkinSlashKey(cs, e)) e.stopImmediatePropagation();", 'chatSkinSlashKey(cs, e);'));
+
+guarded('Esc closes the slash popup and does NOT cut the turn: its listener runs before the interrupt one and stops the event',
+  (src) => {
+    const b = fnBody(slice(src), 'chatSkinBuild');
+    const menuAt = b.indexOf("e.key !== 'Escape' || !cs.menuOpen");
+    const slashAt = b.indexOf("e.key !== 'Escape' || !cs.slash.open");
+    const intrAt = b.indexOf('chatSkinInterrupt(id, p);\n  });');
+    return menuAt > 0 && slashAt > menuAt && intrAt > slashAt
+      && /stopImmediatePropagation\(\)/.test(b.slice(slashAt, intrAt)) && /chatSkinSlashClose\(cs\)/.test(b.slice(slashAt, intrAt))
+      && !/chatSkinInterrupt/.test(b.slice(slashAt, intrAt).split('// Esc anywhere')[0]);
+  },
+  (src) => src.replace("e.preventDefault(); e.stopImmediatePropagation();\n    chatSkinSlashClose(cs);", 'e.preventDefault();\n    chatSkinSlashClose(cs);'));
+
+test('Esc with the popup open, run for real, reaches the interrupt listener never: the two listeners in registration order', () => {
+  // replay the skin's keydown listeners on `root` in the order they were registered, with a fake event that honours stopImmediatePropagation
+  const b = fnBody(skin, 'chatSkinBuild');
+  const listeners = [...b.matchAll(/root\.addEventListener\('keydown', \(e\) => \{([\s\S]*?)\n  \}\);/g)].map((m) => m[1]);
+  assert.equal(listeners.length, 3, 'menu Esc, popup Esc, interrupt');
+  const interrupted: string[] = [];
+  const run = (open: boolean): string[] => {
+    interrupted.length = 0;
+    const cs = { menuOpen: false, slash: { open }, promptKind: null };
+    const fns = listeners.map((body) => new Function('cs', 'e', 'chatSkinMenu', 'chatSkinSlashClose', 'chatSkinInterrupt', 'id', 'p', body) as (...a: unknown[]) => void);
+    let stopped = false;
+    const e = { key: 'Escape', isComposing: false, preventDefault() { /* */ }, stopPropagation() { /* */ }, stopImmediatePropagation() { stopped = true; } };
+    for (const fn of fns) { if (stopped) break; fn(cs, e, () => interrupted.push('menu'), () => interrupted.push('popup'), () => interrupted.push('INTERRUPT'), 1, {}); }
+    return [...interrupted];
+  };
+  assert.deepEqual(run(true), ['popup'], 'the popup takes the key; the turn keeps running');
+  assert.deepEqual(run(false), ['INTERRUPT'], 'control: with the popup closed the same key does reach the interrupt');
+});
+
+test('the slash popup wires: the box is a combobox over a listbox, input asks, send/hide/blocked close it, and the IPC is read-only with a leading-slash gate', () => {
+  const b = fnBody(skin, 'chatSkinBuild');
+  assert.match(b, /slashList\.setAttribute\('role', 'listbox'\)/);
+  assert.match(b, /input\.setAttribute\('role', 'combobox'\)/);
+  assert.match(b, /input\.setAttribute\('aria-autocomplete', 'list'\)/);
+  assert.match(b, /input\.setAttribute\('aria-controls', slashList\.id\)/);
+  assert.match(b, /slashFoot\.setAttribute\('aria-hidden', 'true'\)/, 'the footer hint is not read inside the listbox');
+  assert.match(b, /wrap\.append\(slashPop, box\)/, 'the popup floats against the card');
+  assert.match(b, /slashPop\.addEventListener\('mousedown', \(e\) => e\.preventDefault\(\)\)/, 'a press on a row keeps the caret in the box');
+  assert.match(b, /input\.addEventListener\('input', \(\) => \{ chatSkinAutosize\(cs\); chatSkinControls\(p\); chatSkinSlashRefresh\(cs, p\); \}\)/);
+  assert.match(b, /input\.addEventListener\('blur', \(\) => chatSkinSlashClose\(cs\)\)/);
+  assert.match(fnBody(skin, 'chatSkinSendNow'), /chatSkinSlashClose\(cs\)/);
+  assert.match(fnBody(skin, 'chatSkinLayout'), /if \(!on \|\| cs\.promptKind\) chatSkinSlashClose\(cs\)/);
+  // the popup only completes: nothing in it writes to the pty or submits
+  const block = skin.slice(skin.indexOf('function chatSkinSlashRefresh('), skin.indexOf('/* Which glyph a tool wears'));
+  assert.doesNotMatch(block, /ptyWrite|submitToPty|chatSkinSendNow|innerHTML/);
+  // the command rows only ever take text through textContent (el(tag, class, text))
+  assert.match(block, /el\('span', 'csl-desc', c\.descKey \? t\(c\.descKey\) : String\(c\.description \|\| ''\)\)/);
+  // main and the preload agree on the channel; main reads only, gates on a leading slash and caps the text
+  assert.match(preload, /slashCommands: \(cwd: string \| null, text: string\): Promise<SlashCommand\[\]> => ipcRenderer\.invoke\('slashCommands:list', cwd, text\)/);
+  const h = /ipcMain\.handle\('slashCommands:list'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
+  assert.match(h, /text\.length > 200 \|\| text\.charCodeAt\(0\) !== 47\) return \[\]/);
+  assert.match(h, /path\.isAbsolute\(cwd\)/);
+  assert.match(h, /slashSuggestions\(await hit\.list, text\)/);
+  assert.match(h, /aios\.claudeConfigDir\(\)[\s\S]*aios\.discoverCommands\(\)/);
+  assert.doesNotMatch(h, /writeFile|appendFile|rm\(|unlink|spawn|exec/, 'the handler only reads');
+  // control: a handler that did not gate on the slash would list commands for any text
+  assert.doesNotMatch(h.replace('text.charCodeAt(0) !== 47', 'false'), /charCodeAt\(0\) !== 47/);
+});
+
+test('the slash popup\'s CSS: neutral, above the card, scrolls, rows are options with a visible active state, narrow panes stack the description', () => {
+  const rules = skinRules(css);
+  const rule = (sel: string): string => rules.find(([s]) => s === sel)?.[1] ?? '';
+  assert.match(rule('.cc-slash'), /position: absolute[\s\S]*bottom: calc\(100% \+ 8px\)/);
+  assert.match(rule('.cc-slash'), /max-height: min\(332px, 52vh\)/);
+  assert.match(rule('.csl-list'), /overflow-y: auto/);
+  assert.match(rule('.csl-row.on'), /background: var\(--chat-row-hover\)/);
+  assert.ok(!coralUsers(css).some((s) => /csl|cc-slash/.test(s)), 'no coral in the popup');
+  assert.ok(rules.some(([s, d]) => s === '.csl-desc' && /flex: 1 1 100%/.test(d)), 'a narrow container stacks the description under the name');
+  assert.match(rule('.csl-row'), /grid-template-columns: subgrid/, 'wide rows share their columns');
+  assert.match(rule('.chatskin [hidden]') + css, /\.chatskin\[hidden\], \.chatskin \[hidden\] \{ display: none !important; \}/, 'hidden stays hidden');
+});
+
+test('the slash popup\'s sentences exist in every locale with the same placeholders', () => {
+  for (const k of ['chat.slash.label', 'chat.slash.foot', 'chat.slash.src.project', 'chat.slash.src.user']) for (const l of Object.keys(loc)) assert.ok(typeof loc[l][k] === 'string' && loc[l][k].length > 0, `${l}.json lacks ${k}`);
+  // every key the popup builds from a command (descKey) is in the main process's list: the two cannot drift
+  const keys = [...fs.readFileSync('src/core/slashCommands.ts', 'utf8').matchAll(/^  \['([a-z0-9-]+)'/gm)].map((m) => `chat.slash.cmd.${m[1]}`);
+  assert.ok(keys.length >= 60);
+  for (const l of Object.keys(loc)) assert.deepEqual(keys.filter((k) => !loc[l][k]), [], `${l}.json lacks descriptions`);
+});
+
+test('chat-shot fixture: the slash popup is shot open (all sources, filtered, narrow, and through the real IPC) in dark and light', () => {
+  const byName = (n: string): FxShot | undefined => fixture.shots.find((s) => s.name === n);
+  for (const n of ['slash-dark', 'slash-light', 'slash-filter-dark', 'slash-filter-light', 'slash-live-dark', 'slash-narrow-dark', 'slash-narrow-light']) assert.ok(byName(n), `missing shot ${n}`);
+  const js = (n: string): string => [byName(n)?.js].flat().join('\n');
+  assert.match(js('slash-dark'), /chatSkinSlashShow\(/);
+  assert.match(js('slash-live-dark'), /dispatchEvent\(new Event\('input'/, 'the live shot goes through the real input listener and the real slashCommands IPC');
+  // the hand-written rows cover every source and a built-in described through its locale key
+  const rows = JSON.parse(/chatSkinSlashShow\(ctx\.cs, (\[[\s\S]*?\])\);/.exec(js('slash-dark'))?.[1] ?? '[]') as Array<{ source: string; descKey?: string; name: string }>;
+  assert.deepEqual([...new Set(rows.map((r) => r.source))].sort(), ['builtin', 'plugin', 'project', 'user']);
+  assert.ok(rows.some((r) => r.descKey && loc.en[r.descKey]), 'built-in rows name a real description key');
 });

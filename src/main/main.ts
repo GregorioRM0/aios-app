@@ -5,6 +5,8 @@ import { withDefaultLocale } from './termLocale';
 import { createTranscriptTail, isSessionId } from './transcriptTail';
 import { createPromptMonitor, type PromptMonitor } from '../core/tuiPrompt';
 import { mergeStatus, parseStatuslinePayload } from '../core/chatEvents';
+import { builtinCommands, slashSuggestions, type SlashCommand } from '../core/slashCommands';
+import { listSlashCommands } from './slashCommandsIo';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
 import { plainText } from '../core/plainText';
 import { askSessionName, uniqueName } from '../core/sessionName';
@@ -426,6 +428,26 @@ ipcMain.handle('chatSkin:unwatch', (_e, paneId: number) => endSkin(Number(paneId
 ipcMain.handle('chat:status', async () => {
   try { return mergeStatus(undefined, parseStatuslinePayload(await fs.promises.readFile(path.join(aios.claudeConfigDir(), 'statusline-payload.json'), 'utf8'))); }
   catch { return mergeStatus(undefined, {}); }   // no file yet, or unreadable: the bar just has fewer fields
+});
+
+/* The slash-command popup in the chat composer. The renderer sends what is in the box and the pane's working
+   folder; main answers with the ranked rows, or [] when nothing should be offered (not a lone slash word, no
+   match, or the word is already a complete command). Ranking is done HERE, in the pure core module, so the
+   renderer (plain JS, no imports) never carries a second copy of the rules. The disk listing is cached for a
+   few seconds per folder: a keystroke must not walk the commands folders, but a command file the operator
+   just saved appears almost at once. Read-only; the text is capped and must start with a slash. */
+const slashCache = new Map<string, { at: number; list: Promise<SlashCommand[]> }>();
+ipcMain.handle('slashCommands:list', async (_e, cwd: unknown, text: unknown): Promise<SlashCommand[]> => {
+  if (typeof text !== 'string' || text.length > 200 || text.charCodeAt(0) !== 47) return [];
+  const dir = typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : null;
+  const key = dir ?? '';
+  let hit = slashCache.get(key);
+  if (!hit || Date.now() - hit.at > 5000) {
+    if (slashCache.size >= 24) slashCache.delete(slashCache.keys().next().value as string);
+    hit = { at: Date.now(), list: listSlashCommands({ configDir: aios.claudeConfigDir(), cwd: dir, aiosCommands: aios.discoverCommands() }).catch(() => builtinCommands()) };
+    slashCache.set(key, hit);
+  }
+  return slashSuggestions(await hit.list, text);
 });
 
 /* ── SMOKE: the chat view over a REAL Claude Code session, end to end ───────────────────────────

@@ -7530,7 +7530,24 @@ function chatSkinBuild(id, p) {
      against the card, not the whole compose block. Under it, the meta row: the meters on the left, and on the
      right the keys hint, which only shows while the caret is in the box. */
   const wrap = el('div', 'cc-wrap');
-  wrap.appendChild(box);
+  /* The slash-command popup floats over the end of the log, right above the card. A container (the shadow, the
+     footer line) around a listbox that holds ONLY options; the footer is a hint for sighted users and is hidden
+     from assistive tech, which hears the options and the combobox state instead. */
+  const slashPop = el('div', 'cc-slash');
+  slashPop.hidden = true;
+  const slashList = el('div', 'csl-list');
+  slashList.id = 'cs-slash-' + id;
+  slashList.setAttribute('role', 'listbox');
+  slashList.setAttribute('aria-label', t('chat.slash.label'));
+  const slashFoot = el('div', 'csl-foot', t('chat.slash.foot'));
+  slashFoot.setAttribute('aria-hidden', 'true');
+  slashPop.append(slashList, slashFoot);
+  slashPop.addEventListener('mousedown', (e) => e.preventDefault());   // a press on a row must not pull the caret out of the box
+  wrap.append(slashPop, box);
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-expanded', 'false');
+  input.setAttribute('aria-controls', slashList.id);
   const meta = el('div', 'cc-meta');
   const hint = el('div', 'cc-hint', t('chat.hintShort'));
   hint.setAttribute('aria-hidden', 'true');   // the full sentence is the textarea's title and its description for assistive tech
@@ -7543,6 +7560,7 @@ function chatSkinBuild(id, p) {
   const cs = {
     id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, compose, box, wrap, meta, usageEl, usageVals,
     menuOpen: false, menuOff: null,
+    slash: { open: false, items: [], index: 0, seq: 0, pop: slashPop, list: slashList },   // the slash popup: see chatSkinSlashRefresh
     swTerm, swChat,
     items: new Map(),            // transcript uuid -> { node, role, … }
     status: {}, model: '', ctxTokens: undefined, statusAt: 0,
@@ -7572,7 +7590,12 @@ function chatSkinBuild(id, p) {
     e.preventDefault();
     void window.glassShell.openExternal(a.getAttribute('href'));
   });
-  input.addEventListener('input', () => { chatSkinAutosize(cs); chatSkinControls(p); });
+  input.addEventListener('input', () => { chatSkinAutosize(cs); chatSkinControls(p); chatSkinSlashRefresh(cs, p); });
+  input.addEventListener('blur', () => chatSkinSlashClose(cs));
+  /* REGISTERED BEFORE the Enter listener below, and it stops the event for it: with the popup open Enter (and Tab)
+     complete the highlighted command into the box and NEVER send — the operator still reads and edits the line,
+     then sends it with a second Enter. */
+  input.addEventListener('keydown', (e) => { if (chatSkinSlashKey(cs, e)) e.stopImmediatePropagation(); });
   input.addEventListener('keydown', (e) => {
     // Enter sends, Shift+Enter breaks the line. During IME composition Enter confirms the
     // candidate, so it must never send (keyCode 229 covers engines that clear isComposing early).
@@ -7587,6 +7610,13 @@ function chatSkinBuild(id, p) {
     if (e.key !== 'Escape' || !cs.menuOpen) return;
     e.preventDefault(); e.stopImmediatePropagation();
     chatSkinMenu(cs, false, true);
+  });
+  /* Same rule for the slash popup: Esc closes it and nothing else, so the keystroke that dismisses a menu never
+     also reaches the listener below that cuts the turn Claude is in the middle of. */
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !cs.slash.open) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    chatSkinSlashClose(cs);
   });
   // Esc anywhere in the overlay cuts the running turn — the same key the TUI itself answers to
   root.addEventListener('keydown', (e) => {
@@ -7717,6 +7747,7 @@ function chatSkinLayout(p) {
   cs.root.hidden = !on;
   if (!on) chatSkinMenu(cs, false);   // a popover left open would keep a document listener alive behind a hidden view
   cs.input.disabled = !!cs.promptKind || !!p.exited;
+  if (!on || cs.promptKind) chatSkinSlashClose(cs);   // a popup left open over a hidden or blocked composer would be a ghost
   chatSkinControls(p);
   chatSkinPaintAlert(p);
   chatSkinPaintState(p);
@@ -7918,6 +7949,98 @@ function chatSkinPaintJump(cs) {
 function chatSkinAutosize(cs) {
   cs.input.style.height = 'auto';
   cs.input.style.height = Math.min(cs.input.scrollHeight, 220, Math.round(window.innerHeight * 0.4)) + 'px';   // grows with the text up to a ceiling, then scrolls
+}
+/* ── slash commands: the popup over the composer ─────────────────────────────────────────────────────────
+   Typing `/` at the very start of the box asks main (slashCommands:list) what to offer: the built-in commands,
+   the AIOS plugin's, the operator's own (~/.claude/commands), the project's (.claude/commands of this pane's
+   folder) and the installed plugins', ranked for what has been typed. Main answers [] when nothing should show
+   (not a lone slash word, no match, or the word is already a complete command), and the popup follows.
+   It only ever COMPLETES text in the box. It never sends and never writes to the pty: the line it leaves behind
+   is sent like any other, by the operator, with Enter. */
+function chatSkinSlashRefresh(cs, p) {
+  const s = cs.slash;
+  const text = cs.input.value;
+  if (text.charCodeAt(0) !== 47) { chatSkinSlashClose(cs); return; }   // only a leading slash opens it; main applies the finer rules
+  const seq = ++s.seq;
+  Promise.resolve(window.glassShell.slashCommands(p.cwd || null, text)).then((rows) => {
+    if (seq !== s.seq || cs.input.value !== text) return;   // a later keystroke already asked again, or the box moved on
+    if (!Array.isArray(rows) || !rows.length || p.view !== 'chat' || cs.promptKind) { chatSkinSlashClose(cs); return; }
+    chatSkinSlashShow(cs, rows);
+  }).catch(() => chatSkinSlashClose(cs));
+}
+/* One row per command: its name, its usage hint, what it does, and where it comes from when that is not obvious
+   (a project's or the operator's own; a plugin's name is already the prefix and a built-in needs no tag). Text from
+   command files is the operator's own, but it still only ever goes in through textContent. */
+function chatSkinSlashShow(cs, rows) {
+  const s = cs.slash;
+  s.items = rows;
+  s.index = 0;
+  const nodes = rows.map((c, i) => {
+    const row = el('div', 'csl-row');
+    row.id = s.list.id + '-' + i;
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', 'false');
+    row.appendChild(el('span', 'csl-name', '/' + c.name));
+    row.appendChild(el('span', 'csl-hint', c.argumentHint || ''));   // always present, even empty: the rows share columns (name · usage · what it does · tag)
+    row.appendChild(el('span', 'csl-desc', c.descKey ? t(c.descKey) : String(c.description || '')));
+    const tag = c.source === 'project' ? t('chat.slash.src.project') : c.source === 'user' ? t('chat.slash.src.user') : '';
+    if (tag) row.appendChild(el('span', 'csl-tag', tag));
+    row.addEventListener('mousemove', () => { if (s.index !== i) chatSkinSlashMove(cs, i, false); });   // mousemove, not mouseover: a list that scrolls under a resting pointer must not change the choice
+    row.addEventListener('click', () => chatSkinSlashPick(cs, i));
+    return row;
+  });
+  s.list.replaceChildren(...nodes);
+  s.list.scrollTop = 0;
+  s.pop.hidden = false;
+  s.open = true;
+  cs.input.setAttribute('aria-expanded', 'true');
+  chatSkinSlashMove(cs, 0, true);
+}
+function chatSkinSlashMove(cs, to, scroll) {
+  const s = cs.slash;
+  const rows = [...s.list.children];
+  if (!rows.length) return;
+  s.index = Math.max(0, Math.min(rows.length - 1, to));
+  rows.forEach((r, i) => { r.classList.toggle('on', i === s.index); r.setAttribute('aria-selected', String(i === s.index)); });
+  cs.input.setAttribute('aria-activedescendant', rows[s.index].id);
+  if (scroll) rows[s.index].scrollIntoView({ block: 'nearest' });
+}
+function chatSkinSlashClose(cs) {
+  const s = cs.slash;
+  s.seq++;   // an answer still on its way must not reopen it
+  if (!s.open && s.pop.hidden) return;
+  s.open = false;
+  s.items = [];
+  s.pop.hidden = true;
+  cs.input.setAttribute('aria-expanded', 'false');
+  cs.input.removeAttribute('aria-activedescendant');
+}
+/* Pick a row: `/name ` goes into the box (the space is where its arguments start, and the box's own "send" trims it),
+   the caret goes to the end and the popup closes. The text is set, not typed, so no input event fires and the popup
+   does not ask again. */
+function chatSkinSlashPick(cs, i) {
+  const c = cs.slash.items[i];
+  if (!c) return;
+  chatSkinSlashClose(cs);
+  cs.input.value = '/' + c.name + ' ';
+  cs.input.setSelectionRange(cs.input.value.length, cs.input.value.length);
+  chatSkinAutosize(cs);
+  chatSkinControls(cs.pane);
+  try { cs.input.focus({ preventScroll: true }); } catch { /* detached */ }
+}
+/* The keys of an open popup. Returns true when it used the key (the caller then stops the event, so the Enter
+   listener that sends never sees it). Modified keys and IME composition are left alone. */
+function chatSkinSlashKey(cs, e) {
+  const s = cs.slash;
+  if (!s.open || e.isComposing || e.keyCode === 229 || e.altKey || e.metaKey || e.ctrlKey) return false;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const n = s.items.length;
+    chatSkinSlashMove(cs, (s.index + (e.key === 'ArrowDown' ? 1 : -1) + n) % n, true);
+    return true;
+  }
+  if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey) { e.preventDefault(); chatSkinSlashPick(cs, s.index); return true; }
+  return false;
 }
 /* Which glyph a tool wears, by its name: what it DOES, so a column of calls scans at a glance.
    MCP and unknown tools fall through to the wrench. */
@@ -8143,6 +8266,7 @@ function chatSkinSendNow(id, p) {
   if (!text.trim()) return;
   cs.input.value = '';
   chatSkinAutosize(cs);
+  chatSkinSlashClose(cs);
   cs.lastSubmitAt = Date.now();
   cs.stick = true;
   submitToPty(id, text);   // the one chokepoint: text, then CR as a separate write (slash commands go the same way)
