@@ -955,7 +955,12 @@ test('status bar, run for real: the payload is global, so model, effort, context
   const foreign = usageCs(u, {});
   u.apply(foreign.cs, { ...payload, sessionMatch: false });
   assert.deepEqual(foreign.cs.status, { fiveHourPct: 42, sevenDayPct: 55, fiveHourResetsAt: 2e9, sevenDayResetsAt: 2e9 }, 'only the account-wide windows and their resets');
-  assert.equal(foreign.parts.effort.seg.hidden, true, 'no effort has ever been reported by this tab\'s own payload: the segment is not there (not a dash)');
+  // the effort is a button now, so it stays (the operator can choose it without knowing the current one) — but with a faint WORD, never a dash and never the other session's value
+  assert.equal(foreign.parts.effort.seg.hidden, false, 'the effort button is always there');
+  assert.equal(foreign.parts.effort.v.textContent, 'chat.bar.effortWord', 'no effort has ever been reported by this tab\'s own payload: a word, not a dash and not the foreign value');
+  assert.match(foreign.parts.effort.v.className, /\bnone\b/);
+  assert.equal(foreign.parts.effort.seg.title, 'chat.bar.effortPick');
+  assert.doesNotMatch(JSON.stringify(foreign.parts.effort), /max/, 'the foreign payload\'s effort is nowhere on the segment');
   // anything but a literal true is a no: a missing flag (an older main) and truthy look-alikes
   for (const flag of [undefined, null, 'true', 1, {}]) {
     const x = usageCs(u, {});
@@ -969,6 +974,9 @@ test('status bar, run for real: the payload is global, so model, effort, context
   assert.equal((mine.cs.status as Record<string, unknown>).contextWindow, 1000000);
   assert.equal(mine.parts.effort.seg.hidden, false);
   assert.equal(mine.parts.effort.v.textContent, 'chat.bar.effort.max');
+  assert.doesNotMatch(mine.parts.effort.v.className, /\bnone\b/);
+  assert.equal(mine.parts.effort.seg.title, 'chat.bar.effortTip{"level":"chat.bar.effort.max"}');
+  assert.equal(mine.parts.effort.seg.attrs['aria-label'], 'chat.bar.effortAria{"level":"chat.bar.effort.max"}');
   // an effort this build does not know is shown as it came, never swallowed
   const odd = usageCs(u, {});
   u.apply(odd.cs, { effort: 'ultra', sessionMatch: true });
@@ -1115,10 +1123,12 @@ guarded('the model in the bar sends /model through the same chokepoint as a type
     const s = slice(src);
     const menu = fnBody(s, 'chatSkinModelMenu');
     const submit = fnBody(s, 'chatSkinSubmit');
-    return /chatSkinSubmit\(id, p, '\/model'\)/.test(menu) && /cs\.promptKind \|\| chatSkinWorking\(p\)/.test(menu) && !/ptyWrite|ptyRun/.test(menu)
+    const blocked = fnBody(s, 'chatSkinBarBlocked');
+    return /chatSkinSubmit\(id, p, '\/model'\)/.test(menu) && /chatSkinBarBlocked\(p\)/.test(menu) && !/ptyWrite|ptyRun/.test(menu)
+      && /p\.exited/.test(blocked) && /cs\.promptKind/.test(blocked) && /chatSkinWorking\(p\)/.test(blocked)
       && /submitToPty\(id, text\)/.test(submit) && /chatSkinSubmit\(id, p, text\)/.test(fnBody(s, 'chatSkinSendNow'))
       && /modelSeg\.addEventListener\('click', \(\) => chatSkinModelMenu\(id, p\)\)/.test(fnBody(s, 'chatSkinBuild'))
-      && /cs\.modelSeg\.disabled = working \|\| !!cs\.promptKind \|\| !!p\.exited/.test(fnBody(s, 'chatSkinControls'));
+      && /const blocked = chatSkinBarBlocked\(p\);[\s\S]*cs\.modelSeg\.disabled = blocked/.test(fnBody(s, 'chatSkinControls'));
   },
   (src) => src.replace("chatSkinSubmit(id, p, '/model');", "window.glassShell.ptyWrite(id, '/model\\r');"));
 
@@ -1430,19 +1440,167 @@ test('Esc with the popup open, run for real, reaches the interrupt listener neve
   // replay the skin's keydown listeners on `root` in the order they were registered, with a fake event that honours stopImmediatePropagation
   const b = fnBody(skin, 'chatSkinBuild');
   const listeners = [...b.matchAll(/root\.addEventListener\('keydown', \(e\) => \{([\s\S]*?)\n  \}\);/g)].map((m) => m[1]);
-  assert.equal(listeners.length, 2, 'popup Esc, interrupt');
+  assert.equal(listeners.length, 3, 'effort-menu Esc, popup Esc, interrupt');
   const interrupted: string[] = [];
   const run = (open: boolean): string[] => {
     interrupted.length = 0;
-    const cs = { slash: { open }, promptKind: null };
-    const fns = listeners.map((body) => new Function('cs', 'e', 'chatSkinSlashClose', 'chatSkinInterrupt', 'id', 'p', body) as (...a: unknown[]) => void);
+    const cs = { slash: { open }, effort: { open: false }, promptKind: null };
+    const fns = listeners.map((body) => new Function('cs', 'e', 'chatSkinEffortMenu', 'chatSkinSlashClose', 'chatSkinInterrupt', 'id', 'p', body) as (...a: unknown[]) => void);
     let stopped = false;
     const e = { key: 'Escape', isComposing: false, preventDefault() { /* */ }, stopPropagation() { /* */ }, stopImmediatePropagation() { stopped = true; } };
-    for (const fn of fns) { if (stopped) break; fn(cs, e, () => interrupted.push('popup'), () => interrupted.push('INTERRUPT'), 1, {}); }
+    for (const fn of fns) { if (stopped) break; fn(cs, e, () => interrupted.push('effort'), () => interrupted.push('popup'), () => interrupted.push('INTERRUPT'), 1, {}); }
     return [...interrupted];
   };
   assert.deepEqual(run(true), ['popup'], 'the popup takes the key; the turn keeps running');
   assert.deepEqual(run(false), ['INTERRUPT'], 'control: with the popup closed the same key does reach the interrupt');
+  // the effort menu, open: Esc closes it and nothing else (the same replay with the menu's flag up)
+  const runEffort = (): string[] => {
+    interrupted.length = 0;
+    const cs = { slash: { open: false }, effort: { open: true }, promptKind: null };
+    const fns = listeners.map((body) => new Function('cs', 'e', 'chatSkinEffortMenu', 'chatSkinSlashClose', 'chatSkinInterrupt', 'id', 'p', body) as (...a: unknown[]) => void);
+    let stopped = false;
+    const e = { key: 'Escape', isComposing: false, preventDefault() { /* */ }, stopPropagation() { /* */ }, stopImmediatePropagation() { stopped = true; } };
+    for (const fn of fns) { if (stopped) break; fn(cs, e, (_cs: unknown, open: boolean) => interrupted.push('effort:' + (open ? 'open' : 'closed')), () => interrupted.push('popup'), () => interrupted.push('INTERRUPT'), 1, {}); }
+    return [...interrupted];
+  };
+  assert.deepEqual(runEffort(), ['effort:closed'], 'the effort menu takes the key; the turn keeps running');
+});
+
+guarded('Esc closes the effort menu and does NOT cut the turn: its listener is registered before the interrupt one and stops the event for it',
+  (src) => {
+    const b = fnBody(slice(src), 'chatSkinBuild');
+    const effAt = b.indexOf("e.key !== 'Escape' || !cs.effort.open");
+    const intrAt = b.indexOf('chatSkinInterrupt(id, p);\n  });');
+    const nextAt = b.indexOf("e.key !== 'Escape' || !cs.slash.open");
+    const end = nextAt > effAt ? nextAt : intrAt;
+    return effAt > 0 && intrAt > effAt && /stopImmediatePropagation\(\)/.test(b.slice(effAt, end)) && /chatSkinEffortMenu\(cs, false, true\)/.test(b.slice(effAt, end))
+      && !/chatSkinInterrupt/.test(b.slice(effAt, end));
+  },
+  (src) => src.replace('e.preventDefault(); e.stopImmediatePropagation();\n    chatSkinEffortMenu(cs, false, true);', 'e.preventDefault();\n    chatSkinEffortMenu(cs, false, true);'));
+
+// ── the effort menu ─────────────────────────────────────────────────────────
+
+/** The verified words: what the installed CLI's /effort answers to (claude 2.1.311: `Usage: /effort [low|medium|high|xhigh|max|auto]`). */
+const EFFORT_WORDS = ['low', 'medium', 'high', 'xhigh', 'max', 'auto'];
+test('the effort menu offers exactly the words the installed CLI accepts, and the command hint says the same', () => {
+  const menuList = /const CHAT_EFFORT_MENU = \[([^\]]+)\]/.exec(skin)?.[1] ?? '';
+  assert.match(menuList, /\.\.\.CHAT_EFFORTS, CHAT_EFFORT_AUTO/);
+  assert.match(skin, /const CHAT_EFFORT_AUTO = 'auto';/);
+  const efforts = /const CHAT_EFFORTS = \[([^\]]+)\]/.exec(skin)?.[1].match(/'(\w+)'/g)?.map((x) => x.slice(1, -1)) ?? [];
+  assert.deepEqual([...efforts, 'auto'], EFFORT_WORDS);
+  assert.match(read('src/core/slashCommands.ts'), /\['effort', '\[low\|medium\|high\|xhigh\|max\|auto\]'\]/, 'the slash popup shows the same levels as its argument hint');
+  // every level has a name and a one-line description in every language
+  for (const l of Object.keys(loc)) for (const w of EFFORT_WORDS) for (const k of ['effort.' + w, 'chat.effort.desc.' + w, 'chat.bar.effort.' + w]) assert.ok(loc[l][k], `${l}.json lacks ${k}`);
+  for (const l of Object.keys(loc)) for (const k of ['chat.effort.foot', 'chat.bar.effortTip', 'chat.bar.effortPick', 'chat.bar.effortAria', 'chat.bar.effortWord', 'chat.bar.effortMenu']) assert.ok(loc[l][k], `${l}.json lacks ${k}`);
+  assert.equal(loc.en['chat.bar.effortTip'].includes('{level}'), true);
+  assert.equal(loc.en['chat.bar.effortAria'].includes('{level}'), true);
+  // control: a made-up level is not in the list
+  assert.equal(EFFORT_WORDS.includes('ultra'), false);
+});
+
+guarded('choosing an effort types exactly `/effort <level>` through chatSkinSubmit, the one chokepoint — never a direct pty write',
+  (src) => {
+    const s = slice(src);
+    const pick = fnBody(s, 'chatSkinEffortPick');
+    return /chatSkinSubmit\(id, p, '\/effort ' \+ level\)/.test(pick) && !/ptyWrite|ptyRun|submitToPty/.test(pick)
+      && /CHAT_EFFORT_MENU\.includes\(level\)/.test(pick)   // only the verified words can be typed
+      && /chatSkinBarBlocked\(p\)/.test(pick)
+      && /effortPop\.addEventListener\('click'[\s\S]*?chatSkinEffortPick\(id, p, b\.dataset\.level\)/.test(fnBody(s, 'chatSkinBuild'))
+      && !/ptyWrite|ptyRun/.test(fnBody(s, 'chatSkinEffortMenu'));
+  },
+  (src) => src.replace("chatSkinSubmit(id, p, '/effort ' + level);", "window.glassShell.ptyWrite(id, '/effort ' + level + '\\r');"));
+
+guarded('the command typed for an effort is the exact word of the CLI: `/effort` plus a space plus the level',
+  (src) => /chatSkinSubmit\(id, p, '\/effort ' \+ level\)/.test(fnBody(slice(src), 'chatSkinEffortPick')),
+  (src) => src.replace("chatSkinSubmit(id, p, '/effort ' + level);", "chatSkinSubmit(id, p, '/thinking ' + level);"));
+
+guarded('the effort button is disabled under exactly the model button\'s conditions, from the same function, and an open menu closes when it becomes so',
+  (src) => {
+    const s = slice(src);
+    const ctl = fnBody(s, 'chatSkinControls');
+    const blocked = fnBody(s, 'chatSkinBarBlocked');
+    return /const blocked = chatSkinBarBlocked\(p\);/.test(ctl) && /cs\.modelSeg\.disabled = blocked/.test(ctl) && /cs\.effortSeg\.disabled = blocked/.test(ctl)
+      && /if \(blocked && cs\.effort\.open\) chatSkinEffortMenu\(cs, false\)/.test(ctl)
+      && /chatSkinBarBlocked\(p\)/.test(fnBody(s, 'chatSkinModelMenu')) && /chatSkinBarBlocked\(p\)/.test(fnBody(s, 'chatSkinEffortPick'))
+      && /chatSkinBarBlocked\(cs\.pane\)/.test(fnBody(s, 'chatSkinEffortMenu'))
+      && /p\.exited/.test(blocked) && /cs\.promptKind/.test(blocked) && /chatSkinWorking\(p\)/.test(blocked);
+  },
+  (src) => src.replace('cs.effortSeg.disabled = blocked;', 'cs.effortSeg.disabled = !!p.exited;'));
+
+test('the effort pick, run for real: it types the command, updates the segment at once, and does nothing while blocked or for a word that is not a level', () => {
+  const pick = fnBody(skin, 'chatSkinEffortPick');
+  assert.ok(pick.length > 100);
+  const run = (blocked: boolean, level: string): { typed: string[]; effort: unknown; painted: number; closed: number } => {
+    const typed: string[] = []; let painted = 0; let closed = 0;
+    const cs = { status: { effort: 'low' } as Record<string, unknown> };
+    const p = { chatSkin: cs, view: 'chat' };
+    const panes = new Map([[7, p]]);
+    const fn = new Function('chatSkinBarBlocked', 'CHAT_EFFORT_MENU', 'chatSkinEffortMenu', 'chatSkinSubmit', 'chatPaintUsage', 'chatSkinRefreshStatus', 'panes', 'setTimeout',
+      `${pick}\nreturn chatSkinEffortPick;`)(() => blocked, ['low', 'medium', 'high', 'xhigh', 'max', 'auto'], () => { closed++; }, (_id: number, _p: unknown, text: string) => typed.push(text), () => { painted++; }, () => { /* */ }, panes, () => 0) as (id: number, p: unknown, l: string) => void;
+    fn(7, p, level);
+    return { typed, effort: cs.status.effort, painted, closed };
+  };
+  const ok = run(false, 'xhigh');
+  assert.deepEqual(ok.typed, ['/effort xhigh']);
+  assert.equal(ok.effort, 'xhigh', 'optimistic: the segment shows the choice before the payload confirms it');
+  assert.equal(ok.painted, 1);
+  assert.equal(ok.closed, 1, 'the menu closes on a pick');
+  assert.deepEqual(run(false, 'auto').typed, ['/effort auto']);
+  const blockedRun = run(true, 'high');
+  assert.deepEqual(blockedRun.typed, [], 'blocked (a turn runs, a dialog is open): nothing is typed');
+  assert.equal(blockedRun.effort, 'low', 'and nothing is claimed');
+  assert.deepEqual(run(false, 'ultra').typed, [], 'a word that is not a verified level is never typed');
+  assert.deepEqual(run(false, 'high; rm -rf').typed, [], 'nor anything with text after it');
+});
+
+test('the bar\'s block rule, run for real: a running turn, an open dialog or an ended session each block; an idle live one does not', () => {
+  const fn = fnBody(skin, 'chatSkinBarBlocked');
+  assert.ok(fn.length > 60);
+  const blocked = (o: { exited?: boolean; promptKind?: string | null; working?: boolean; noSkin?: boolean }): boolean => {
+    const cs = { promptKind: o.promptKind ?? null };
+    const p = { chatSkin: o.noSkin ? null : cs, exited: !!o.exited };
+    return (new Function('chatSkinWorking', `${fn}\nreturn chatSkinBarBlocked;`)(() => !!o.working) as (p: unknown) => boolean)(p);
+  };
+  assert.equal(blocked({}), false, 'idle and live: free');
+  assert.equal(blocked({ working: true }), true, 'a turn is running');
+  assert.equal(blocked({ promptKind: 'permission' }), true, 'a dialog is open');
+  assert.equal(blocked({ exited: true }), true, 'the session ended');
+  assert.equal(blocked({ noSkin: true }), true);
+});
+
+guarded('the effort menu is built as a menu of radio items outside the clipping bar, closes on a click outside, and marks the current level',
+  (src) => {
+    const s = slice(src);
+    const b = fnBody(s, 'chatSkinBuild');
+    const m = fnBody(s, 'chatSkinEffortMenu');
+    return /effortPop\.setAttribute\('role', 'menu'\)/.test(b) && /setAttribute\('role', 'menuitemradio'\)/.test(b)
+      && /wrap\.appendChild\(effortPop\)/.test(b) && !/bar\.append[^;]*effortPop|idBox\.append[^;]*effortPop/.test(b)   // the bar clips its overflow: the menu cannot live in it
+      && /effortSeg\.setAttribute\('aria-haspopup', 'menu'\)/.test(b) && /setAttribute\('aria-expanded', String\(open\)\)/.test(m)
+      && /addEventListener\('pointerdown', away, true\)/.test(m) && /removeEventListener\('pointerdown', away, true\)/.test(m)
+      && /o\.setAttribute\('aria-checked', String\(o\.dataset\.level === now\)\)/.test(m)
+      && /effortSeg\.addEventListener\('click', \(\) => chatSkinEffortMenu\(cs, !cs\.effort\.open\)\)/.test(b)
+      && /focusout/.test(b) && /!on\) chatSkinEffortMenu\(cs, false\)/.test(fnBody(s, 'chatSkinLayout'));
+  },
+  (src) => src.replace("wrap.appendChild(effortPop);", "bar.appendChild(effortPop);"));
+
+test('the effort menu\'s look: a neutral popover with its own tokens, a tick on the current level, no hex, and the same narrow-pane rule as before', () => {
+  const rule = (sel: string): string => skinRules(css).find(([x]) => x === sel)?.[1] ?? [...css.matchAll(new RegExp(`^${sel.replace(/[.[\]]/g, '\\$&')} \\{([^}]*)\\}`, 'gm'))].map((m) => m[1]).join('');
+  const pop = rule('.cb-pop');
+  assert.match(pop, /position: absolute/);
+  assert.match(pop, /background: var\(--chat-tip-bg\)/);
+  assert.match(pop, /box-shadow: var\(--chat-pop\)/);
+  assert.match(pop, /z-index: [6-9]/);
+  assert.match(rule('.cbp-opt[aria-checked="true"]'), /background: var\(--chat-row-hover\)/);
+  assert.match(rule('.cbp-opt[aria-checked="true"] .cs-ico'), /visibility: inherit/, 'never an explicit visibility:visible (it would punch through a hidden pane)');
+  const whole = [...css.matchAll(/^\.(?:cb-pop|cbp-[a-z]+|cb-effort)[^{]*\{([^}]*)\}/gm)].map((m) => m[1]).join('\n');
+  assert.ok(whole.length > 500);
+  assert.doesNotMatch(whole, /#[0-9a-fA-F]{3,8}\b|\brgba?\(/);
+  // the segment is a button with the model's affordances: a pointer, a hover fill that keeps the divider, a focus ring
+  assert.match(css, /\.cb-effort \{ cursor: pointer; \}/);
+  assert.match(css, /\.cb-effort:hover:not\(:disabled\), \.cb-effort\[aria-expanded="true"\] \{ background-color: var\(--chat-row-hover\); \}/);
+  assert.match(css, /\.cb-effort:focus-visible \{ outline: 2px solid var\(--chat-focus\)/);
+  // the narrow-pane step is still there (the effort is the first segment to go, after the labels)
+  assert.match(css, /@container \(max-width: 410px\) \{ \.cb-effort \{ display: none; \} \}/);
 });
 
 test('the slash popup wires: the box is a combobox over a listbox, input asks, send/hide/blocked close it, and the IPC is read-only with a leading-slash gate', () => {

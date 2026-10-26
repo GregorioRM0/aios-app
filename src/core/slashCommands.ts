@@ -62,7 +62,7 @@ export const BUILTIN_COMMANDS: ReadonlyArray<readonly [string, string?, string[]
   ['desktop', undefined, ['app']],
   ['diff'],
   ['doctor', undefined, ['checkup']],
-  ['effort'],
+  ['effort', '[low|medium|high|xhigh|max|auto]'],   // from the installed CLI (2.1.311): `Usage: /effort [<levels the model has>|auto]`; xhigh and max exist only on some models
   ['exit', undefined, ['quit']],
   ['export', '[filename]'],
   ['fast', '[on|off]'],

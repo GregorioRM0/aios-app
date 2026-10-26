@@ -7246,6 +7246,13 @@ const CHAT_RESET_OF = { fiveHourPct: 'fiveHourResetsAt', sevenDayPct: 'sevenDayR
 /* Neutral below 60, amber from 60, red from 85: the amber has to leave room to act before the red says "now". */
 const CHAT_WARN_PCT = 60, CHAT_HOT_PCT = 85;
 const CHAT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+/* What the effort menu offers, and the words it types. Read from the installed CLI (claude 2.1.311), not assumed: the binary's
+   /effort handler prints "Usage: /effort [low|medium|high|xhigh|max|auto]" and answers "Effort level set to auto". The five
+   levels are its own list (filtered per model: xhigh and max do not exist on every one, which is why the menu says so and why
+   the value shown is only ever confirmed by the next payload). `auto` clears the override and goes back to the model's default.
+   Nothing outside this list may be typed. */
+const CHAT_EFFORT_AUTO = 'auto';
+const CHAT_EFFORT_MENU = [...CHAT_EFFORTS, CHAT_EFFORT_AUTO];
 const chatTokens = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(Math.round(n)));
 /* Intl wants a BCP-47 tag; the app's locale ids are en · es · pt-br. */
 const chatIntlLocale = () => { const l = window.i18n ? window.i18n.getLocale() : 'en'; return l === 'pt-br' ? 'pt-BR' : l; };
@@ -7348,15 +7355,16 @@ function chatPaintUsage(cs) {
   mp.v.classList.toggle('none', !model);
   mp.seg.title = model ? t('chat.bar.modelTip', { id: String(model) }) : t('chat.bar.modelPick');
   mp.seg.setAttribute('aria-label', t('chat.bar.modelAria', { model: model ? chatModelLabel(model) : t('chat.usage.none') }));
-  /* Effort: absent until a payload that is THIS tab's has said it. A dash would read as a failure; the segment just is not there. */
+  /* Effort: the value is only ever this tab's own (a payload with sessionMatch, or what the operator just picked here). Until
+     there is one the segment is still a button — the effort has to be choosable even when it is not known — and shows a faint
+     word, not a dash (a dash would read as a failure) and certainly not another session's value. */
   const effort = cs.status.effort;
   const ep = parts.effort;
-  ep.seg.hidden = !effort;
-  if (effort) {
-    const word = CHAT_EFFORTS.includes(String(effort)) ? t('chat.bar.effort.' + effort) : String(effort);
-    ep.v.textContent = word;
-    ep.seg.title = t('chat.usage.effort') + ': ' + word;
-  }
+  const word = effort ? (CHAT_EFFORT_MENU.includes(String(effort)) ? t('chat.bar.effort.' + effort) : String(effort)) : t('chat.bar.effortWord');
+  ep.v.textContent = word;
+  ep.v.classList.toggle('none', !effort);
+  ep.seg.title = effort ? t('chat.bar.effortTip', { level: word }) : t('chat.bar.effortPick');
+  ep.seg.setAttribute('aria-label', effort ? t('chat.bar.effortAria', { level: word }) : t('chat.bar.effortPick'));
 }
 /* Show or hide one meter's detail card. Hover and keyboard focus call it; a fixture can force it open. The card is drawn
    by CSS over the bar's own line (see .cb-tip): it never opens upward, where the text being typed is, and needs no
@@ -7399,18 +7407,45 @@ function chatSkinBuild(id, p) {
   const bar = el('div', 'chat-bar');
   bar.setAttribute('role', 'group');
   bar.setAttribute('aria-label', t('chat.bar.label', { name: chatSkinWho(p) }));
-  /* Left: what will answer. The model is a button (it asks for /model, whose own menu card does the choosing); the
-     effort is plain text, and is not drawn at all until a payload that is THIS tab's has reported it. */
+  /* Left: what will answer. The model is a button (it asks for /model, whose own menu card does the choosing); the effort is a
+     button too, but it opens a small menu of its own and types `/effort <level>`. Until a payload that is THIS tab's has
+     reported the effort the segment shows a faint word instead of a value (never the effort of another session). */
   const idBox = el('div', 'cb-id');
   const modelSeg = el('button', 'cb-model');
   modelSeg.type = 'button';
   modelSeg.append(el('span', 'cb-v none', '—'), csIcon('chevUpDown', 12));   // the chevrons say "this opens a choice"
-  const effortSeg = el('span', 'cb-effort');
-  effortSeg.hidden = true;
-  effortSeg.append(el('span', 'cb-v'));
+  const effortSeg = el('button', 'cb-effort');
+  effortSeg.type = 'button';
+  effortSeg.setAttribute('aria-haspopup', 'menu');
+  effortSeg.setAttribute('aria-expanded', 'false');
+  effortSeg.append(el('span', 'cb-v none', t('chat.bar.effortWord')), csIcon('chevUpDown', 12));
   idBox.append(modelSeg, effortSeg);
   barParts.model = { seg: modelSeg, v: modelSeg.querySelector('.cb-v') };
   barParts.effort = { seg: effortSeg, v: effortSeg.querySelector('.cb-v') };
+  /* The effort menu. It cannot be a child of the bar (the bar clips what overflows it), so it floats over the end of the log like
+     the slash popup, in the card's wrapper, and is placed under the segment by chatSkinEffortMenu. */
+  const effortPop = el('div', 'cb-pop');
+  effortPop.id = 'cb-pop-' + id;
+  effortPop.hidden = true;
+  effortPop.setAttribute('role', 'menu');
+  effortPop.setAttribute('aria-label', t('chat.bar.effortMenu'));
+  effortSeg.setAttribute('aria-controls', effortPop.id);
+  effortPop.appendChild(el('div', 'cbp-h', t('chat.usage.effort')));
+  const effortOpts = [];
+  for (const level of CHAT_EFFORT_MENU) {
+    const b = el('button', 'cbp-opt');
+    b.type = 'button';
+    b.dataset.level = level;
+    b.setAttribute('role', 'menuitemradio');
+    b.setAttribute('aria-checked', 'false');
+    const txt = el('span', 'cbp-txt');
+    txt.append(el('span', 'cbp-t', t('effort.' + level)), el('span', 'cbp-d', t('chat.effort.desc.' + level)));
+    b.append(txt, csIcon('check', 14));
+    if (level === CHAT_EFFORT_AUTO) b.classList.add('auto');   // the way back to the model's own default sits apart, under a hairline
+    effortOpts.push(b);
+    effortPop.appendChild(b);
+  }
+  effortPop.appendChild(el('div', 'cbp-f', t('chat.effort.foot')));
   /* Right: the three meters. Each is a slim bar with its number. A reading we do not have is a dash and an empty bar, never 0. It is
      focusable and answers hover AND focus with the same detail card (resets, tokens). Painted by chatPaintUsage;
      the fill is the --p custom property (0-100). */
@@ -7548,6 +7583,7 @@ function chatSkinBuild(id, p) {
   slashPop.append(slashList, slashFoot);
   slashPop.addEventListener('mousedown', (e) => e.preventDefault());   // a press on a row must not pull the caret out of the box
   wrap.append(slashPop, box);
+  wrap.appendChild(effortPop);
   input.setAttribute('role', 'combobox');
   input.setAttribute('aria-autocomplete', 'list');
   input.setAttribute('aria-expanded', 'false');
@@ -7560,7 +7596,8 @@ function chatSkinBuild(id, p) {
   p.el.appendChild(root);
 
   const cs = {
-    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateTips, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, alertBack, input, sendBtn, stopBtn, jumpBtn, compose, box, wrap, meta, bar, barParts, modelSeg,
+    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateTips, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, alertBack, input, sendBtn, stopBtn, jumpBtn, compose, box, wrap, meta, bar, barParts, modelSeg, effortSeg,
+    effort: { open: false, off: null, pop: effortPop, opts: effortOpts },   // the effort menu: see chatSkinEffortMenu
     slash: { open: false, items: [], index: 0, seq: 0, pop: slashPop, list: slashList },   // the slash popup: see chatSkinSlashRefresh
     items: new Map(),            // transcript uuid -> { node, role, … }
     status: {}, model: '', ctxTokens: undefined, statusAt: 0,
@@ -7607,6 +7644,13 @@ function chatSkinBuild(id, p) {
     e.preventDefault();
     chatSkinSendNow(id, p);
   });
+  /* Same rule for the effort menu, registered first: Esc closes it and nothing else, so it never also reaches the listener below
+     that writes a lone ESC to the pty and cuts the turn Claude is in the middle of. */
+  root.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !cs.effort.open) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    chatSkinEffortMenu(cs, false, true);
+  });
   /* Same rule for the slash popup: Esc closes it and nothing else, so the keystroke that dismisses a menu never
      also reaches the listener below that cuts the turn Claude is in the middle of. */
   root.addEventListener('keydown', (e) => {
@@ -7622,6 +7666,30 @@ function chatSkinBuild(id, p) {
   });
   sendBtn.addEventListener('click', () => chatSkinSendNow(id, p));
   modelSeg.addEventListener('click', () => chatSkinModelMenu(id, p));
+  effortSeg.addEventListener('click', () => chatSkinEffortMenu(cs, !cs.effort.open));
+  effortPop.addEventListener('click', (e) => {
+    const b = e.target instanceof Element ? e.target.closest('[data-level]') : null;
+    if (b) chatSkinEffortPick(id, p, b.dataset.level);
+  });
+  effortPop.addEventListener('keydown', (e) => {
+    // menu keys: the arrows move the focus (and wrap), Home/End jump; Enter and Space press the focused button on their own
+    const keys = { ArrowDown: 1, ArrowUp: -1 };
+    const at = effortOpts.indexOf(document.activeElement);
+    if (at < 0 || !(e.key in keys || e.key === 'Home' || e.key === 'End')) return;
+    e.preventDefault();
+    const to = e.key === 'Home' ? 0 : e.key === 'End' ? effortOpts.length - 1 : (at + keys[e.key] + effortOpts.length) % effortOpts.length;
+    for (const o of effortOpts) o.tabIndex = o === effortOpts[to] ? 0 : -1;
+    effortOpts[to].focus({ preventScroll: true });
+  });
+  /* Tab (or anything else that moves the focus out of the menu and off its button) closes it, like a click outside. Decided from
+     where the focus ENDED UP, not from the event's relatedTarget: when the whole window loses focus the event also has no target,
+     but document.activeElement is still the menu's item, and switching to another app must not dismiss a menu. */
+  effortPop.addEventListener('focusout', () => {
+    setTimeout(() => {
+      const at = document.activeElement;
+      if (cs.effort.open && !(at instanceof Node && (effortPop.contains(at) || effortSeg.contains(at)))) chatSkinEffortMenu(cs, false);
+    }, 0);
+  });
   stopBtn.addEventListener('click', () => chatSkinInterrupt(id, p));
   alertBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
   alertBack.addEventListener('click', () => { cs.promptTerm = false; chatSkinLayout(p); try { p.term.blur(); } catch { /* disposed */ } chatSkinCardFocus(cs); });
@@ -7698,6 +7766,7 @@ function chatSkinLayout(p) {
   p.el.classList.toggle('view-chat', on);
   p.el.classList.toggle('cs-strip', on && chatSkinStrip(cs));
   cs.root.hidden = !on;
+  if (!on) chatSkinEffortMenu(cs, false);   // a menu left open would keep a document listener alive behind a hidden view
   cs.input.disabled = !!cs.promptKind || !!p.exited;
   if (!on || cs.promptKind) chatSkinSlashClose(cs);   // a popup left open over a hidden or blocked composer would be a ghost
   chatSkinCardPaint(p);
@@ -7712,7 +7781,10 @@ function chatSkinControls(p) {
   cs.stopBtn.hidden = !working;
   cs.sendBtn.hidden = working && !cs.input.value.trim();
   cs.sendBtn.disabled = !cs.input.value.trim() || !!cs.promptKind || !!p.exited;
-  cs.modelSeg.disabled = working || !!cs.promptKind || !!p.exited;   // see chatSkinModelMenu
+  const blocked = chatSkinBarBlocked(p);
+  cs.modelSeg.disabled = blocked;   // see chatSkinModelMenu
+  cs.effortSeg.disabled = blocked;  // the same rule, from the same function: see chatSkinEffortPick
+  if (blocked && cs.effort.open) chatSkinEffortMenu(cs, false);   // a menu left open over a turn that just started would type into it
   const showWork = working && !cs.promptKind;
   /* A tab renamed mid-session (/rename) changes who is talking: follow it on the next repaint. */
   const who = chatSkinWho(p);
@@ -8610,8 +8682,57 @@ function chatSkinSubmit(id, p, text) {
    dialog card draws it. Not while a turn runs or a dialog is open (a typed line would land in the wrong place). */
 function chatSkinModelMenu(id, p) {
   const cs = p.chatSkin;
-  if (!cs || p.exited || cs.promptKind || chatSkinWorking(p)) return;
+  if (!cs || chatSkinBarBlocked(p)) return;
   chatSkinSubmit(id, p, '/model');
+}
+/* ONE rule for every control in the status bar that types a command into the session (the model, the effort): not while a turn
+   runs, not while a dialog is open, not once the session has ended. The disabled state, the click and the menu all ask here,
+   so the two buttons can never disagree about when typing a line is safe. */
+function chatSkinBarBlocked(p) {
+  const cs = p.chatSkin;
+  return !cs || !!p.exited || !!cs.promptKind || chatSkinWorking(p);
+}
+/* Open or close the effort menu. It floats over the end of the log (see .cb-pop), under the segment's left edge but kept inside
+   the card's width. While open, a press anywhere outside it (and outside its button) closes it; the listener lives on the
+   document only for that time. Esc is handled by the keydown listener in chatSkinBuild, which stops the event before the one
+   that cuts the running turn. */
+function chatSkinEffortMenu(cs, open, refocus) {
+  const m = cs.effort;
+  if (m.open === open) return;
+  if (open && chatSkinBarBlocked(cs.pane)) return;
+  m.open = open;
+  m.pop.hidden = !open;
+  cs.effortSeg.setAttribute('aria-expanded', String(open));
+  if (m.off) { m.off(); m.off = null; }
+  if (open) {
+    chatSkinSlashClose(cs);   // two popups over the same place would hide each other
+    const now = String(cs.status.effort || '');
+    const cur = m.opts.find((o) => o.dataset.level === now) || m.opts[0];
+    for (const o of m.opts) {
+      o.setAttribute('aria-checked', String(o.dataset.level === now));
+      o.tabIndex = o === cur ? 0 : -1;   // roving tabindex: one stop in the menu, the arrows move inside it
+    }
+    const wr = cs.wrap.getBoundingClientRect(), sr = cs.effortSeg.getBoundingClientRect();
+    m.pop.style.left = Math.max(0, Math.min(sr.left - wr.left, wr.width - m.pop.offsetWidth)) + 'px';
+    const away = (e) => { if (e.target instanceof Node && !m.pop.contains(e.target) && !cs.effortSeg.contains(e.target)) chatSkinEffortMenu(cs, false); };
+    document.addEventListener('pointerdown', away, true);
+    m.off = () => document.removeEventListener('pointerdown', away, true);
+    try { cur.focus({ preventScroll: true }); } catch { /* detached */ }
+  } else if (refocus) {
+    try { cs.effortSeg.focus({ preventScroll: true }); } catch { /* detached */ }
+  }
+}
+/* A level was chosen: ask for it exactly as if it had been typed. Claude Code answers in its own words in the log, and a level
+   the current model does not have is refused there; the segment is updated at once (optimistically) and the next payload that is
+   this tab's confirms or corrects it. Only the verified words may be typed, and only through chatSkinSubmit. */
+function chatSkinEffortPick(id, p, level) {
+  const cs = p.chatSkin;
+  if (!cs || chatSkinBarBlocked(p) || !CHAT_EFFORT_MENU.includes(level)) return;
+  chatSkinEffortMenu(cs, false, true);
+  chatSkinSubmit(id, p, '/effort ' + level);
+  cs.status.effort = level;
+  chatPaintUsage(cs);
+  setTimeout(() => { if (panes.get(id) === p && p.view === 'chat') chatSkinRefreshStatus(cs); }, 2500);   // after Claude Code has redrawn its status line
 }
 /* Esc cuts a running turn, exactly as in the terminal. Only while something is running: an idle
    Esc is not harmless in Claude Code (a second one opens the rewind menu). */
