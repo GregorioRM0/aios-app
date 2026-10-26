@@ -3914,7 +3914,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
   // drop a file/folder onto THIS terminal → insert its quoted path (not the active one:
   // the pane under the pointer is the one the operator meant)
   attachDropZone(el, (paths) => { window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' '); setActive(id); });
-  term.onData((d) => window.glassShell.ptyWrite(id, d));
+  term.onData((d) => { noteOperatorKeys(p, d); window.glassShell.ptyWrite(id, d); });
   attachPathLinks(term, cwd, id);
   /* AI-64: the session tells us its own name through the tty title. */
   /* Titles CONFIRM a session; only the REGISTRY can declare one over.
@@ -3994,6 +3994,34 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
    it lands as a newline in the composer instead of sending. That is exactly the command bus's
    `send` bug: the message arrived, but never went. A person pastes and then presses Enter,
    after the paste has closed; so do we. */
+/* #81 (26 Oct, Luigi: "sessions jump in" while he types). The pane knows only its own keystrokes,
+   so "composing" means: keys typed since the last Enter / Ctrl-C / Ctrl-U, or any key in the last
+   COMPOSE_QUIET_MS. A bus message is never typed into that draft (it would land inside it). */
+const COMPOSE_QUIET_MS = 8000;
+function noteOperatorKeys(p, d) {
+  if (!p || typeof d !== 'string' || !d) return;
+  p.lastKeyAt = Date.now();
+  if (/[\r\x03\x15]/.test(d)) p.composing = false;          // sent, interrupted or line cleared
+  else if (!/^\x1b/.test(d)) p.composing = true;             // printable text or backspace; not arrows
+}
+function operatorComposing(p, now) {
+  return !!p && (!!p.composing || (now - (p.lastKeyAt || 0)) < COMPOSE_QUIET_MS);
+}
+function holdBusSend(id, p, text) {
+  p.busHeld = p.busHeld || [];
+  if (p.busHeld.includes(text)) return;                      // already waiting: a re-type adds nothing
+  if (!operatorComposing(p, Date.now()) && !p.busHeld.length) { submitToPty(id, text); return; }
+  p.busHeld.push(text);
+  if (p.busTimer) return;
+  p.busTimer = setInterval(() => {
+    if (p.exited) { clearInterval(p.busTimer); p.busTimer = null; p.busHeld = []; return; }
+    if (operatorComposing(p, Date.now())) return;
+    const next = p.busHeld.shift();
+    if (next !== undefined) submitToPty(id, next);
+    if (!p.busHeld.length) { clearInterval(p.busTimer); p.busTimer = null; }
+  }, 1000);
+}
+
 function submitToPty(id, text) {
   if (!text) return;
   window.glassShell.ptyWrite(id, text);
@@ -6479,7 +6507,10 @@ window.glassShell.onIntent(async (m) => {
       const p = hit ? panes.get(hit[0]) : null;
       if (!p || p.exited) { window.glassShell.busSendResult(m.name, false, 'no pane by that name in this surface'); return; }
       if (!p.isSession) { window.glassShell.busSendResult(m.name, false, 'that pane is no longer running the session (its Claude exited; it is a shell now)'); return; }
-      submitToPty(hit[0], m.text);
+      /* #81 — never type into a prompt the operator is writing: hold it in this pane and type it
+         once the draft is sent or cleared (holdBusSend). One copy per text, so a re-type from the
+         bus while it waits is not queued twice. */
+      holdBusSend(hit[0], p, m.text);
       // a bus send is agent-to-agent: deliver it in the background unless the operator chose 'follow'
       if (BUS_FOCUS === 'follow') setActive(hit[0]); else markActivity(hit[0]);
       window.glassShell.busSendResult(m.name, true, '');

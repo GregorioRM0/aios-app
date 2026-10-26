@@ -21,6 +21,7 @@ import {
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
   queueTurn, stampAge, withQueuedAt, queuedAtOf, isQueuedDelivery, supersedes, type QueuedSend,
 } from '../core/sendQueue';
+import { landedBeforeRetype } from './retypeGuard';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
 import { MY_SURFACE } from './surface';
 import { needsPointer, pointerText, byteLength, isStalePayload, INLINE_LIMIT } from '../core/busPayload';
@@ -690,6 +691,12 @@ async function runSend(
       await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
       if (!fs.existsSync(heldPath)) return;
       continue;   // watch, never type again
+    }
+    /* 26 Oct: a re-type after a busy-wait must first look for the earlier copy (landedBeforeRetype). */
+    if (landedBeforeRetype(!!firstTypedAt, before, countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt))) {
+      try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+      log(`delivered → '${req.name}' (verified late, before a re-type)`);
+      return;
     }
     attempts++;
     if (!firstTypedAt) firstTypedAt = Date.now();
