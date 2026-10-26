@@ -88,25 +88,19 @@ that has ended) do not.
   end the keys hint (which shows only while the caret is in the box; the full sentence is the textarea's
   tooltip and its accessible description). The earlier design split these in two (model and effort chips
   inside the card, the meters in a row of their own), which made the card busy and the row a toolbar; one bar
-  under a quiet card reads as one answer to "what am I talking to, and how much is left". It has **three
-  looks that share one markup and one painter** (the class `bar-minimal | bar-pills | bar-strip` on the
-  compose block picks the look, so a look is CSS and nothing else):
-  - **minimal** — a thin line: labels and values with a small ring per meter. The quietest.
-  - **pills** — a capsule per metric, with a slim bar inside it. A capsule turns amber or red as a whole.
-  - **strip** — a rounded strip glued under the card, segments separated by short hairlines; the card's
-    bottom edge and the strip share one outline and one shadow, so the two read as one object.
-  The **default is `pills`**, chosen by what survives a glance at the corner of the eye: an amber or red
-  capsule and a visibly full bar say "look" without being read, where minimal's small ring asks to be read; it
-  carries the most information in the least width (the bar *is* the number, so a narrow pane drops the digits
-  and keeps the meaning); and it continues the capsule grammar the model and effort chips already had. The
-  choice is a viewing preference of the window, kept in `localStorage` as `chatStatusBarStyle` and switched
-  with `chatSkinSetBarStyle(style, persist)`; there is no row in Settings for it yet (§ 10). The model is a
+  under a quiet card reads as one answer to "what am I talking to, and how much is left". Its look is a
+  **strip**: a rounded strip glued under the card, segments separated by short hairlines, a slim bar per meter;
+  the card's bottom edge and the strip share one outline and one shadow, so the two read as one object.
+  **Decision: the strip, chosen by the operator after comparing three looks side by side** (a thin line with a
+  small ring per meter, a capsule per metric, and the strip). The other two were built, compared in the hidden
+  shots and deleted, along with the class that switched between them, the `localStorage` preference and the
+  usage ring; there is no setting for the look. The model is a
   button: it types `/model` through the same door as any other message (`chatSkinSubmit`, the only caller of
   `submitToPty`), and is disabled while a turn runs or a dialog is open.
   **Thresholds.** A meter is neutral below 60 %, `--st-warn` (amber) from 60 % and `--st-error` (a real red,
   never coral) from 85 %: the amber has to leave room to act before the red says "now". The thresholds are on
   the *percentage*, whatever number is shown (the context meter shows tokens). A reading we do not have is `—`
-  with an empty ring or bar, never `0`; the effort is *absent* rather than dashed, because a dash would read
+  with an empty bar, never `0`; the effort is *absent* rather than dashed, because a dash would read
   as a failure.
   **The detail card.** Every meter answers hover and keyboard focus (not a `title`) with a card: the window,
   the percentage used, **when it resets** (a clock time today, weekday and time otherwise, plus the two
@@ -643,7 +637,7 @@ against the operator's settings. That is the price of there being one session, a
   interrupt one and stops the event (the two listeners are replayed in registration order with a fake event);
   Enter with the popup open completes and is consumed, so it cannot send; the drop inserts the double-quoted
   path and stops the event before its early return. The status bar, the popup and the drop/paste code are
-  **run for real** from the real source against a stand-in DOM (dash and empty ring for a missing reading,
+  **run for real** from the real source against a stand-in DOM (dash and empty bar for a missing reading,
   60/85 colours, resets present or absent, a stale reset, a stale popup answer ignored, caret and spacing of
   an inserted path). `src/test/slashCommands.test.ts` covers the pure module (merge precedence, ranking,
   what the box is asking for) and `src/test/usageReader.test.ts` covers the statusline parser, the new reset
@@ -669,8 +663,8 @@ against the operator's settings. That is the price of there being one session, a
   cards. On main's side: the question and options are forwarded bounded and untouched, a moved cursor is a
   `refresh`, the adoption is sent before the item, and no transcript means no preview.
 - **Shots.** `npm run chat:shot` (hidden window) renders hand-written cases in dark and light and in narrow
-  and wide panes: the status bar in each of its three looks (at rest, narrow, each detail card forced open, hot
-  values, no readings, and a payload that is another tab's: `bar-<look>-<theme>[-narrow|-tip|-hot|-hot-tip]`,
+  and wide panes: the status bar (at rest, narrow, each detail card forced open, hot
+  values, no readings, and a payload that is another tab's: `bar-strip-<theme>[-narrow|-tip|-hot|-hot-tip]`,
   `bar-none-dark`, `bar-nomatch-dark`), dense tool rows, the slash popup (sixteen commands from every source
   at the top and scrolled, filtered, narrow, and through the real IPC), the operator's bubbles over the spacing
   scale (`bubble-*`), the empty card (`empty-*`), the drop
@@ -784,9 +778,6 @@ against the operator's settings. That is the price of there being one session, a
 - **`@` mentions** in the box (files and images arrive as quoted paths, § 2, not as attachment chips).
 - **A permission-mode picker.** The chat follows what the session already runs under.
 - **Accessibility pass** beyond the log region, the alert notice and `aria-pressed` on the switch.
-- **A row in Settings for the status-bar look.** `chatStatusBarStyle` is stored in `localStorage` and switched by
-  `chatSkinSetBarStyle`; the shell's settings page is in `src/main`, so the row is a separate change. Until it
-  exists the three looks are reachable by the fixture and the console only, and `pills` is what everyone gets.
 - **The `/` popup does not tag plugin commands.** A plugin's name is already the prefix (`weekly:plan`), so only
   the project's and the operator's own commands carry an origin word. An `aios` tag for the bundled plugin would
   be one more locale key and a `source` value; it was left out until someone misses it.
