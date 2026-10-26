@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { detectTuiPrompt, stripAnsi, createPromptMonitor, type TuiPromptKind } from '../core/tuiPrompt';
+import { detectTuiPrompt, stripAnsi, createPromptMonitor, keyChunks, KEY_DOWN, KEY_UP, type TuiPromptKind, type TuiPrompt } from '../core/tuiPrompt';
 
 const kindOf = (s: string): TuiPromptKind | null => detectTuiPrompt(s)?.kind ?? null;
 
@@ -229,4 +229,146 @@ test('the monitor keeps a bounded tail', () => {
   assert.deepEqual(seen, ['permission']);
   m.push('filler output line\n'.repeat(400)); clock.advance(20);
   assert.deepEqual(seen, ['permission', null]);
+});
+
+// ── question and options, and the key that picks each one ───────────────────
+
+const TRUST_UNNUMBERED = [
+  'Quick safety check: Is this a project you created or one you trust?',
+  '',
+  '❯ No, exit',
+  '  Yes, I trust this folder',
+  '',
+  'Enter to confirm · Esc to cancel',
+].join('\n');
+
+test('a numbered dialog carries its question and one option per row, keyed by the digit', () => {
+  const v = detectTuiPrompt(PERMISSION);
+  assert.equal(v?.question, 'Do you want to proceed?');
+  assert.deepEqual(v?.options?.map((o) => [o.n, o.selected, o.key]), [[1, true, '1'], [2, false, '2'], [3, false, '3']]);
+  assert.equal(v?.options?.[1].label, "Yes, and don't ask again for rm commands");
+  // the digit does not depend on where the cursor is: move it and the keys are the same
+  const moved = detectTuiPrompt(PERMISSION.replace('❯ 1. Yes', '  1. Yes').replace('  3. No,', '❯ 3. No,'));
+  assert.deepEqual(moved?.options?.map((o) => [o.selected, o.key]), [[false, '1'], [false, '2'], [true, '3']]);
+  // {kind, hint} is what it always was
+  assert.equal(v?.kind, 'permission');
+  assert.equal(v?.hint, 'Do you want to proceed?');
+});
+
+test('an AskUserQuestion keeps its free-text row flagged, and the question line is the model\'s', () => {
+  const v = detectTuiPrompt(QUESTION);
+  assert.equal(v?.question, 'Which approach should I take?');
+  assert.equal(v?.options?.length, 4);
+  assert.equal(v?.options?.[2].freeText, true, '"Type something." is an input row, not an answer');
+  assert.equal(v?.options?.[0].freeText, undefined);
+});
+
+test('an unnumbered menu is keyed by arrows from the cursor, then Enter', () => {
+  const v = detectTuiPrompt(TRUST_UNNUMBERED);
+  assert.equal(v?.kind, 'trust');
+  assert.deepEqual(v?.options?.map((o) => [o.n, o.label, o.selected, o.key]), [
+    [null, 'No, exit', true, '\r'],
+    [null, 'Yes, I trust this folder', false, KEY_DOWN + '\r'],
+  ]);
+  // with the cursor on the second row, the first is one step UP
+  const v2 = detectTuiPrompt(TRUST_UNNUMBERED.replace('❯ No, exit', '  No, exit').replace('  Yes, I trust', '❯ Yes, I trust'));
+  assert.deepEqual(v2?.options?.map((o) => o.key), [KEY_UP + '\r', '\r']);
+  assert.deepEqual(keyChunks(KEY_DOWN + KEY_DOWN + '\r'), [KEY_DOWN, KEY_DOWN, '\r'], 'written one piece at a time');
+  assert.deepEqual(keyChunks('2'), ['2']);
+});
+
+test('options are omitted, not guessed, when the rows cannot be read with confidence', () => {
+  // a scrolled list: the numbering does not start at 1, so a digit would pick a different row
+  const scrolled = ['Pick a theme', '', '  3. Dark', '❯ 4. Light', '  5. Auto', '', 'Enter to select · Esc to cancel'].join('\n');
+  assert.equal(kindOf(scrolled), 'select');
+  assert.equal(detectTuiPrompt(scrolled)?.options, undefined);
+  // multi-select: a digit toggles instead of submitting
+  const multi = ['Which parts?  (Select all that apply)', '', '❯ 1. Docs', '  2. Tests', '  3. Type something.', '', 'Enter to select · Esc to cancel'].join('\n');
+  assert.equal(kindOf(multi), 'question');
+  assert.equal(detectTuiPrompt(multi)?.options, undefined);
+  // an unnumbered menu with a wrapped label: the lowercase tail looks like a third row
+  const wrapped = ['Quick safety check: Is this a project you trust?', '', '❯ No, exit', '  Yes, I trust this folder and every file', '  inside it', '', 'Enter to confirm · Esc to cancel'].join('\n');
+  assert.equal(kindOf(wrapped), 'trust', 'still a dialog');
+  assert.equal(detectTuiPrompt(wrapped)?.options, undefined, 'but no buttons: the arrow count would be a guess');
+  // control: the unwrapped one has them
+  assert.equal(detectTuiPrompt(TRUST_UNNUMBERED)?.options?.length, 2);
+});
+
+// ── Yes/No offers with no numbers and no footer ─────────────────────────────
+
+const AUTO_MODE = [
+  'Make auto mode your default permission mode?',
+  '',
+  '  A safety check approves routine actions and blocks the rest.',
+  '',
+  '  ❯ Yes, set auto mode as my default permission mode',
+  '    No, keep manual approval',
+].join('\n');
+
+test('a Yes/No offer with no numbers and no footer is a dialog, with its question and options', () => {
+  const v = detectTuiPrompt(AUTO_MODE);
+  assert.equal(v?.kind, 'select');
+  assert.equal(v?.question, 'Make auto mode your default permission mode?');
+  assert.deepEqual(v?.options?.map((o) => [o.label, o.selected, o.key]), [
+    ['Yes, set auto mode as my default permission mode', true, '\r'],
+    ['No, keep manual approval', false, KEY_DOWN + '\r'],
+  ]);
+  // the TUI may leave its status line under the offer
+  assert.equal(kindOf(AUTO_MODE + '\n  ? for shortcuts'), 'select');
+  // boxed, and coloured, the way the screen snapshot arrives
+  assert.equal(kindOf(box(AUTO_MODE.split('\n')).replace(/^/gm, '\x1b[2m')), 'select');
+  // other offers of the same shape
+  assert.equal(kindOf(['Enter plan mode?', '', '❯ Yes', '  No'].join('\n')), 'select');
+  assert.equal(kindOf(['Ready to code?', '', '  ❯ Yes, clear context and start', '    No, keep planning'].join('\n')), 'select');
+  assert.equal(kindOf(['Trust this directory?', '❯ Yes, continue', '  No, exit'].join('\n')), 'select');
+});
+
+test('prose that asks the same thing, or a composer holding a Yes, is not a Yes/No dialog', () => {
+  // the question in ordinary prose, with Yes/No spelled out but no cursor rows
+  assert.equal(kindOf(['⏺ Make auto mode your default permission mode?', '', '  Yes, set it now', '  No, keep manual approval', '', '  I can do either.'].join('\n')), null);
+  // the same rows under a question but the cursor is a prompt glyph in a list with nothing to answer: only one row
+  assert.equal(kindOf(['Make auto mode your default permission mode?', '', '❯ Yes, set auto mode'].join('\n')), null);
+  // the composer holding the word "Yes" (status line under it): no No row, no question
+  assert.equal(kindOf(['─'.repeat(40), '❯ Yes', '─'.repeat(40), '  ? for shortcuts'].join('\n')), null);
+  // a Yes/No pair and a cursor, but NO question above them: wording alone is not enough
+  assert.equal(kindOf(['Some output', '', '❯ Yes, do it', '  No, skip it'].join('\n')), null);
+  // a question and cursor rows, but not Yes/No-shaped and no footer: not enough to claim a dialog
+  assert.equal(kindOf(['Which colour do you prefer?', '', '❯ Red', '  Blue'].join('\n')), null);
+  // a dialog that was answered and then followed by output
+  assert.equal(kindOf(AUTO_MODE + '\n\n⏺ Done, auto mode is on.\n\n  Nothing else to change.\n  Let me know.\n  Bye.'), null);
+});
+
+test('a normal answer with a numbered list and a question never gets options', () => {
+  const answer = ['⏺ Here is what I would do:', '', '  1. Read the config', '  2. Change the port', '  3. Restart', '', '  Do you want to proceed?'].join('\n');
+  assert.equal(detectTuiPrompt(answer), null);
+});
+
+// ── the monitor with the richer verdict ─────────────────────────────────────
+
+test('the monitor emits when the dialog changes, not on a moved cursor, and hands out the whole verdict', () => {
+  const clock = fakeClock();
+  const seen: Array<[TuiPromptKind | null, TuiPrompt | undefined]> = [];
+  const refreshed: TuiPrompt[] = [];
+  const m = createPromptMonitor({ onChange: (k, _h, p) => seen.push([k, p]), onRefresh: (p) => refreshed.push(p), debounceMs: 10, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
+  m.screen(AUTO_MODE); clock.advance(20);
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0][1]?.options?.length, 2);
+  // the same dialog repainted: nothing
+  m.screen(AUTO_MODE); clock.advance(20);
+  assert.equal(seen.length, 1);
+  // the cursor moved in the terminal: not a new dialog, but the keys changed, so the consumer is told
+  m.screen(AUTO_MODE.replace('❯ Yes', '  Yes').replace('    No,', '  ❯ No,')); clock.advance(20);
+  assert.equal(seen.length, 1, 'a moved cursor is not a new dialog');
+  assert.equal(refreshed.length, 1);
+  assert.deepEqual(refreshed[0].options?.map((o) => o.key), [KEY_UP + '\r', '\r']);
+  // the same refresh again is not repeated
+  m.screen(AUTO_MODE.replace('❯ Yes', '  Yes').replace('    No,', '  ❯ No,')); clock.advance(20);
+  assert.equal(refreshed.length, 1);
+  // same kind, different question/options: a NEW event even though the kind did not change
+  m.screen(['Enter plan mode?', '', '❯ Yes', '  No'].join('\n')); clock.advance(20);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1][1]?.question, 'Enter plan mode?');
+  // gone
+  m.screen('⏺ ok\n'.repeat(10)); clock.advance(20);
+  assert.equal(seen[2][0], null);
 });
