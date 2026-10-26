@@ -2800,3 +2800,21 @@ test('chat-shot fixture: the streams behind the folded-run shots really are a li
   assert.equal(idle.turnOpen, false);
   assert.equal((fixture.streams.conversation.find((e) => e.type === 'status') as FxEvent).effort, 'high');
 });
+
+test('v3 polish: a run in progress wears the busy hue (with the ink spinner), the first row has no gap above it, the open effort segment reads as owner', () => {
+  const rule = (sel: string, src: string): string => new RegExp(`${sel.replace(/[.[\]()+]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(src)?.[1] ?? '';
+  const busy = rule('.chat-tg.running .cg-kind', css);
+  assert.match(busy, /var\(--st-busy-ink\)/);
+  assert.match(busy, /color-mix\(in srgb, var\(--st-busy\)/);
+  assert.doesNotMatch(busy, /--accent/, 'coral never means a state');
+  assert.match(rule('.chat-tg.running .ct-spin', css), /border-top-color: var\(--st-busy-ink\)/);
+  assert.match(rule('.chat-log > .cs-state[hidden] + .chat-row', css), /margin-top: 0/);
+  assert.match(rule('.cb-effort[aria-expanded="true"], .cb-effort[aria-expanded="true"] .cb-v', css), /color: var\(--ink\)/);
+  // no hex in any of it (the token-only rule), and the spinner still has its reduced-motion fallback
+  assert.doesNotMatch(busy + rule('.chat-tg.running .ct-spin', css), /#[0-9a-fA-F]{3,8}\b/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.ct-spin \{ animation: none; \}/);
+  // controls: a coral running chip, a missing gap rule, or a lost rule are all caught
+  assert.match(busy.replace('--st-busy-ink', '--accent'), /--accent/);
+  assert.equal(rule('.chat-log > .cs-state[hidden] + .chat-row', css.replace('.cs-state[hidden] + .chat-row', '.cs-state + .chat-x')), '');
+  assert.equal(rule('.chat-tg.running .cg-kind', css.replace('.chat-tg.running .cg-kind', '.chat-tg.zzz .cg-kind')), '');
+});
