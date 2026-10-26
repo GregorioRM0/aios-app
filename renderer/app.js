@@ -3995,29 +3995,34 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
    `send` bug: the message arrived, but never went. A person pastes and then presses Enter,
    after the paste has closed; so do we. */
 /* #81 (26 Oct, Luigi: "sessions jump in" while he types). The pane knows only its own keystrokes,
-   so "composing" means: keys typed since the last Enter / Ctrl-C / Ctrl-U, or any key in the last
-   COMPOSE_QUIET_MS. A bus message is never typed into that draft (it would land inside it). */
+   so "composing" means: any key since the last Enter / Ctrl-C / Ctrl-U (arrows and pastes too: an
+   up-arrow recalls an old prompt, a bracketed paste starts with ESC), or any key in the last
+   COMPOSE_QUIET_MS. A bus message is never typed into that draft (it would land inside it).
+   A held message lives at most HELD_MAX_MS, under the bus's own 30-min hold, so it can never be
+   typed after the bus has already declared it undelivered. */
 const COMPOSE_QUIET_MS = 8000;
+const HELD_MAX_MS = 25 * 60 * 1000;
 function noteOperatorKeys(p, d) {
   if (!p || typeof d !== 'string' || !d) return;
   p.lastKeyAt = Date.now();
-  if (/[\r\x03\x15]/.test(d)) p.composing = false;          // sent, interrupted or line cleared
-  else if (!/^\x1b/.test(d)) p.composing = true;             // printable text or backspace; not arrows
+  p.composing = !/[\r\x03\x15]/.test(d);                    // false only once sent, interrupted or cleared
 }
 function operatorComposing(p, now) {
   return !!p && (!!p.composing || (now - (p.lastKeyAt || 0)) < COMPOSE_QUIET_MS);
 }
 function holdBusSend(id, p, text) {
   p.busHeld = p.busHeld || [];
-  if (p.busHeld.includes(text)) return;                      // already waiting: a re-type adds nothing
+  if (p.busHeld.some((h) => h.text === text)) return;        // already waiting: a re-type adds nothing
   if (!operatorComposing(p, Date.now()) && !p.busHeld.length) { submitToPty(id, text); return; }
-  p.busHeld.push(text);
+  p.busHeld.push({ text, at: Date.now() });
   if (p.busTimer) return;
   p.busTimer = setInterval(() => {
-    if (p.exited) { clearInterval(p.busTimer); p.busTimer = null; p.busHeld = []; return; }
-    if (operatorComposing(p, Date.now())) return;
-    const next = p.busHeld.shift();
-    if (next !== undefined) submitToPty(id, next);
+    const now = Date.now();
+    p.busHeld = p.busHeld.filter((h) => now - h.at < HELD_MAX_MS);   // past it the bus has given up
+    /* Never type agent text into a pane that stopped being the session: a shell would run it. */
+    if (p.exited || !p.isSession || !p.busHeld.length) { clearInterval(p.busTimer); p.busTimer = null; p.busHeld = []; return; }
+    if (operatorComposing(p, now)) return;
+    submitToPty(id, p.busHeld.shift().text);
     if (!p.busHeld.length) { clearInterval(p.busTimer); p.busTimer = null; }
   }, 1000);
 }

@@ -12,6 +12,7 @@ const app = fs.readFileSync('renderer/app.js', 'utf8');
 const lift = (re: RegExp): string => { const m = re.exec(app); assert.ok(m, `found ${re}`); return m![0]; };
 const src = [
   lift(/const COMPOSE_QUIET_MS = \d+;/),
+  lift(/const HELD_MAX_MS = [^;]+;/),
   lift(/function noteOperatorKeys\(p, d\) \{[\s\S]*?\n\}/),
   lift(/function operatorComposing\(p, now\) \{[\s\S]*?\n\}/),
   lift(/function holdBusSend\(id, p, text\) \{[\s\S]*?\n\}\n/),
@@ -45,7 +46,7 @@ test('idle pane: the message is typed at once', () => {
 });
 
 test('a draft in progress holds the message until it is sent, then types it once', () => {
-  const h = harness(); const p: Record<string, unknown> = {};
+  const h = harness(); const p: Record<string, unknown> = { isSession: true };
   (h.ctx.noteOperatorKeys as Function)(p, 'half a sen');
   (h.ctx.holdBusSend as Function)(1, p, 'bus msg');
   (h.ctx.holdBusSend as Function)(1, p, 'bus msg');            // the bus re-types while it waits
@@ -58,12 +59,30 @@ test('a draft in progress holds the message until it is sent, then types it once
   assert.equal(h.armed, false);
 });
 
-test('arrow keys alone do not count as a draft; Ctrl-U clears one', () => {
+test('arrows and pastes count as a draft (up-arrow recalls a prompt); Ctrl-U clears one', () => {
   const h = harness(); const p: Record<string, unknown> = {};
   (h.ctx.noteOperatorKeys as Function)(p, '\x1b[A');
-  assert.equal(p.composing, undefined);
-  (h.ctx.noteOperatorKeys as Function)(p, 'abc');
+  assert.equal(p.composing, true);
+  (h.ctx.noteOperatorKeys as Function)(p, '\x1b[200~pasted\x1b[201~');
   assert.equal(p.composing, true);
   (h.ctx.noteOperatorKeys as Function)(p, '\x15');
   assert.equal(p.composing, false);
+});
+
+test('a held message is dropped, never typed, if the pane stops being the session', () => {
+  const h = harness(); const p: Record<string, unknown> = { isSession: true };
+  (h.ctx.noteOperatorKeys as Function)(p, 'draft');
+  (h.ctx.holdBusSend as Function)(1, p, 'rm -rf in a shell would be bad');
+  p.isSession = false; p.composing = false; h.advance(60_000); h.tick();
+  assert.deepEqual(h.typed, []);
+  assert.equal(h.armed, false);
+});
+
+test('a held message expires before the bus gives up, so it is never typed after a dead letter', () => {
+  const h = harness(); const p: Record<string, unknown> = { isSession: true };
+  (h.ctx.noteOperatorKeys as Function)(p, 'a long draft');
+  (h.ctx.holdBusSend as Function)(1, p, 'late');
+  h.advance(26 * 60 * 1000); h.tick();
+  (h.ctx.noteOperatorKeys as Function)(p, '\r'); h.advance(9_000); h.tick();
+  assert.deepEqual(h.typed, []);
 });
