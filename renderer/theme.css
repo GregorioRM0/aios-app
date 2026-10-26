@@ -1695,15 +1695,9 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
   .chat-row.who-claude .chat-md { transition: none; }
 }
 .cs-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-/* ── tool rows: one compact line per call, joined into a card when they come in a run ── */
-.chat-tool { --tr: 9px; flex: 0 0 auto; min-width: 0; font-size: 12px; line-height: 1.35; color: var(--ink);
-             background: var(--chat-claude-bg); border: 1px solid var(--chat-claude-line); }
-.chat-tool.tg-solo, .chat-tool.tg-first { margin-top: var(--cs-m); border-radius: var(--tr) var(--tr) 0 0; }
-.chat-tool.tg-solo { border-radius: var(--tr); }
-.chat-tool.tg-mid, .chat-tool.tg-last { margin-top: -1px; border-radius: 0; }
-.chat-tool.tg-last { border-radius: 0 0 var(--tr) var(--tr); }
-.chat-tool.tg-solo, .chat-tool.tg-last { margin-bottom: var(--cs-m); }
-.chat-tool.tg-first, .chat-tool.tg-mid { margin-bottom: 0; }
+/* ── tool rows: one compact line per call; a run of two or more folds into ONE row that opens to them ── */
+.chat-tool, .chat-tg { --tr: 9px; flex: 0 0 auto; min-width: 0; margin: var(--cs-m) 0; font-size: 12px; line-height: 1.35; color: var(--ink);
+                       background: var(--chat-claude-bg); border: 1px solid var(--chat-claude-line); border-radius: var(--tr); }
 .ct-head { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; min-height: 28px; padding: 3px 10px 3px 6px;
            background: none; border: 0; border-radius: inherit; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .ct-head:hover { background: var(--chat-row-hover); }
@@ -1727,6 +1721,31 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .ct-note { margin-top: 6px; padding: 0 2px; color: var(--faint); font-size: 11.5px; }
 .ct-out:not([hidden]) + .ct-note { margin-top: 7px; }
 .ct-body:has(.ct-out[hidden]) .ct-note { padding: 8px 2px 0; }
+/* The folded run. One row as tall as a tool row: the glyph of "several", how many, what they were (or, while it runs, the call
+   in progress), how it stands, a chevron. Open, it is a card: the ordinary rows sit inside it, hairline between hairline. */
+.chat-tg { overflow: hidden; }
+.cg-head { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; min-height: 28px; padding: 3px 10px 3px 6px;
+           background: none; border: 0; border-radius: inherit; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.chat-tg.open > .cg-head { background: color-mix(in srgb, var(--chat-row-hover) 55%, transparent); }   /* open: the row that holds the others reads as their header */
+.cg-head:hover { background: var(--chat-row-hover); }
+.cg-head:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: -2px; }
+.cg-kind { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 20px; height: 20px; border-radius: 6px;
+           background: var(--chat-out-bg); border: 1px solid var(--chat-claude-line); color: var(--subtle); }
+.chat-tg.error .cg-kind { color: var(--st-error-ink); background: color-mix(in srgb, var(--st-error) 11%, var(--surface)); border-color: color-mix(in srgb, var(--st-error) 34%, transparent); }
+.cg-n { flex: 0 0 auto; font-size: 12px; font-weight: 620; letter-spacing: .005em; }
+.cg-list, .cg-live { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtle); font-size: 11.5px; }
+.cg-list::before, .cg-live::before { content: '·'; flex: 0 0 auto; margin-right: 8px; color: var(--faint); }
+.chat-tg.running .cg-list, .chat-tg:not(.running) .cg-live { display: none; }
+.cg-live { display: flex; }
+.cg-ln { flex: 0 1 auto; min-width: 0; margin-right: 7px; overflow: hidden; text-overflow: ellipsis; color: var(--ink); font-size: 12px; font-weight: 620; }   /* a long MCP name gives way before the argument does, and ends in an ellipsis */
+.cg-la { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); font-size: 11px; }
+.cg-fail { flex: 0 0 auto; color: var(--st-error-ink); font-size: 11px; font-weight: 620; }
+.cg-fail[hidden] { display: none; }
+.cg-state { display: inline-flex; align-items: center; flex: 0 0 auto; }
+.chat-tg.ok .cg-state { color: var(--st-ok-ink); }
+.chat-tg.error .cg-state { color: var(--st-error-ink); }
+.chat-tg.open > .cg-head .ct-chev { transform: rotate(90deg); }
+.cg-body > .chat-tool { margin: 0; border: 0; border-top: 1px solid var(--chat-claude-line); border-radius: 0; background: none; }
 @keyframes cs-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ct-spin { animation: none; } .ct-chev { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .cw-dots i { animation: none; } }
