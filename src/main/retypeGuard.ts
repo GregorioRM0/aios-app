@@ -24,6 +24,10 @@ export function landedBeforeRetype(typedOnce: boolean, before: number, now: numb
  * readiness checks, and never types from anywhere else.
  */
 export const COMPOSE_QUIET_MS = 8000;
+/** A draft report older than this no longer holds the bus on its own: the pane's own check (no gap,
+ *  at the moment of typing) still defers if the draft is really there. Stops a record from a closed or
+ *  replaced pane blocking its name until the queue ceiling. */
+export const COMPOSE_STALE_MS = 30 * 60 * 1000;
 export function operatorComposing(rec: { composing: boolean; at: number } | undefined, now: number): boolean {
-  return !!rec && (rec.composing || now - rec.at < COMPOSE_QUIET_MS);
+  return !!rec && ((rec.composing && now - rec.at < COMPOSE_STALE_MS) || now - rec.at < COMPOSE_QUIET_MS);
 }

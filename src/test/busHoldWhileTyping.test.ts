@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as vm from 'node:vm';
-import { operatorComposing, COMPOSE_QUIET_MS } from '../main/retypeGuard';
+import { operatorComposing, COMPOSE_QUIET_MS, COMPOSE_STALE_MS } from '../main/retypeGuard';
 
 const app = fs.readFileSync('renderer/app.js', 'utf8');
 const bus = fs.readFileSync('src/main/commandBus.ts', 'utf8');
@@ -87,4 +87,19 @@ test('a deferral is a timed hold: it never latches a draft the pane did not repo
   const branch = bus.slice(bus.indexOf('sendResult.reason === DEFERRED_TYPING'), bus.indexOf('if (releaseForSibling'));
   assert.match(branch, /composing: !!prev && prev\.composing, at: Date\.now\(\)/);
   assert.doesNotMatch(branch, /composing: true/);
+});
+
+test('ESC-Enter (a new line inside the draft) does not end it', () => {
+  const { note } = keys(); const p: Record<string, unknown> = { name: 'a' };
+  note(p, 'line one'); note(p, '\x1b\r'); assert.equal(p.composing, true);
+});
+
+test('a draft report goes stale; an ended pane clears its draft', () => {
+  assert.equal(operatorComposing({ composing: true, at: 0 }, COMPOSE_STALE_MS - 1), true);
+  assert.equal(operatorComposing({ composing: true, at: 0 }, COMPOSE_STALE_MS), false);
+  assert.match(app, /p\.exited = true; if \(p\.composing && p\.name\) \{ p\.composing = false; window\.glassShell\.busComposing\(p\.name, false\); \}/);
+});
+
+test('an earlier copy that landed is found before any draft hold or its timeout', () => {
+  assert.ok(bus.indexOf('landedBeforeRetype(!!firstTypedAt') < bus.indexOf('if (operatorComposing(composing.get'));
 });

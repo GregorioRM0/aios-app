@@ -698,6 +698,12 @@ async function runSend(
       if (!fs.existsSync(heldPath)) return;
       continue;   // watch, never type again
     }
+    /* 26 Oct: a re-type after a busy-wait must first look for the earlier copy (landedBeforeRetype). */
+    if (landedBeforeRetype(!!firstTypedAt, before, countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt))) {
+      try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+      log(`delivered → '${req.name}' (verified late, before a re-type)`);
+      return;
+    }
     /* #81: the operator is writing in that pane — hold like a busy target, never type into the draft.
        Before the first type this waits under the queue ceiling; after it, under MAX_HOLD_MS (below). */
     if (operatorComposing(composing.get(sessionKey(req.name)), Date.now())) {
@@ -708,12 +714,6 @@ async function runSend(
       if (!fs.existsSync(heldPath)) return;
       await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
       continue;
-    }
-    /* 26 Oct: a re-type after a busy-wait must first look for the earlier copy (landedBeforeRetype). */
-    if (landedBeforeRetype(!!firstTypedAt, before, countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt))) {
-      try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
-      log(`delivered → '${req.name}' (verified late, before a re-type)`);
-      return;
     }
     attempts++;
     const firstTry = !firstTypedAt;

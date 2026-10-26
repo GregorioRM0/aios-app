@@ -4012,6 +4012,7 @@ function noteOperatorKeys(p, d) {
   const was = !!p.composing;
   if (p.inPaste) p.composing = true;
   else {
+    rest = rest.replace(/\x1b[\r\n]/g, '\n');                   // ESC-Enter is a new line in the draft, not a send
     const last = Math.max(rest.lastIndexOf('\r'), rest.lastIndexOf('\x03'));   // not Ctrl-U: it may clear only to the cursor
     p.composing = last < 0 ? true : last < rest.length - 1;   // text after the last send/clear is a new draft
   }
@@ -4165,7 +4166,7 @@ window.glassShell.onPtyData((m) => {
 });
 window.glassShell.onPtyExit((m) => {
   const p = panes.get(m.id);
-  if (p && p.kind === 'term') { p.exited = true; p.term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n'); paintRunning(); }
+  if (p && p.kind === 'term') { p.exited = true; if (p.composing && p.name) { p.composing = false; window.glassShell.busComposing(p.name, false); } p.term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n'); paintRunning(); }   // #81: an ended pane holds no draft
   /* A guided connect/add session just closed — re-read rather than waiting for focus or the poll.
      Same shape as the Health card's fix panes: run the check that found the problem to prove the
      fix, never trust that the work happened. */
