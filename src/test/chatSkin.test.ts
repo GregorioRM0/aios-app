@@ -1257,10 +1257,10 @@ test('chat-shot fixture: the strip × light/dark × wide/narrow/card open/hot va
     if (e.type === 'status' && ['model', 'effort', 'contextPct', 'contextWindow'].some((k) => k in e)) assert.equal(typeof e.sessionMatch, 'boolean', `${name}: a status event with per-session fields declares sessionMatch`);
   }
   assert.equal((fixture.streams.conversation.find((e) => e.type === 'status') as FxEvent).sessionMatch, true);
-  // the payload that is not this tab's: the shot feeds one and FAILS if the effort shows or the model is not the transcript's
+  // the payload that is not this tab's: the shot feeds one and FAILS if the effort shows that session's level or the model is not the transcript's
   const nm = js('bar-nomatch-dark');
   assert.match(nm, /"sessionMatch": false/);
-  assert.match(nm, /barParts\.effort\.seg\.hidden\) throw/);
+  assert.match(nm, /barParts\.effort\.v\.textContent !== t\('chat\.bar\.effortWord'\)\) throw/);
   assert.match(nm, /'Sonnet 5\.5'/);
   // resets in the fixture are relative ("+seconds"), never an instant that would be in the past by the next run
   const resets = [...Object.values(fixture.streams).flat(), ...fixture.shots.flatMap((s) => [s.js].flat().join('\n').match(/"[a-zA-Z]+ResetsAt": ("[^"]*"|\d+)/g) ?? [])]
@@ -1691,7 +1691,7 @@ test('the vertical scale: one set of spacing variables on the skin, used by rows
   assert.match(decl('.chatskin'), /--cs-m: 7px; --cs-turn: 19px; --cs-blk: \.85em; --cs-sec: 1\.4em/);
   assert.match(decl('.chat-row.who-user'), /margin: var\(--cs-turn\) 0 var\(--cs-m\)/);
   assert.match(decl('.chat-row.who-claude'), /margin: var\(--cs-m\) 0/);
-  assert.match(decl('.chat-tool.tg-solo, .chat-tool.tg-last'), /margin-bottom: var\(--cs-m\)/);
+  assert.match(decl('.chat-tool, .chat-tg'), /margin: var\(--cs-m\) 0/);
   assert.match(decl('.cm-code'), /margin: 0 0 var\(--cs-blk\)/);
   assert.match(decl('.cm-table'), /margin: 0 0 var\(--cs-blk\)/);
   assert.match(decl('.chat-md p, .chat-md ul, .chat-md ol, .chat-md blockquote, .chat-md pre, .chat-md table'), /margin: 0 0 var\(--cs-blk\)/);
@@ -1887,7 +1887,7 @@ test('chat-shot fixture: the drop veil and an inserted pair of paths are shot in
 /** A DOM stand-in rich enough for the column code: ordered children, classes, attributes, a class-selector query, focus. */
 class Dn {
   tag: string; className: string; textContent: string; hidden = false; disabled = false; dataset: Record<string, string> = {}; attrs: Record<string, string> = {};
-  children: Dn[] = []; parent: Dn | null = null; handlers: Record<string, Array<(e: unknown) => void>> = {}; value = ''; renders = 0;
+  id = ''; children: Dn[] = []; parent: Dn | null = null; handlers: Record<string, Array<(e: unknown) => void>> = {}; value = ''; renders = 0;
   static active: Dn | null = null;
   constructor(tag = 'div', cls = '', text = '') { this.tag = tag; this.className = cls; this.textContent = text; }
   private cls(): Set<string> { return new Set(this.className.split(/\s+/).filter(Boolean)); }
@@ -1921,26 +1921,28 @@ class Dn {
 }
 const isProv = (n: Dn): boolean => n.classList.contains('cs-prov');
 
-interface StreamHarness { cs: Record<string, any>; handle: (ev: Record<string, unknown>) => void; p: Record<string, any> } // eslint-disable-line @typescript-eslint/no-explicit-any
+interface StreamHarness { cs: Record<string, any>; handle: (ev: Record<string, unknown>) => void; p: Record<string, any>; scrolls: unknown[] } // eslint-disable-line @typescript-eslint/no-explicit-any
 /** The column code (items, the provisional bubble, adoption, the event switch) from the real source, wired to stand-ins. */
-function streamHarness(src: string = app): StreamHarness {
-  const from = src.indexOf('function chatSkinRegroup(');
+function streamHarness(src: string = app, lang: 'en' | 'es' | 'pt-br' = 'en'): StreamHarness {
+  const from = src.indexOf('function chatToolInfo(');
   const to = src.indexOf('if (window.glassShell && typeof window.glassShell.onChatSkinEvent');
   assert.ok(from > 0 && to > from, 'the column block was found');
   const make = new Function('el', 't', 'chatRender', 'chatSkinMakeTool', 'chatSkinPaintTool', 'chatSkinScroll', 'chatSkinPaintJump', 'chatSkinControls', 'chatSkinPaintAlert', 'chatSkinPaintState',
-    'chatSkinCardPaint', 'chatSkinPrompt', 'chatReducedMotion', 'CS_ANIM_AFTER_MS', 'panes',
+    'chatSkinCardPaint', 'chatSkinPrompt', 'chatReducedMotion', 'CS_ANIM_AFTER_MS', 'panes', 'csIcon',
     `${src.slice(from, to)}\nreturn chatSkinHandleEvent;`) as (...a: unknown[]) => (ev: Record<string, unknown>) => void;
   const log = new Dn('div', 'chat-log');
   const stateEl = new Dn('div', 'cs-card'); const workEl = new Dn('div', 'cs-working');
   log.append(stateEl, workEl);
   const p: Record<string, any> = { name: 'chat-qa', view: 'chat' }; // eslint-disable-line @typescript-eslint/no-explicit-any
-  const cs: Record<string, any> = { log, stateEl, workEl, items: new Map(), stream: null, dlg: null, dlgSig: '', turnOpen: false, stalled: false, state: 'waiting', stick: true, resetAt: 0, lastEventAt: 0, lastSubmitAt: 0, pane: p }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const cs: Record<string, any> = { log, stateEl, workEl, items: new Map(), groups: new Map(), groupOpen: new Map(), stream: null, dlg: null, dlgSig: '', turnOpen: false, stalled: false, state: 'waiting', stick: true, resetAt: 0, lastEventAt: 0, lastSubmitAt: 0, pane: p }; // eslint-disable-line @typescript-eslint/no-explicit-any
   p.chatSkin = cs;
-  const handle = make((tag: string, cls?: string, text?: string) => new Dn(tag, cls, text), (k: string) => k,
+  const scrolls: unknown[] = [];
+  const tr = (k: string, v?: Record<string, unknown>): string => String(loc[lang][k] ?? k).replace(/\{(\w+)\}/g, (_m, n: string) => (v && n in v ? String(v[n]) : `{${n}}`));
+  const handle = make((tag: string, cls?: string, text?: string) => new Dn(tag, cls, text), tr,
     (target: Dn, text: string) => { target.textContent = text; target.renders++; },
-    () => ({ node: new Dn('div', 'chat-tool'), body: null, role: 'tool', tool: {} }), () => undefined, () => undefined, () => undefined, () => undefined, () => undefined, () => undefined,
-    () => undefined, () => undefined, () => false, 1500, new Map([[1, p]]));
-  return { cs, p, handle: (ev) => handle({ paneId: 1, ...ev }) };
+    () => ({ node: new Dn('div', 'chat-tool'), body: null, role: 'tool', tool: {} }), () => undefined, (c: unknown) => { scrolls.push(c); }, () => undefined, () => undefined, () => undefined, () => undefined,
+    () => undefined, () => undefined, () => false, 1500, new Map([[1, p]]), (name: string) => { const d = new Dn('span', 'cs-ico'); d.attrs['data-icon'] = name; return d; });
+  return { cs, p, scrolls, handle: (ev) => handle({ paneId: 1, ...ev }) };
 }
 const rowsOf = (cs: StreamHarness['cs']): Dn[] => (cs.log as Dn).children.filter((c) => c.className.includes('who-claude'));
 
@@ -2434,3 +2436,304 @@ test('chat-shot fixture: the permission card, the menu cards, the used card, the
   assert.match([byName('dialog-terminal-dark')?.js].flat().join('\n'), /\.csd-link'\)\.click\(\)/);
 });
 
+
+// ── a run of tool calls folds into ONE row ─────────────────────────────────────────────────────────────────
+
+type ToolStatus = 'running' | 'ok' | 'error';
+const toolItem = (uuid: string, name = 'Bash', status: ToolStatus = 'ok', summary = ''): Record<string, unknown> => ({ uuid, role: 'tool', tool: { id: uuid, name, summary, status } });
+const textItem = (uuid: string, role: 'assistant' | 'user' = 'assistant', text = 'on it'): Record<string, unknown> => ({ uuid, role, text });
+const isGroup = (n: Dn): boolean => n.className.split(/\s+/).includes('chat-tg');
+const groupsOf = (cs: StreamHarness['cs']): Dn[] => (cs.log as Dn).children.filter(isGroup);
+const soloTools = (cs: StreamHarness['cs']): Dn[] => (cs.log as Dn).children.filter((c) => c.className.split(/\s+/).includes('chat-tool'));
+const inBody = (g: Dn): Dn[] => g.querySelector('.cg-body')?.children ?? [];
+const classes = (n: Dn): string[] => n.className.split(/\s+/).filter(Boolean);
+/** The two pure functions, evaluated from a given source: they take plain data, so a test can run them for real. */
+function loadRuns(src: string): { runs: (items: Array<{ tool?: boolean; hidden?: boolean }>) => number[][]; summary: (run: Array<{ name: string; summary?: string; status: string }>) => { total: number; counts: Array<{ name: string; n: number }>; running: number; failed: number; ok: number; status: string; current: { name: string; summary: string } | null } } {
+  const s = slice(src);
+  return new Function(`${fnBody(s, 'chatToolRuns')}\n${fnBody(s, 'chatToolSummary')}\nreturn { runs: chatToolRuns, summary: chatToolSummary };`)() as ReturnType<typeof loadRuns>;
+}
+const T = { tool: true }; const X = {}; const H = { hidden: true };
+
+guarded('runs, run for real: N tool calls in a row are ONE run, and a single one is a run of one',
+  (src) => {
+    const { runs } = loadRuns(src);
+    const a = runs([T, T, T, T, T]);
+    const b = runs([X, T, X]);
+    return a.length === 1 && a[0].join() === '0,1,2,3,4' && b.length === 1 && b[0].join() === '1' && runs([X, X]).length === 0 && runs([]).length === 0;
+  },
+  (src) => src.replace('if (it.tool) { if (!cur) cur = []; cur.push(i); continue; }', 'if (it.tool) { cur = [i]; runs.push(cur); continue; }'));   // every call its own run
+
+guarded('runs, run for real: a visible row between two calls makes two runs; a hidden one does not',
+  (src) => {
+    const { runs } = loadRuns(src);
+    const text = runs([T, T, X, T, T, T]);
+    const hidden = runs([T, H, T, H, H, T]);
+    return text.length === 2 && text[0].join() === '0,1' && text[1].join() === '3,4,5' && hidden.length === 1 && hidden[0].join() === '0,2,5';
+  },
+  (src) => src.replace('    if (it.hidden) continue;\n', ''));   // a hidden row cuts the run, like any other
+
+guarded('the summary, run for real: it counts by name in order of first appearance, and says the call in progress',
+  (src) => {
+    const { summary } = loadRuns(src);
+    const call = (name: string, status = 'ok', s = ''): { name: string; summary: string; status: string } => ({ name, status, summary: s });
+    const r = summary([call('Bash'), call('Read'), call('Read'), call('Bash'), call('Read'), call('Bash'), call('Read')]);
+    const live = summary([call('Read'), call('Bash', 'running', 'npm test'), call('Grep', 'running', 'TODO src'), call('Read')]);
+    return r.total === 7 && r.counts.map((c) => `${c.name} x${c.n}`).join() === 'Bash x3,Read x4' && r.status === 'ok' && r.current === null
+      && live.current?.name === 'Grep' && live.current.summary === 'TODO src' && live.running === 2 && summary([call('  ')]).counts[0].name === '?';
+  },
+  (src) => src.replace('if (!at.has(name)) { at.set(name, counts.length); counts.push({ name, n: 0 }); }', 'if (!at.has(name)) { at.set(name, 0); counts.unshift({ name, n: 0 }); }'));   // newest name first: the line reorders itself as calls land
+
+guarded('the summary, run for real: running wins while any call runs, then any failure, then ok — and the failures are counted exactly',
+  (src) => {
+    const { summary } = loadRuns(src);
+    const mk = (...st: string[]): Array<{ name: string; status: string }> => st.map((status, i) => ({ name: 'T' + i, status }));
+    const allOk = summary(mk('ok', 'ok', 'ok'));
+    const some = summary(mk('ok', 'error', 'ok'));
+    const two = summary(mk('error', 'ok', 'error', 'error'));
+    const mixed = summary(mk('error', 'running', 'ok'));
+    return allOk.status === 'ok' && allOk.failed === 0 && some.status === 'error' && some.failed === 1 && two.failed === 3 && two.ok === 1
+      && mixed.status === 'running' && mixed.failed === 1 && mixed.running === 1;
+  },
+  (src) => src.replace("status: running ? 'running' : failed ? 'error' : 'ok'", "status: failed ? 'error' : running ? 'running' : 'ok'"));
+
+guarded('the column folds N calls in a row into one group row holding them in order; the rows keep their nodes',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1'), toolItem('t2', 'Read'), toolItem('t3'), toolItem('t4', 'Grep'), toolItem('t5')] });
+    const g = groupsOf(cs);
+    const kids = (cs.log as Dn).children;
+    return g.length === 1 && soloTools(cs).length === 0 && inBody(g[0]).length === 5 && inBody(g[0]).every((n, i) => n === cs.items.get('t' + (i + 1)).node)
+      && kids.indexOf(g[0]) === 1 && kids[0] === cs.stateEl && kids[kids.length - 1] === cs.workEl;
+  },
+  (src) => src.replace('if (r.length > 1) spans.set', 'if (r.length > 99) spans.set'));   // nothing folds
+
+guarded('a message between two calls makes two groups with the message between them; a hidden row inside a run stays inside it',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1'), toolItem('t2'), textItem('a1', 'assistant', 'Found it.'), toolItem('t3'), toolItem('t4')] });
+    const g = groupsOf(cs);
+    const kids = (cs.log as Dn).children;
+    const twoGroups = g.length === 2 && kids.indexOf(g[0]) < kids.indexOf(cs.items.get('a1').node) && kids.indexOf(cs.items.get('a1').node) < kids.indexOf(g[1]);
+    // an assistant message that was only tool calls: hidden, and between two calls
+    const h = streamHarness(src);
+    h.handle({ type: 'items', items: [toolItem('t1'), textItem('a0', 'assistant', ''), toolItem('t2'), textItem('a9', 'assistant', ''), toolItem('t3')] });
+    const hg = groupsOf(h.cs);
+    const order = hg.length === 1 ? inBody(hg[0]).map((n) => n === h.cs.items.get('t1').node ? 't1' : n === h.cs.items.get('t2').node ? 't2' : n === h.cs.items.get('t3').node ? 't3' : n === h.cs.items.get('a0').node ? 'a0' : 'a9') : [];
+    return twoGroups && inBody(g[0]).length === 2 && order.join() === 't1,a0,t2,a9,t3';
+  },
+  (src) => src.replace('    if (it.hidden) continue;\n', ''));
+
+guarded('a run of ONE call is a plain row, not a group; the same call becomes a group when the next one lands',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [textItem('u1', 'user', 'run it'), toolItem('t1'), textItem('a1')] });
+    const alone = groupsOf(cs).length === 0 && soloTools(cs).length === 1;
+    handle({ type: 'items', items: [toolItem('t2')] });   // lands after the message: still a run of one
+    const stillAlone = groupsOf(cs).length === 0 && soloTools(cs).length === 2;
+    handle({ type: 'items', items: [toolItem('t3')] });
+    return alone && stillAlone && groupsOf(cs).length === 1 && inBody(groupsOf(cs)[0]).length === 2 && soloTools(cs).length === 1;
+  },
+  (src) => src.replace('if (r.length > 1) spans.set', 'if (r.length > 0) spans.set'));   // a lone call is a group too
+
+guarded('the folded row is a button with aria-expanded and aria-controls, starts folded, and says its state in words for a screen reader',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1', 'Bash', 'running', 'npm test'), toolItem('t2', 'Read', 'ok')] });
+    const g = groupsOf(cs)[0];
+    const head = g.querySelector('.cg-head'); const body = g.querySelector('.cg-body');
+    const sr = g.querySelector('.cg-state')?.querySelector('.cs-sr');
+    return !!head && !!body && head.tag === 'button' && (head as unknown as { type: string }).type === 'button' && head.attrs['aria-expanded'] === 'false' && body.hidden === true
+      && !!body.id && head.attrs['aria-controls'] === body.id && !!sr && sr.textContent === 'running' && !g.classList.contains('open');
+  },
+  (src) => src.replace("  head.setAttribute('aria-controls', body.id);\n  node.append(head, body);", "  node.append(head, body);"));
+
+guarded('the group row says what is running now (name and argument), and the state in the mark: spinner, tick, or cross with the exact number that failed',
+  (src) => {
+    const run = (lang: 'en' | 'es' | 'pt-br'): { live: string; list: string; count: string; cls: string[]; fail: string; hiddenFail: boolean; sr: string; spin: boolean }[] => {
+      const { cs, handle } = streamHarness(src, lang);
+      const snap = (): { live: string; list: string; count: string; cls: string[]; fail: string; hiddenFail: boolean; sr: string; spin: boolean } => {
+        const g = groupsOf(cs)[0];
+        return {
+          live: g.querySelector('.cg-ln')!.textContent + '|' + g.querySelector('.cg-la')!.textContent, list: g.querySelector('.cg-list')!.textContent, count: g.querySelector('.cg-n')!.textContent,
+          cls: classes(g), fail: g.querySelector('.cg-fail')!.textContent, hiddenFail: g.querySelector('.cg-fail')!.hidden, sr: g.querySelector('.cg-state')!.querySelector('.cs-sr')!.textContent,
+          spin: !!g.querySelector('.cg-state')!.querySelector('.ct-spin'),
+        };
+      };
+      const out = [];
+      handle({ type: 'items', items: [toolItem('t1', 'Bash', 'ok'), toolItem('t2', 'Read', 'ok'), toolItem('t3', 'Bash', 'running', 'npm test --watch')] });
+      out.push(snap());
+      handle({ type: 'items', items: [toolItem('t3', 'Bash', 'ok')] });
+      out.push(snap());
+      handle({ type: 'items', items: [toolItem('t2', 'Read', 'error')] });
+      out.push(snap());
+      handle({ type: 'items', items: [toolItem('t1', 'Bash', 'error')] });
+      out.push(snap());
+      return out;
+    };
+    const en = run('en'); const es = run('es'); const pt = run('pt-br');
+    const [live, done, one, two] = en;
+    return live.cls.includes('running') && live.spin && live.live === 'Bash|npm test --watch' && live.count === '3 actions' && live.list === 'Bash ×2, Read' && live.hiddenFail && live.sr === 'running'
+      && done.cls.includes('ok') && !done.spin && done.sr === 'done' && done.hiddenFail && !done.cls.includes('running')
+      && one.cls.includes('error') && !one.cls.includes('ok') && one.fail === '1 failed' && !one.hiddenFail && one.sr === '1 failed'
+      && two.fail === '2 failed' && two.sr === '2 failed'
+      // plurals are different words in Spanish and Portuguese
+      && es[2].fail === '1 falló' && es[3].fail === '2 fallaron' && pt[2].fail === '1 falhou' && pt[3].fail === '2 falharam' && es[0].count === '3 acciones' && pt[0].count === '3 ações';
+  },
+  (src) => src.replace("t(sum.failed === 1 ? 'chat.skin.tg.failed.one' : 'chat.skin.tg.failed.other', { n: sum.failed })", "t('chat.skin.tg.failed.other', { n: sum.failed })"));
+
+guarded('a folded row shows no call in progress once nothing runs: the counts replace it',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1', 'Bash', 'running', 'sleep 9'), toolItem('t2', 'Bash', 'ok')] });
+    const g = groupsOf(cs)[0];
+    const running = g.querySelector('.cg-la')!.textContent === 'sleep 9';
+    handle({ type: 'items', items: [toolItem('t1', 'Bash', 'ok', 'sleep 9')] });
+    return running && g.querySelector('.cg-ln')!.textContent === '' && g.querySelector('.cg-la')!.textContent === '' && g.querySelector('.cg-list')!.textContent === 'Bash ×2';
+  },
+  (src) => src.replace("g.liveName.textContent = cur ? cur.name : '';", "g.liveName.textContent = cur ? cur.name : g.liveName.textContent;"));   // the last action lingers after it finished
+
+guarded('the unfolded state survives a call landing in the group, a status change and a repaint: the node is the same and stays open',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1', 'Bash', 'ok'), toolItem('t2', 'Read', 'running', 'a.ts')] });
+    const g = groupsOf(cs)[0];
+    g.querySelector('.cg-head')!.click();
+    const openNow = g.querySelector('.cg-head')!.attrs['aria-expanded'] === 'true' && g.querySelector('.cg-body')!.hidden === false && g.classList.contains('open');
+    const row = cs.items.get('t1').node as Dn; row.classList.add('open');   // a row inside, opened by the operator
+    handle({ type: 'items', items: [toolItem('t3', 'Grep', 'running', 'x')] });                    // the run grows
+    handle({ type: 'items', items: [toolItem('t2', 'Read', 'ok', 'a.ts'), toolItem('t3', 'Grep', 'ok', 'x')] });   // statuses move
+    handle({ type: 'turn', open: false });
+    const same = groupsOf(cs).length === 1 && groupsOf(cs)[0] === g && inBody(g).length === 3;
+    const stillOpen = g.querySelector('.cg-head')!.attrs['aria-expanded'] === 'true' && g.querySelector('.cg-body')!.hidden === false && g.classList.contains('open');
+    return openNow && same && stillOpen && row.classList.contains('open') && inBody(g)[0] === row;
+  },
+  (src) => src.replace('    let g = groups.get(key);\n', '    let g = null;\n'));   // a new node on every batch: whatever was open is gone
+
+guarded('a group the operator folded back stays folded when more arrive, and a new run starts folded',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1'), toolItem('t2')] });
+    const g = groupsOf(cs)[0];
+    const head = g.querySelector('.cg-head')!;
+    const startsFolded = head.attrs['aria-expanded'] === 'false';
+    head.click(); head.click();
+    handle({ type: 'items', items: [toolItem('t3')] });
+    const folded = groupsOf(cs)[0] === g && head.attrs['aria-expanded'] === 'false' && g.querySelector('.cg-body')!.hidden;
+    handle({ type: 'items', items: [textItem('a1'), toolItem('t4'), toolItem('t5')] });
+    const second = groupsOf(cs)[1];
+    return startsFolded && !!folded && groupsOf(cs).length === 2 && second.querySelector('.cg-head')!.attrs['aria-expanded'] === 'false';
+  },
+  (src) => src.replace('chatSkinGroupOpen(g, !g.open);', 'chatSkinGroupOpen(g, true);'));   // the second click does not fold it back
+
+guarded('a run that splits and joins again (a hidden row shows a message, then goes) comes back with the state the operator left it in',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1'), textItem('a0', 'assistant', ''), toolItem('t2'), toolItem('t3')] });
+    groupsOf(cs)[0].querySelector('.cg-head')!.click();
+    handle({ type: 'items', items: [textItem('a0', 'assistant', 'wait')] });   // the row has something to say: the run is cut in two
+    const split = groupsOf(cs).length === 1 && soloTools(cs).length === 1 && inBody(groupsOf(cs)[0]).length === 2 && groupsOf(cs)[0].querySelector('.cg-head')!.attrs['aria-expanded'] === 'false';   // t1 is alone now; the new run starts folded
+    handle({ type: 'items', items: [textItem('a0', 'assistant', '')] });      // and it does not after all
+    const g = groupsOf(cs);
+    return split && g.length === 1 && inBody(g[0]).length === 4 && g[0].querySelector('.cg-head')!.attrs['aria-expanded'] === 'true';
+  },
+  (src) => src.replace('    cs.groupOpen.set(key, g.open);\n', ''));   // the choice lives only on the node, which is gone
+
+guarded('a row the operator had open does not vanish when its run becomes a group: that group starts unfolded',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1')] });
+    (cs.items.get('t1').node as Dn).classList.add('open');
+    handle({ type: 'items', items: [toolItem('t2')] });
+    const g = groupsOf(cs)[0];
+    const calm = streamHarness(src);
+    calm.handle({ type: 'items', items: [toolItem('t1')] });
+    calm.handle({ type: 'items', items: [toolItem('t2')] });
+    return !!g && g.classList.contains('open') && g.querySelector('.cg-body')!.hidden === false && groupsOf(calm.cs)[0].querySelector('.cg-body')!.hidden === true;
+  },
+  (src) => src.replace("members.some((m) => m.classList.contains('open'))", 'false'));
+
+guarded('unfolding a group asks the view to follow the tail; folding it does not',
+  (src) => {
+    const { cs, handle, scrolls } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1'), toolItem('t2')] });
+    const before = scrolls.length;
+    const head = groupsOf(cs)[0].querySelector('.cg-head')!;
+    head.click();
+    const afterOpen = scrolls.length;
+    head.click();
+    return afterOpen === before + 1 && scrolls[afterOpen - 1] === cs && scrolls.length === afterOpen;
+  },
+  (src) => src.replace('    if (g.open) chatSkinScroll(cs);', '    if (false) chatSkinScroll(cs);'));
+
+guarded('a reset forgets the groups and what was open, so a new transcript never inherits a node or an open state',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1'), toolItem('t2')] });
+    groupsOf(cs)[0].querySelector('.cg-head')!.click();
+    handle({ type: 'reset' });
+    handle({ type: 'items', items: [toolItem('t1'), toolItem('t2')] });
+    return groupsOf(cs).length === 1 && cs.groups.size === 1 && groupsOf(cs)[0].querySelector('.cg-head')!.attrs['aria-expanded'] === 'false';
+  },
+  (src) => src.replace('cs.items.clear(); cs.groups.clear(); cs.groupOpen.clear();', 'cs.items.clear();'));
+
+guarded('the group is only repainted, never rebuilt: the spinner node survives other calls landing, and rows already in place are not moved',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'items', items: [toolItem('t1', 'Bash', 'running', 'a'), toolItem('t2', 'Read', 'running', 'b')] });
+    const g = groupsOf(cs)[0];
+    const spin = g.querySelector('.ct-spin');
+    const moves: string[] = [];
+    const body = g.querySelector('.cg-body')!;
+    const orig = body.insertBefore.bind(body);
+    body.insertBefore = (n: Dn, r: Dn | null): Dn => { moves.push(n.className); return orig(n, r); };
+    handle({ type: 'items', items: [toolItem('t2', 'Read', 'running', 'bb')] });   // a repaint with nothing new
+    handle({ type: 'items', items: [toolItem('t3', 'Grep', 'running', 'c')] });    // one new row at the end
+    return !!spin && g.querySelector('.ct-spin') === spin && moves.length === 1;
+  },
+  (src) => src.replace('    if (parent.children[i] !== w) parent.insertBefore(w, parent.children[i] || null);', '    parent.insertBefore(w, parent.children[i] || null);'));
+
+test('the folded row\'s sentences exist in every locale with the same placeholders, and the failure count has a singular and a plural', () => {
+  const keys = ['chat.skin.tg.count', 'chat.skin.tg.each', 'chat.skin.tg.failed.one', 'chat.skin.tg.failed.other'];
+  const holders = (l: string, k: string): string => (loc[l][k].match(/\{\w+\}/g) ?? []).sort().join();
+  for (const l of Object.keys(loc)) for (const k of keys) assert.ok(typeof loc[l][k] === 'string' && loc[l][k].length > 0, `${l}.json lacks ${k}`);
+  for (const k of keys) { assert.equal(holders('es', k), holders('en', k), `es ${k}`); assert.equal(holders('pt-br', k), holders('en', k), `pt-br ${k}`); }
+  assert.equal(holders('en', 'chat.skin.tg.each'), '{name},{n}');
+  assert.equal(holders('en', 'chat.skin.tg.count'), '{n}');
+  for (const l of ['es', 'pt-br']) assert.notEqual(loc[l]['chat.skin.tg.failed.one'], loc[l]['chat.skin.tg.failed.other'], `${l}: one failure and several are different words`);
+  // the code asks for exactly these keys (a typo would show the key itself)
+  for (const k of keys) assert.ok(skin.includes(`'${k}'`), `${k} is used`);
+  // control: a locale that dropped a placeholder is caught by the same comparison
+  assert.notEqual((loc.es['chat.skin.tg.count'] as string).replace('{n}', ''), loc.es['chat.skin.tg.count']);
+  assert.notEqual(holders('en', 'chat.skin.tg.each'), '{name}');
+});
+
+test('the folded row\'s CSS: as short as a tool row, the call in progress only while it runs, ellipsis, status hues from --st-*, no coral', () => {
+  const rules = skinRules(css);
+  const decl = (sel: string): string => rules.filter(([x]) => x === sel).map(([, d]) => d).join(' ');
+  const head = decl('.cg-head');
+  assert.ok(Number(/min-height:\s*(\d+)px/.exec(head)?.[1]) >= 26 && Number(/min-height:\s*(\d+)px/.exec(head)?.[1]) <= 30, 'the group row is 26-30 px tall, like a tool row');
+  assert.ok(Number(/padding:\s*(\d+)px/.exec(head)?.[1]) <= 4);
+  assert.match(decl('.cg-head'), /min-height: 28px/);
+  assert.equal(/min-height:\s*(\d+)px/.exec(decl('.ct-head'))?.[1], /min-height:\s*(\d+)px/.exec(head)?.[1], 'the same height as a single tool row');
+  assert.match(decl('.cg-list, .cg-live'), /text-overflow: ellipsis/);
+  assert.match(decl('.cg-la'), /text-overflow: ellipsis/);
+  assert.match(decl('.chat-tg.running .cg-list, .chat-tg:not(.running) .cg-live'), /display: none/);
+  assert.match(decl('.chat-tg.ok .cg-state'), /--st-ok-ink/);
+  assert.match(decl('.chat-tg.error .cg-state'), /--st-error-ink/);
+  assert.match(decl('.cg-fail'), /--st-error-ink/);
+  assert.match(decl('.chat-tg.error .cg-kind'), /--st-error/);
+  assert.match(decl('.chat-tg.open > .cg-head .ct-chev'), /rotate\(90deg\)/);
+  assert.match(decl('.chat-tool, .chat-tg'), /margin: var\(--cs-m\) 0/);
+  assert.match(decl('.cg-body > .chat-tool'), /border-radius: 0/);
+  assert.match(decl('.cg-fail[hidden]'), /display: none/, 'the hidden attribute is not overridden by the chip\'s own display');
+  for (const sel of ['.chat-tg', '.cg-head', '.cg-kind', '.cg-fail', '.chat-tg.error .cg-kind', '.chat-tg.ok .cg-state', '.chat-tg.error .cg-state']) assert.doesNotMatch(decl(sel), /--accent/, `${sel} must not use coral`);
+  // the folded row shares the spinner, whose reduced-motion fallback the skin already has
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.ct-spin \{ animation: none; \}/);
+  // the old joined-card classes are gone from code and sheet
+  assert.doesNotMatch(css, /\.tg-(solo|first|mid|last)/);
+  assert.doesNotMatch(skin, /tg-(solo|first|mid|last)/);
+  // control: a rule that kept the old joined look, or an accent-coloured mark, is caught
+  assert.match(decl('.cg-head') + ' min-height: 36px;', /min-height: 36px/);
+  assert.notEqual(/min-height:\s*(\d+)px/.exec('min-height: 36px')?.[1], /min-height:\s*(\d+)px/.exec(head)?.[1]);
+  assert.match('.chat-tg.ok .cg-state { color: var(--accent); }', /--accent/);
+});
