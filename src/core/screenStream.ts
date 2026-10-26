@@ -69,7 +69,9 @@ export interface ExtractOptions {
 export const STREAM_ANCHOR_WORDS = 6;
 
 /** A row made only of box-drawing characters: a border or rule of the input box. */
-const isRule = (l: string): boolean => l.trim() !== '' && l.replace(BORDER, '').trim() === '';
+const isRule = (l: string): boolean => l.trim() !== '' && (l.replace(BORDER, '').trim() === '' || TITLED_RULE.test(l));
+/** The box's top border carries the session's name on the right: `────────── my-session ─`. Still a border. */
+const TITLED_RULE = /^\s*[─━═]{3,}\s\S[^─━═]*\s[─━═]+\s*$/;
 /** The input box's prompt row: `> text`, `❯ text`, optionally between side borders. */
 const PROMPT_ROW = /^(?:[│┃] ?|\s?)[>❯](?: |$)/;
 /** A row the operator typed, echoed into the scrollback: the prompt glyph flush left. */
@@ -79,7 +81,7 @@ const THINKING = /^\s{0,1}∴/;
 /** `Bash(npm test)`, `Update(src/a.ts)`, `Web Search("x")`, `server - tool (MCP)(arg)`: a name glued to `(`. */
 const TOOL_HEAD = /^(?:[A-Z][\w.:-]*(?: [A-Z][\w.:-]*){0,2}|[a-z][\w.-]*(?: - [\w.-]+)?)(?: \(MCP\))?\(/;
 /** The collapsed summaries the TUI prints for read-only tools: `Searched for 2 patterns (ctrl+o to expand)`. */
-const TOOL_SUMMARY = /\(ctrl\+o to expand\)|^(?:Read|Searched for|Listed|Wrote|Edited|Updated|Created|Fetched) \d+/;
+const TOOL_SUMMARY = /\(ctrl\+o to expand\)|^(?:Read|Searched for|Listed|Wrote|Edited|Updated|Created|Fetched|Ran) \d+|^(?:Running|Reading|Searching|Listing|Fetching|Writing|Editing|Updating|Creating) \d+ /;
 const RESULT_ROW = /^\s*⎿/;
 
 /** Spinner: a glyph, a short phrase ending in an ellipsis, optionally `(12s · ↓ 1.2k tokens · esc to interrupt)`. */
@@ -87,10 +89,14 @@ const SPINNER = /^\s{0,1}[✻✽✶✳✢·∗✺]\s+\S+(?:\s\S+){0,3}\s?(?:…|
 /** `*` is also a plain list bullet, so it only counts as a spinner with the parenthetical the spinner carries. */
 const SPINNER_STAR = /^\s{0,1}\*\s+\S+(?:\s\S+){0,3}\s?(?:…|\.\.\.)\s*\([^)]*(?:esc|tokens|\d+s)[^)]*\)\s*$/;
 const ESC_HINT = /^\s*\(?esc to interrupt\)?\s*$/i;
+/** The footer's live-turn marker: `… (shift+tab to cycle) · esc to interrupt`, or the bare hint, on a row under the box. */
+const FOOTER_LIVE = /(?:^|[·|(\s])esc to interrupt\)?\s*$/i;
 /** The line the TUI leaves after a turn ends (`✻ Worked for 1m 3s`): noise, and proof the turn is over. */
 const DONE_MARK = /^\s{0,1}[✻✽✶✳✢·]\s+\S+ for \d/;
 /** Footer and mode hints under the input box. Anchored: a sentence in an answer must not match. */
 const FOOTER_NOISE: RegExp[] = [
+  // the right-aligned effort indicator the CLI draws on the row above the input box: `◐ medium · /effort`
+  /^\s*\S+\s+\w+\s+·\s+\/effort\s*$/i,
   // the hint is followed by a wide gap and the status columns, or ends the line; a sentence that merely starts with it is text
   /^\s*\?\s+for shortcuts(?:\s{2,}.*)?$/i,
   /^\s*⏵⏵?\s/,
@@ -106,7 +112,8 @@ type ItemType = 'echo' | 'text' | 'tool' | 'thinking' | 'other';
 interface Item { type: ItemType; lines: string[]; orphan?: boolean }
 
 const indentOf = (l: string): number => l.length - l.trimStart().length;
-const LIST_ITEM = /^\s*(?:[•◦▪▸\-*]|\d{1,3}[.)])\s+\S/;
+/* `3.` alone on a row is the next item caught half-painted (the number first, its text a moment later): still an item, not a wrap. */
+const LIST_ITEM = /^\s*(?:[•◦▪▸\-*]|\d{1,3}[.)])(?:\s+\S|\s*$)/;
 const TABLE_ROW = /^\s*[│┃┌┐└┘├┤┬┴┼─]/;
 const QUOTE_ROW = /^\s*(?:▎|▌|>)\s?/;
 
@@ -205,17 +212,23 @@ function composerStart(rows: string[]): number {
 export function extractStreaming(screen: string, opts: ExtractOptions = {}): StreamingReply | null {
   if (!screen) return null;
   if (detectTuiPrompt(screen)) return null;
-  const all = stripAnsi(screen).replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/\s+$/, ''));
+  /* The CLI paints some gaps as NO-BREAK SPACES (`❯\u00a0` for an empty box, `⎿\u00a0Tip: …`), which no `\s ` in
+     the patterns below would match — and which showed up only against the real screen. Plain spaces from here on. */
+  const all = stripAnsi(screen).replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/\s+$/, ''));
 
   // 1. cut the input box and everything under it
   const c = composerStart(all);
   let rows = c >= 0 ? all.slice(0, c) : all.slice();
+  /* While text is being written the CLI (2.1.x) draws NO spinner row: the only sign of a live turn is the footer
+     under the box, `… (shift+tab to cycle) · esc to interrupt`. Read it where it lives (under the box, or the last
+     rows without one) so a sentence in the answer that says the same words cannot make an idle screen look live. */
+  const footerLive = (c >= 0 ? all.slice(c) : all.slice(-6)).some((l) => FOOTER_LIVE.test(l));
 
   // 2. the spinner marks a live turn and the end of the reply: whatever sits under it (a todo panel,
   // a tip, a queued message) is not text of the reply
   let s = -1;
   for (let i = rows.length - 1; i >= 0; i--) if (isSpinner(rows[i]) || ESC_HINT.test(rows[i])) { s = i; break; }
-  if (s < 0 && (opts.requireActive ?? true)) return null;
+  if (s < 0 && !footerLive && (opts.requireActive ?? true)) return null;
   if (s >= 0) rows = rows.slice(0, s);
 
   // 3. group the rest into blocks
@@ -251,4 +264,144 @@ export function extractStreaming(screen: string, opts: ExtractOptions = {}): Str
   if (!text) return null;
   const n = opts.anchorWords ?? STREAM_ANCHOR_WORDS;
   return { text, anchor: last.orphan ? '' : anchorOf(text, n), headCut: !!last.orphan };
+}
+
+// ── the stateful half: what to tell the renderer, and when the preview becomes the real message ────
+
+/**
+ * What goes over `chatSkin:event` for the provisional bubble.
+ *  - `{text, anchor, headCut}`: the reply as painted so far (replaces the previous preview's text).
+ *  - `{text: null}`: no reply is being written right now (the spinner went away, a tool row took the
+ *    bottom, a dialog opened). The renderer keeps the preview where it is, frozen, because the finished
+ *    message is about to land in the transcript and must take the preview's place without a gap.
+ *  - `{text: null, adopt: uuid}`: the transcript line `uuid` IS the message that was previewed, and it
+ *    is the next `items` event: the renderer hands the preview's node to that item instead of drawing a
+ *    second bubble.
+ */
+export type StreamEvent =
+  | { type: 'stream'; text: string; anchor: string; headCut: boolean }
+  | { type: 'stream'; text: null; adopt?: string };
+
+export interface StreamTracker {
+  /** A new screen snapshot. Returns the event to send, or null when nothing changed since the last one. */
+  screen(text: string): StreamEvent | null;
+  /** Transcript items about to be sent. Returns the adoption event when one of them is the previewed message. */
+  items(items: ReadonlyArray<{ uuid: string; role: string; text?: string }>): StreamEvent | null;
+  /** The turn ended: whatever preview is still hanging is forgotten (the renderer drops its own on `turn`). The last adopted message is remembered so a stale screen cannot revive it. */
+  end(): void;
+  /** A turn started: the memory of the last adopted message is dropped (a new turn may legitimately open with the same words). */
+  begin(): void;
+  /** The view was reset or a different transcript is followed: forget everything. */
+  reset(): void;
+  /** The preview main last sent (for tests and the smoke measurement). */
+  current(): { text: string; headCut: boolean } | null;
+}
+
+/** Cap on the snapshot read: 60 rows of a very wide terminal; anything beyond is not a screen. */
+export const STREAM_SCREEN_MAX = 64 * 1024;
+
+/**
+ * Join two views of one growing reply. Each snapshot is a WINDOW of the terminal, so a long reply loses its
+ * head from the top as it grows (the CLI repaints only what fits); the head is known from earlier snapshots.
+ * `win` is the new window (its first row may be the middle of a line), `acc` what was assembled so far (its last
+ * line may still have been growing). The window must start somewhere inside `acc` and agree with it on every
+ * line they share; the result is `acc` up to that point followed by the whole window. Null when they share
+ * nothing (the reply moved on faster than the snapshots, or it is a different block): the caller then shows the
+ * window alone rather than invent a join.
+ */
+export function stitch(acc: string, win: string): string | null {
+  const A = acc.split('\n');
+  const W = win.split('\n');
+  for (let i = 0; i < A.length; i++) {
+    const last = i === A.length - 1;
+    /* Where does the window begin? In the middle of a line that was complete (its tail is the window's first row), or, for
+       the last line of `acc` — which may still have been growing — in a line that overlaps it at its end or extends it. */
+    let first: string | null = null;
+    if (!last) { if (A[i] === W[0] || (W[0].length >= 12 && A[i].endsWith(W[0]))) first = A[i]; }
+    else first = overlapJoin(A[i], W[0]);
+    if (first === null) continue;
+    if (W.length < A.length - i) continue;   // the window ends before `acc` does: it is older, not newer
+    let ok = true;
+    const shared = Math.min(A.length - i, W.length);
+    /* Every shared line must agree, EXCEPT the last two: those are the ones being repainted right now, and a
+       snapshot can catch the TUI between the erase and the rewrite (seen against the real screen: half a line, then
+       the next one already there). Trusting the lines before them is what makes the join safe; the window's
+       version of the tail wins, because it is the newer paint. */
+    const strictUntil = shared >= 5 ? shared - 2 : shared;
+    for (let j = 1; j < strictUntil; j++) {
+      const a = A[i + j];
+      const b = W[j];
+      if (i + j === A.length - 1 ? !b.startsWith(a) : a !== b) { ok = false; break; }   // only the last line of `acc` can have grown
+    }
+    if (!ok) continue;
+    return A.slice(0, i).concat(first, W.slice(1)).join('\n');
+  }
+  return null;
+}
+
+/** `a` is a line that may still have been growing; `w` is the same line as a newer window shows it (possibly cut at its start). */
+function overlapJoin(a: string, w: string): string | null {
+  if (w === a || (a.length >= 2 && w.startsWith(a))) return w;
+  if (w.length >= 12 && a.endsWith(w)) return a;
+  for (let k = Math.min(a.length, w.length); k >= 12; k--) if (a.endsWith(w.slice(0, k))) return a.slice(0, a.length - k) + w;
+  return null;
+}
+
+/**
+ * Is `finalText` (a transcript message) the reply this preview was showing? Strict first (`sameMessage`); then
+ * the same test with the preview's last two lines left out, because the preview is a snapshot of a screen that was
+ * being repainted and its tail can be torn. The part that is kept must still be long enough to mean something.
+ */
+export function previewIsMessage(preview: string, finalText: string, headCut: boolean): boolean {
+  if (sameMessage(preview, finalText, { headCut })) return true;
+  const lines = preview.split('\n');
+  const kept = lines.length >= 3 ? lines.slice(0, -2).join('\n') : preview.slice(0, Math.floor(preview.length * 0.6));
+  return normalizeForMatch(kept).length >= (headCut ? 24 : 12) && sameMessage(kept, finalText, { headCut });
+}
+
+/** How many unjoinable windows in a row are ignored before one is believed (the reply really did move on). */
+const STITCH_PATIENCE = 3;
+
+export function createStreamTracker(opts: ExtractOptions = {}): StreamTracker {
+  let prev: { text: string; anchor: string; headCut: boolean } | null = null;   // the last preview, live or frozen
+  let live = false;                                                                // is `prev` still being written?
+  /* The text of the message that was just adopted. The screen keeps saying "esc to interrupt" for a moment after the
+     transcript has the finished message, and a snapshot taken in that gap reads the SAME text as a reply in progress: without
+     this it would be drawn again as a second preview under the real message, and never replaced. */
+  let done: string | null = null;
+  let misses = 0;   // consecutive windows that could not be joined to what we have
+  return {
+    screen(text: string): StreamEvent | null {
+      const r = extractStreaming(String(text ?? '').slice(-STREAM_SCREEN_MAX), opts);
+      if (r && done !== null && sameMessage(r.text, done, { headCut: r.headCut })) return null;   // the finished message, seen again on a stale screen
+      if (r) {
+        let next = r;
+        if (r.headCut && prev) {
+          // a window over a reply that has outgrown the terminal: rebuild the whole text from the windows seen so far
+          const joined = stitch(prev.text, r.text);
+          if (joined !== null) { next = { text: joined, anchor: prev.anchor, headCut: prev.headCut }; misses = 0; }
+          else if (live && ++misses <= STITCH_PATIENCE) return null;   // not joinable (a torn paint, or a gap): keep what we have rather than shrink to a window — a few times
+          else misses = 0;
+        } else misses = 0;
+        if (live && prev && prev.text === next.text) return null;
+        prev = next; live = true;
+        return { type: 'stream', text: next.text, anchor: next.anchor, headCut: next.headCut };
+      }
+      if (!live) return null;
+      live = false;                      // freeze: keep `prev` for the adoption, tell the renderer once
+      return { type: 'stream', text: null };
+    },
+    items(items): StreamEvent | null {
+      if (!prev) return null;
+      for (const it of items) {
+        if (it.role !== 'assistant' || typeof it.text !== 'string' || !it.text.trim()) continue;
+        if (previewIsMessage(prev.text, it.text, prev.headCut)) { prev = null; live = false; done = it.text; return { type: 'stream', text: null, adopt: it.uuid }; }
+      }
+      return null;
+    },
+    end(): void { prev = null; live = false; misses = 0; },
+    begin(): void { done = null; },
+    reset(): void { prev = null; live = false; done = null; misses = 0; },
+    current(): { text: string; headCut: boolean } | null { return prev ? { text: prev.text, headCut: prev.headCut } : null; },
+  };
 }
