@@ -17,7 +17,8 @@ Whatever starts a Claude pane today (Start / Launch, an agent, a ritual, `--resu
 doing exactly that; the pane just gains a switch, **Terminal ⇄ Chat**, that changes how the one session
 is *looked at*. The pty and the `claude` process inside it remain the only source of truth. The chat reads
 along (the session's transcript file, plus the tail of the pty output to notice dialogs) and writes back
-through the same door the terminal uses. It never answers a dialog for the operator.
+through the same door the terminal uses. It never answers a dialog by itself: a dialog it could read is drawn as a
+card of buttons, and a key goes to the pty only when the operator presses one of them (§ 5).
 
 An earlier prototype (the `feat/chat-view` RFC this document replaces) built a separate "Chat" pane that
 drove Claude through the Agent SDK. That pane was **removed** (§ 8). The pieces worth keeping — bubbles,
@@ -51,6 +52,16 @@ that has ended) do not.
   code header, the copy button and the table wrapper are built as DOM *after* the sanitiser (§ 8), so the
   allowlist did not change and no `<button>` can come from the model. Notes for system events (an
   interruption, an API error, the output of a local command) are small centred pills.
+- **The reply as it is written.** The transcript only records a message once it is complete, so a long answer
+  used to appear all at once at the end. Now, while a turn is open, the reply being written on the terminal screen
+  is drawn as **one provisional bubble that grows** (§ 3.2 `stream`, § 10 for what was measured): the same bubble as
+  the real message, a step quieter, with a small caret in the busy hue at the end of the last line (no coral;
+  `prefers-reduced-motion` stops the blinking). It is rendered through the same sanitised markdown as the final
+  message. When the finished message lands in the transcript it **takes over that very node**: same place in the
+  column, no second bubble, no scroll jump, no flicker (the real markdown is painted into the node already on
+  screen). A tool that lands meanwhile goes above the preview; the preview is dropped when the turn ends or the
+  view resets if nothing adopted it; a screen reader hears the finished message once (the preview is
+  `aria-hidden`). With no transcript to take its place (a session with no id yet) nothing is previewed.
 - **Tools as rows, with their output.** Each tool call is one compact row: a glyph by kind (read, edit, bash,
   search, web, agent; a wrench for the rest, MCP tools included), the name, its main argument truncated with an
   ellipsis, and a state mark: a quiet spinner in `--st-busy`, a check in `--st-ok`, a cross in `--st-error`
@@ -113,9 +124,15 @@ that has ended) do not.
   stays selectable. It closes with Esc or a press outside, and **that Esc must not cut the turn**: its
   listener runs before the interrupt one and stops the event (§ 9: a test pins the order).
 - **Cards for the states.** *Connecting*, *waiting*, *empty* and *error* are one centred card (icon, a short
-  title, a sentence; the error one adds a button back to the terminal). *The terminal needs you* (a dialog) and
-  *quiet for a while* (a stalled turn) are a status card in the column — `--st-input` and `--st-warn` — with
-  the same button for the stalled case; under a dialog it docks onto the live terminal strip (§ 5).
+  title, a sentence; the error one adds a button back to the terminal). *Quiet for a while* (a stalled turn) is a
+  status card in the column in `--st-warn`, with the button back to the terminal.
+- **Dialogs as cards with buttons.** When the TUI asks something (a permission, the folder-trust question, `/model`'s
+  picker, an `AskUserQuestion`, a yes/no offer) and its rows could be read, the column gets a card in `--st-input`:
+  who is asking, the question as the CLI worded it, **one button per option** (its number, its text; the option the
+  TUI's cursor is on is the default and carries a return mark) and a **View in the terminal** link that shows the
+  live strip instead. Click, or ↑/↓ and Enter, or the option's number: only that option's key reaches the pty, once;
+  the card then disables itself until the next dialog (§ 5). When the options could not be read the live terminal
+  strip is used exactly as before.
 - **Motion, only as an answer to events.** A row that arrives rises a few px while it fades in (not for history
   loaded within 1.5 s of a reset); the log glides to the tail while the view is following it (`cs.stick`; a
   wheel-up takes the control back at once) and a round *latest* button appears when the operator has scrolled
@@ -140,7 +157,9 @@ that has ended) do not.
                     └────────────────────────────────────────────────────────────┘
 
  renderer ─ submitToPty(id, text) ─► pty:write (text, then CR as a second write) ─► claude
- renderer ─ chatSkin:screen (what xterm shows, snapshots) ─► PromptMonitor
+ renderer ─ chatSkin:screen (what xterm shows, snapshots) ─┬─► PromptMonitor ── 'prompt' (+ question, options)
+                                                           └─► StreamTracker ── 'stream' (reply so far; adopt)
+ renderer ─ a card button ─► chatSkinSendKey ─► pty:write (the option's key, chunk by chunk) ─► claude
 ```
 
 **Two inputs, one output, one way back.**
@@ -164,14 +183,28 @@ that has ended) do not.
 - *Tracker* (`src/core/transcriptChat.ts`, pure). Turns lines into `ChatItem`s and tracks the turn state
   and the context size. It never throws on a corrupt line.
 - *Dialog detector* (`src/core/tuiPrompt.ts`, pure). Reads the pty's output and, once the renderer sends
-  them, snapshots of what its terminal shows. Only to notice that the TUI is waiting on a dialog (§ 5).
+  them, snapshots of what its terminal shows. To notice that the TUI is waiting on a dialog and to read its question
+  and options with the key that picks each one (§ 5).
+- *Streaming extractor* (`src/core/screenStream.ts`, pure). Reads the reply being written off the same snapshots
+  (`extractStreaming`), keeps a `StreamTracker` per watched pane (what to send, how to join the windows of a
+  reply taller than the terminal, which transcript line IS the previewed text). It runs **in main**, not in the
+  renderer, for three reasons: it is a pure TypeScript core with unit tests (the renderer is plain JS with no
+  imports, so it would need a second copy); the decision "this transcript line is the preview" needs both streams,
+  and main is the only place that sees the snapshots and the transcript items; and the renderer then receives only
+  the text that changed instead of a screenful every 150 ms.
 - *Writing back*: **only** `submitToPty(id, text)`, the chokepoint that writes the text and then the CR
   as two separate writes. Claude Code turns on bracketed paste, so a single `text + CR` write arrives as
   one paste, inside which the CR is a literal newline: the message lands in the box and never sends.
   `npm run check:tokens` fails when a renderer line matches the one-chunk pattern (`ptyWrite(… + '\r')`).
-  The only other thing the skin ever writes is a lone ESC (`\x1b`) to cut a running turn, and only while
-  something is running, because an idle Esc is not harmless in Claude Code (a second one opens the
-  rewind menu).
+  The only other things the skin ever writes are a lone ESC (`\x1b`) to cut a running turn, and only while
+  something is running, because an idle Esc is not harmless in Claude Code (a second one opens the rewind menu);
+  and **a dialog's answer**, through its own chokepoint, `chatSkinSendKey`: a digit, an arrow up/down or Enter and
+  nothing else (validated against `/^(?:\x1b\[[AB]|\r|[0-9])+$/` before anything is written), split into pieces
+  written one by one 60 ms apart because several keys in one write can be swallowed by the TUI's input parser as a
+  single chunk, which is the same reason a message and its CR are separate writes. It is not `submitToPty`
+  because that appends a CR, and a digit must never get one: the digit already selects, and an Enter after it
+  would confirm whatever comes next. Only `chatSkinPick` calls it, and `chatSkinPick` runs only from a click or a
+  key on a card button.
 
 **`paneId` is the pty id.** `pty:spawn` returns `nextId++` and stores it in `ptys`; the renderer keys its
 `panes` Map and `ptyWrite` by it; the skin map in main uses the same number. There is no translation
@@ -207,7 +240,10 @@ Every event carries `paneId` plus exactly one of:
 | `{type:'items', items}` | **Upsert by `uuid`**, in order. The same `uuid` may arrive again with new content. |
 | `{type:'turn', open}` | A turn started or ended. |
 | `{type:'usage', contextTokens?, model?}` | This session's own numbers. Not sent when neither is known. |
-| `{type:'prompt', kind\|null, hint?}` | The TUI is (or stopped) waiting on a dialog (§ 5). |
+| `{type:'prompt', kind\|null, hint?, question?, options?, refresh?}` | The TUI is (or stopped) waiting on a dialog (§ 5). `question` is the line the CLI asks; `options` (at most 12) are `{n\|null, label, selected, key, freeText?}`, present only when the rows were read with confidence: `n` is the number the TUI prints, `selected` marks the cursor's row, `key` is what picks it. `refresh: true` marks the SAME dialog with its cursor moved (new `selected` and, for an unnumbered menu, new `key`s), not a new dialog. |
+| `{type:'stream', text, anchor, headCut}` | The reply being written, as the screen shows it so far (`text` replaces the previous preview's). `anchor` is its first words (stable once there are six), `headCut` says the reply is taller than the terminal and only a window of it was seen. |
+| `{type:'stream', text:null}` | Nothing is being written right now (the spinner went away, a tool took the bottom, a dialog opened). The renderer keeps the preview where it is, frozen: the real message is about to arrive. |
+| `{type:'stream', text:null, adopt: uuid}` | The transcript line `uuid` IS the previewed message. It is sent **just before** the `items` event that carries it, and the renderer hands the preview's node to that item. |
 | `{type:'missing'}` | The transcript file does not exist yet. Not an error; main keeps looking. |
 | `{type:'error', code}` | The read failed (`read-failed`). |
 
@@ -222,7 +258,13 @@ Details the renderer relies on:
   so a long history does not flicker the indicator.
 - A tool item uses the `tool_use` id as its `uuid`; when the result arrives the same `uuid` comes again
   with `ok` or `error`. A tool still running when the transcript records an interruption is marked `error`.
-- `prompt` is sent only when the kind *changes*; `null` means the dialog is gone.
+- `prompt` is sent when the dialog's *identity* changes (kind, question, and each option's number and label);
+  moving the cursor inside the terminal is a `refresh`, never a new dialog. `null` means the dialog is gone.
+- `stream` is sent only for a transcript-backed watch, only when the text changed, and stops being sent the
+  moment the screen stops showing a reply being written. A preview is dropped on `turn: {open:false}` and on
+  `reset` if no `adopt` took it; the extractor remembers the last adopted text until the next turn begins so a
+  stale screen (the CLI keeps saying `esc to interrupt` for a moment after the transcript has the message)
+  cannot revive it as a second preview.
 - Absent numbers stay absent, never `0`.
 
 IPC surface: `chatSkin:watch(paneId, sessionId | null) → {ok:true, file} | {ok:false, error:'not-found'|'bad-id'}`
@@ -270,12 +312,14 @@ appears here or in any fixture). The format is Claude Code's own and **not a doc
 *Not verified in this pass:* every subtype above on a single recent file (the sample I re-read showed
 `turn_duration`, `informational`, `away_summary`, `bridge_status`); behaviour across Claude Code versions.
 
-## 5. Dialogs the chat does not represent
+## 5. Dialogs: a card when the options can be read, the live terminal when not
 
 The transcript learns about a tool *after* the operator allows it. While the TUI sits on "Do you want to
 proceed?", the transcript shows a `tool_use` with no result and says nothing else; the question exists only
 on the screen. The same goes for the folder-trust prompt, `/model`'s picker, an `AskUserQuestion`, and any
-numbered menu. The chat cannot draw them and **does not try to answer them**.
+numbered menu. The chat reads them off the screen, draws them as a **card of buttons** when it understood the rows,
+and shows the **real terminal strip** when it did not. Either way **it never answers one by itself**: a key
+leaves for the pty only when the operator clicks a button or presses a key on it.
 
 **Detection** (`detectTuiPrompt`, pure; `createPromptMonitor` wraps it). It is judged 120 ms after its input
 settles, because a TUI repaints a dialog in many small writes, and it works from **what the terminal shows,
@@ -322,12 +366,50 @@ holds the real sequences (a raw stream with the column sequences, a repaint that
 with controls: stripping the column sequences instead of spacing them yields no verdict, and a raw stream
 followed by the repaint reads as "gone" while the screen still shows the dialog.
 
-**What the operator sees.** A non-null `prompt` puts `cs-strip` on the pane: the overlay shrinks to the
-upper part and the **real xterm** is un-hidden in the lower strip (so the TUI's bottom rows, where the
-dialog is drawn, are visible) and takes the focus. A notice (`role="alert"`) says what is being asked. The
-box is disabled for the duration. If the pane is not in front or the window is hidden, the tab is marked
-and a toast says which session needs the operator. When the dialog goes (`kind: null`) the strip closes and
-the caret returns to the box.
+**What the parser also reads: the question and the options, with the key behind each one** (`src/core/tuiPrompt.ts`).
+The verdict carries `question` and `options: [{n, label, selected, key, freeText?}]` only when the rows could be
+read with confidence (a numbered list that starts at 1, an unnumbered menu with at least two aligned rows, a
+Yes/No offer under a question line). The key is what the CLI's own `Select` component accepts, read in the
+shipped binary: a digit picks that numbered option at once, but only when the menu shows its numbers; an
+unnumbered menu is reached with ↑/↓ from the cursor and confirmed with Enter; a free-text option ("Type
+something.") is focused by a digit or the arrows and is **not** confirmed by Enter (so its key stops short of it).
+Because the arrows are relative to the cursor, moving the cursor in the terminal re-issues the keys: the monitor
+reports it as `onRefresh`, main forwards it as `refresh: true`, and the card adopts the new keys and default mark
+without becoming a new, re-enabled card. What it does **not** read it omits rather than guesses (a scrolled
+list, a multi-select, rows separated by blank lines): no `options`, and the strip is used.
+
+**What the operator sees — the card.** A dialog with `options` becomes a card at the end of the column (the
+composer says *waiting for your answer above*, and is disabled):
+
+- a header with who is asking (`chatSkinWho(p)`, never a hardcoded product name), the question as the CLI worded it
+  (text only), and **one button per option**: its number (an unnumbered menu counts 1, 2, 3 from the top, where a
+  finger goes) and its text; the option the TUI's cursor is on is the default, marked with a return glyph and a
+  stronger neutral edge, so Enter does what it shows. The card is blue (`--st-input`, "waiting on the operator"),
+  never coral;
+- **View in the terminal** swaps the card for the live strip of the same dialog (and a *Show the buttons* button
+  in its notice brings the card back); looking never answers anything;
+- keyboard: ↑/↓/Home/End move between buttons, Enter or Space presses the focused one, a digit presses the option
+  with that number, a chord (Ctrl, Cmd, Alt) is left alone. The default button takes the focus when the card
+  appears and the pane is in front;
+- accessibility: the card is `role="group"` with an `aria-label` naming the session, described by the question; the
+  default option reads *preselected*; the answer-sent line is a `status`;
+- a click calls `chatSkinPick`, which marks the card used **before** it writes, so a double click answers once; it
+  sends the option's `key` through `chatSkinSendKey` (§ 3) and nothing else. The card stays disabled until the next
+  `prompt` event that is not a `refresh`, or the dialog going away; if the same dialog is still up
+  6 s later the key evidently never landed and the card is re-armed, so the operator is never stuck behind
+  disabled buttons;
+- an option the parser flagged `freeText` gets its key only (the arrows, no Enter) and the live terminal comes
+  forward so the operator can type: typing is theirs;
+- an option list in which any key is not a digit, an arrow or Enter, or any label is not text, is refused **as a
+  whole** by the renderer and the dialog falls back to the strip.
+
+**What the operator sees — the strip.** With no `options` (or after "View in the terminal"), a non-null `prompt`
+puts `cs-strip` on the pane: the overlay shrinks to the upper part and the **real xterm** is un-hidden in the
+lower strip (so the TUI's bottom rows, where the dialog is drawn, are visible) and takes the focus. A notice
+(`role="alert"`) says what is being asked. The box is disabled for the duration. If the pane is not in front or
+the window is hidden, the tab is marked and a toast says which session needs the operator (for a card the toast
+says the session *needs your answer*; for the strip, *in its terminal*). When the dialog goes (`kind: null`) the
+card or the strip closes and the caret returns to the box.
 
 **When the dialog is considered answered.** The screen moving past it (a snapshot that no longer shows one;
 before the first snapshot, the pty output), or *proof from the transcript*:
@@ -347,9 +429,19 @@ silent transcript can mean the session was replaced under the same pty.
 - A dialog taller than the retained window loses its question line (the kind then falls back to `select`).
 - A false positive sends the operator to the terminal for nothing; a false negative leaves the session
   looking idle until the 20 s net fires. The design leans to the first.
-- **A dialog with nothing to anchor on is not recognised.** The first-run offer to make auto mode the
-  default has no footer and is not a kind the detector knows; the smoke gate (§ 9) answers it itself. The
-  same goes for any new first-run nag a CLI version adds.
+- **A dialog with nothing to anchor on is recognised only in the Yes/No shape.** The first-run offer to make auto
+  mode the default has no footer; it is read as a `select` with two unnumbered rows when one row starts `Yes`,
+  one starts `No`/`Not now`/`Cancel`/`Back`, and a question stands above them. Any other footer-less shape, and any
+  new first-run nag a CLI version adds, is not seen (the stalled-turn net is what catches it).
+- **A card is only as right as the key behind it.** The keys were read in the CLI's `Select` component and
+  checked against a real permission dialog (§ 9: the "No" button closes it), but a version that changes how a menu
+  takes its input would make a button do something else. The mitigation is the shape of the failure: a card can
+  only send a digit, an arrow or Enter; a dialog it cannot read has no card; "View in the terminal" is always one
+  click away; and a used card re-arms after 6 s if the dialog is still up.
+- **The options the real CLI offered were not the ones the first parser tests assumed.** The permission dialog of
+  the version this was measured on (2.1.310, default permission mode) has *four* rows: *Yes*, *Yes, and always
+  allow access to…*, *Yes, and switch to auto mode…*, *No*, with the number of *No* being 4, not 3 — which is why
+  the card sends the parser's key for the row labelled *No* and never a number it assumed.
 
 **Before the session has an id** (`39d60fd`). A new session in a folder Claude Code has not seen blocks on
 the folder-trust dialog *before* it registers a session id. The chat view used to start watching only once
@@ -439,9 +531,10 @@ renderer holds the whole `glassShell` bridge) and the highlighting; the font and
 settings; the usage bar; and from `core/chatEvents.ts` the pure helpers `parseStatuslinePayload`,
 `mergeStatus` and `summarizeTool`. The SDK-specific event types and the permission cards are gone.
 
-What is given up: the SDK's structured streaming (partial deltas) and approval cards. The skin shows
-complete messages from the transcript and sends permission decisions to the terminal. That is the price of
-there being one session.
+What is given up: the SDK's structured partial deltas and its own permission engine. The skin shows complete
+messages from the transcript, a preview of the one being written read off the screen (§ 3.2), and turns a
+terminal dialog into buttons that press the terminal's own keys (§ 5): the decision is still taken by the TUI,
+against the operator's settings. That is the price of there being one session, and it is smaller than it was.
 
 ## 9. How it is tested
 
@@ -449,7 +542,12 @@ there being one session.
   `src/test/transcriptChat.test.ts` (the rules in § 4: split assistant, tool upsert, filtered wrappers,
   interrupts, synthetic errors, usage), `src/test/tuiPrompt.test.ts` (each dialog kind; a normal markdown
   answer and a lone numbered line trigger nothing; a dialog that scrolled away is gone; the monitor
-  reports transitions only), `src/test/transcriptTail.test.ts` (runs the tail for real against a temp
+  reports transitions only; the question, the options and the key behind each one), `src/test/screenStream.test.ts`
+  (the reply being written, and its negatives: idle, tools only, a dialog, the operator's own message just sent,
+  the input box, footers, the spinner; the real CLI's quirks — no spinner while text is written, a no-break space in
+  the empty box, a titled box border, the right-aligned effort line, a list number painted before its text, the
+  tool progress lines; `stitch`, the tracker and the adoption, including a torn tail and a stale screen),
+  `src/test/transcriptTail.test.ts` (runs the tail for real against a temp
   folder: late file, line in two halves, a multi-byte character split across reads, truncation, id change,
   `unwatch` leaves no watcher, ids that are not id-shaped never touch the filesystem).
   `src/test/chatSkin.test.ts` holds the wiring invariants of § 7. Fixtures are written by hand; no real
@@ -467,10 +565,35 @@ there being one session.
   an inserted path). `src/test/slashCommands.test.ts` covers the pure module (merge precedence, ranking,
   what the box is asking for) and `src/test/usageReader.test.ts` covers the statusline parser, the new reset
   and window-size fields included (absent, unusable and millisecond values).
+- **Guards for the streaming bubble and the dialog cards**, also in `src/test/chatSkin.test.ts`, each with a
+  negative control and each **run for real** from the real source against a stand-in DOM that has ordered
+  children, classes and a class-selector query: text growing is one provisional bubble and the finished message
+  takes that very node over (same node, same slot, one answer row, no leftover class or `aria-hidden`; breaking
+  the hand-over or creating a bubble per event fails it); a tool landing meanwhile goes above the preview; a
+  preview nobody adopted is dropped on turn end and on reset and a frozen one is not; a different block replaces
+  the preview rather than being appended; the snapshot timer waits for an open frame and gives up on a menu that
+  keeps the cursor hidden; a dialog with readable options is a card (group, aria-label with the session's name,
+  one button per option, the default marked, the question as text) and one without (absent, empty, a key that is
+  not a digit/arrow/Enter, a non-text label) keeps the strip; **a click sends exactly the option's key**, one write
+  for a digit and one per piece for arrows and Enter, never text plus a CR (the broken copy routes it through
+  `submitToPty` and fails); nothing outside digit/arrow/Enter can come out of the key path; a double click answers
+  once, a moved cursor adopts the new keys without re-enabling the card, a new dialog is a fresh card, and a card
+  whose dialog stays up is re-armed; **the card writes nothing on its own** (drawing, refreshing, focusing, a
+  quiet period, the dialog going away: zero writes; the broken copy auto-picks the default and fails); the
+  keyboard (digits by position, arrows wrap, a chord is ignored); a typing option gets only its key and brings the
+  terminal; only `chatSkinPick` calls `chatSkinSendKey` and only the click handler and the digit key call
+  `chatSkinPick`; every string is a key in en, es and pt-br with `{name}`; nothing coral in the preview or the
+  cards. On main's side: the question and options are forwarded bounded and untouched, a moved cursor is a
+  `refresh`, the adoption is sent before the item, and no transcript means no preview.
 - **Shots.** `npm run chat:shot` (hidden window) renders hand-written cases in dark and light and in narrow
   and wide panes: the usage row at rest, each tooltip forced open by the fixture, high and empty readings,
-  dense tool rows, the slash popup (all sources, filtered, narrow, and through the real IPC) and the drop
-  veil and inserted paths.
+  dense tool rows, the slash popup (all sources, filtered, narrow, and through the real IPC), the drop
+  veil and inserted paths, the reply half-written and the same reply after the finished message has taken its
+  place (`stream-half-*`, `stream-final-*`), a permission card, a `/model` menu card, a question card with a typing
+  option, a used (disabled) card and a dialog shown on the live strip with the way back to the buttons
+  (`dialog-*`). A fixture event of type `stream` or `prompt` with `options` goes through the same
+  `chatSkinHandleEvent` the transcript tail feeds, so the harness did not change; no shot clicks an option (the
+  pane behind it is a `cat`).
 - **End-to-end gate in the smoke run** (`chatViewSmoke` in `src/main/main.ts`, `97cf42d`). The last step of
   `npm run smoke` (`electron . --smoke`), run in the hidden window the smoke already uses (`show: !SMOKE`),
   after the fast gates and outside their 25 s ceiling, because it waits on a model and has deadlines of its
@@ -498,7 +621,23 @@ there being one session.
     4. a message typed into the chat composer and sent with Enter (`submitToPty`), asking for exactly a
        random word (`PONG-` plus eight hex digits);
     5. an operator bubble **and** an assistant bubble carrying that word, painted from the transcript
-       (up to 90 s). A dialog that interrupts the turn is a failure.
+       (up to 90 s). A dialog that interrupts the turn is a failure;
+    6. **streaming, measured.** A second message asks for `write 25 numbered short lines about rivers`. A tap
+       on everything main sends to the view (`skinTap`, read-only, null outside this gate) records the `stream`
+       events that arrived **before** the transcript line, how long before it the first text appeared, whether
+       each preview is a prefix of the final message (`sameMessage`), how many `adopt` events named it, the
+       extractor's time per snapshot, the renderer's snapshot cost and the CPU of the main and renderer
+       processes (`app.getAppMetrics`, every 500 ms). Then it looks at what was **painted**: exactly one answer
+       bubble, that bubble is the node the preview used (the gate tags the provisional node while it grows and
+       checks the tag on the finished bubble), and no provisional left hanging;
+    7. **a real permission dialog.** The session runs with `--permission-mode default`, so a third message that
+       asks for `touch <random file>` through the Bash tool stops on "Do you want to proceed?". The gate checks
+       the event carried `options`, that the dialog is drawn as a card (and the terminal strip is not up), then
+       **presses the card's "No" button** (the option whose label refuses) and checks that the card disables
+       itself at once, that the dialog closes by itself and that the file was not created. It never presses a
+       button that accepts; Esc is the only other key it would write (to leave the run clean), and needing it is
+       a failure. The folder-trust dialog of step 3 is answered through the card's button too, which exercises the
+       arrows-then-Enter keys of an unnumbered menu on the real CLI.
   - *How it cleans up.* On success and on failure it closes the pane, checks that the `claude` process
     tree is gone (killing by pid and reporting a problem if not), that the pty and the transcript watcher
     are unregistered and that the session left the registry, and removes the temporary folder and the
@@ -538,19 +677,68 @@ there being one session.
 
 **Not done**
 
-- **Partial streaming.** Messages appear when complete, as the transcript records them.
+- **Streaming of anything but the reply text.** Thinking, a tool's progress and a subagent's output are not
+  previewed; only the last text block of the turn is (a block followed by a tool row is complete, and the
+  transcript has it). The preview is what the terminal PAINTS: markdown rendered by the TUI (no `**`, no `#`, no
+  fences, link targets gone, tables as box characters), re-wrapped to its width, so the finished message can
+  look different from the preview once its real markdown is drawn (a heading grows, inline code gets its fill).
+  That is the one visible change at hand-over; the position does not move.
 - **Tool output beyond the preview.** Rows show the bounded preview (§ 2, § 3.2); the full result stays in the
   transcript and the terminal. A very long output, or a diff rendered as a diff, is not drawn.
 - **Thinking and subagent activity** are not shown (subagent lines are dropped on purpose).
-- **Answering dialogs** from the chat; they are only pointed at (§ 5).
+- **Dialogs whose rows the parser cannot read** (a scrolled list, a multi-select, rows separated by blank lines, a
+  footer-less shape other than Yes/No) are still only pointed at: the strip, as before (§ 5).
 - **`@` mentions** in the box (files and images arrive as quoted paths, § 2, not as attachment chips).
 - **A permission-mode picker.** The chat follows what the session already runs under.
 - **Accessibility pass** beyond the log region, the alert notice and `aria-pressed` on the switch.
 - **Cloud mode.** The tail reads a local file; moving sessions behind a host is the cloud-mode RFC's
   concern, and the tail's injected projects folder and callback are the seam.
 
+**Streaming: is it viable, and what was measured.** Yes, on the real screen, and it is on. The rule set at the
+start was that a streaming that merely *looked* like it worked would not ship, so the first thing built was the
+measurement (`chatViewSmoke` step 6, § 9) against a real `claude` (2.1.310, haiku, an ephemeral session in a
+temporary folder, hidden window), asking for `write 25 numbered short lines about rivers`. Its first runs
+**failed**, and what they showed is what the extractor now handles:
+
+| What the real screen does | Effect on the first version | Fix (`src/core/screenStream.ts`, renderer) |
+|---|---|---|
+| While text is written the CLI draws **no spinner**; the only sign of a live turn is `… · esc to interrupt` on the footer line under the box | 2 stream events in a 5 s answer | the footer is read where it lives (under the box) |
+| The empty box is painted `❯` + a **no-break space** | the box was not found, so its border read as text | no-break spaces are plain spaces |
+| The box's top border **carries the session's name** (`──── my-session ─`) | it ended the reply block, so nothing was a reply | a titled border is a border |
+| A right-aligned **`◐ medium · /effort`** row sits above the box | it leaked into the text (`2. ◐ medium · /effort`) | known noise |
+| A list number is painted **before its text** (`3.`, then a moment later `3. The Nile…`) | glued to the line above | a bare number starts an item |
+| The terminal is shorter than a 25-line reply, so the **head scrolls off** and each snapshot is a window | the preview jumped to the last 14 lines | `stitch` joins the windows back into the whole text |
+| The CLI paints a frame **in pieces of ≤ ~1 KB, up to ~100 ms apart**, between `ESC[?25l` and `ESC[?25h` | a snapshot in between is **torn** (line 23 and line 24 mashed together), and a torn tail does not match the final message | a snapshot waits for the frame to close (≤ 250 ms more, never for ever), and the join tolerates a repaint in the last two lines |
+| `⏺ Running 1 shell command…` is a tool progress line | read as a reply | known tool summaries |
+| The finished message is in the transcript while the screen still says `esc to interrupt` | the same text could come back as a second preview | the last adopted text is remembered until the next turn |
+
+With those in, four consecutive runs on the same machine gave:
+
+| run | stream events before the transcript line | first text before it | previews that were a prefix of the final | last preview / final | snapshots in the answer | extractor (avg / max) | CPU main / renderer |
+|---|---|---|---|---|---|---|---|
+| 1 | 11 | 4.1 s | 11 / 11 | 35 % ¹ | 28 in 5.9 s | 0.35 / 1.94 ms | 0.2 % / 0.5 % |
+| 2 | 24 | 3.3 s | 24 / 24 | 96 % | 41 in 5.3 s | 0.33 / 2.61 ms | 0.2 % / 0.8 % |
+| 3 | 23 | 3.3 s | 23 / 23 | 96 % | 31 in 4.3 s | 0.29 / 1.13 ms | 0.2 % / 0.8 % |
+| 4 | 22 | 2.9 s | 22 / 22 | 95 % | 28 in 3.8 s | 0.20 / 1.31 ms | 0.4 % / 0.9 % |
+
+¹ The model paused for 2.6 s after ten lines and then finished; the terminal had nothing more to show, so there was
+nothing more to preview. The preview can only be as fine as the CLI's own painting.
+
+In every run exactly one answer bubble was on screen at the end, it was the node the preview had used, and no
+preview was left hanging. The snapshot itself costs ~0.01–0.15 ms in the renderer (60 rows of the buffer) and the
+timer change (a snapshot after 40 ms of quiet, never later than 150 ms after the first unsent byte, plus up to
+250 ms while a frame is open) sends about the same number of snapshots as before; nothing needed throttling. The
+numbers are for this machine, this CLI version and a fast model; a slower model streams in smaller steps, and the
+window stitching matters more for replies taller than the pane.
+
 **Risks**
 
+- **The streaming preview depends on how the TUI paints**, which is the CLI's, not a contract: its footer, its
+  spinner, its frame brackets and its tool progress wording changed what had to be handled between the first
+  run and the fifth, and will again. The failure mode is bounded: if the extractor sees nothing it sends nothing
+  and the chat is exactly what it was (complete messages from the transcript); if it sees something that is not
+  the message, the adoption does not match, the preview is dropped at the end of the turn, and the finished
+  message appears as before. A preview is never what stays.
 - **The transcript format is Claude Code's, not a contract.** Field names, the split-by-block shape, the
   end-of-turn markers and the wrapper tags can change between versions. The tracker is defensive (unknown
   lines are ignored, nothing throws), which means a change degrades silently into a thinner chat, not a
@@ -568,9 +756,8 @@ there being one session.
 
 **Open questions**
 
-1. Should the detector learn first-run offers that have no footer to anchor on (the "make auto mode your
-   default" one)? Nothing else points the operator at the terminal for them, since the stalled-turn notice
-   needs an open turn.
+1. *(partly answered)* The footer-less Yes/No offers are now read (§ 5). Open: other footer-less shapes, which
+   nothing points the operator at, since the stalled-turn notice needs an open turn.
 2. Is 20 s the right threshold for the stalled-turn notice, and should it differ for long tool runs?
 3. *(answered)* The tool's output now sits behind a disclosure in each row. Open: should the row open on its
    own for an error, or for the tool that is blocking a turn?
