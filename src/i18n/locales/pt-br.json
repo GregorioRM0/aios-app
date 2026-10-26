@@ -1279,7 +1279,7 @@
   "chat.slash.cmd.list-agents": "Listar as sessões e subagentes para os quais você pode escrever",
   "chat.slash.cmd.login": "Entrar na sua conta",
   "chat.slash.cmd.logout": "Sair da sua conta",
-  "chat.slash.cmd.mcp": "Gerenciar os servidores MCP",
+  "chat.slash.cmd.mcp": "Gerenciar os servidores de ferramentas conectados",
   "chat.slash.cmd.memory": "Editar os arquivos de memória (CLAUDE.md)",
   "chat.slash.cmd.mobile": "Mostrar um QR code do app de celular",
   "chat.slash.cmd.model": "Escolher o modelo",
