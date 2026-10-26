@@ -5,7 +5,7 @@ import { withDefaultLocale } from './termLocale';
 import { createTranscriptTail, isSessionId } from './transcriptTail';
 import { createPromptMonitor, type PromptMonitor, type TuiPrompt } from '../core/tuiPrompt';
 import { createStreamTracker, sameMessage, normalizeForMatch, type StreamTracker } from '../core/screenStream';
-import { mergeStatus, parseStatuslinePayload } from '../core/chatEvents';
+import { mergeStatus, parseStatuslinePayload, scopeStatusToSession } from '../core/chatEvents';
 import { builtinCommands, slashSuggestions, type SlashCommand } from '../core/slashCommands';
 import { listSlashCommands } from './slashCommandsIo';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
@@ -465,12 +465,15 @@ ipcMain.on('chatSkin:screen', (e, paneId: number, text: string) => {
 });
 ipcMain.handle('chatSkin:unwatch', (_e, paneId: number) => endSkin(Number(paneId), false));
 /* The usage bar. ~/.claude/statusline-payload.json is the LAST payload ANY Claude Code session on this
-   machine wrote, so it describes the most recently active session, not necessarily this tab: the
-   renderer prefers the transcript's own context/model for the tab and uses this for the account-wide
-   numbers (5-hour, weekly). An absent field stays absent — nothing here defaults a percentage to 0. */
-ipcMain.handle('chat:status', async () => {
-  try { return mergeStatus(undefined, parseStatuslinePayload(await fs.promises.readFile(path.join(aios.claudeConfigDir(), 'statusline-payload.json'), 'utf8'))); }
-  catch { return mergeStatus(undefined, {}); }   // no file yet, or unreadable: the bar just has fewer fields
+   machine wrote, so its model, effort and context may belong to another conversation. The tab sends its own
+   session id and `scopeStatusToSession` keeps those per-session fields only when the payload's session_id is
+   the same; otherwise they are omitted and `sessionMatch` is false (a tab with no id yet, or a bad id, is
+   simply "no match"). The account-wide numbers (5-hour, weekly and their resets) are always returned. An absent
+   field stays absent — nothing here defaults a percentage to 0. */
+ipcMain.handle('chat:status', async (_e, sessionId: unknown) => {
+  const tabId = isSessionId(sessionId) ? sessionId : null;
+  try { return mergeStatus(undefined, scopeStatusToSession(parseStatuslinePayload(await fs.promises.readFile(path.join(aios.claudeConfigDir(), 'statusline-payload.json'), 'utf8')), tabId)); }
+  catch { return mergeStatus(undefined, { sessionMatch: false }); }   // no file yet, or unreadable: the bar just has fewer fields
 });
 
 /* The slash-command popup in the chat composer. The renderer sends what is in the box and the pane's working

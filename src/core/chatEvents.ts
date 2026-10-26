@@ -24,12 +24,20 @@ export interface ChatStatus {
   contextWindow?: number;
   model?: string;
   effort?: string;
+  /** Set by `scopeStatusToSession` and carried by `mergeStatus`: true when the statusline payload described the
+   *  asking tab's own session, false when it described another one (or when either id is missing). Absent when
+   *  nothing was scoped. When false, model/effort/contextPct/contextWindow are NOT in this object at all. */
+  sessionMatch?: boolean;
   /** Where the fields came from: the live session, the statusline file, or a blend of both. */
   source: 'sdk' | 'file' | 'mixed';
 }
 
 /** A ChatStatus without its provenance — what one source can contribute on its own. */
-export type StatusFields = Omit<ChatStatus, 'source'>;
+export type StatusFields = Omit<ChatStatus, 'source'> & {
+  /** The session the payload was written for. Parser output only: it is used by `scopeStatusToSession` to decide
+   *  what to hide and is never part of a ChatStatus, so it never travels to the renderer. */
+  sessionId?: string;
+};
 
 // ── small, defensive readers ────────────────────────────────────────────────
 
@@ -114,7 +122,10 @@ export function parseStatuslinePayload(input: unknown): StatusFields {
   const model = str(firstPresent(d, ['model.display_name', 'model.id'])) ?? str(m);
   const effort = str(firstPresent(d, ['effort.level', 'effort_level', 'effortLevel', 'model.effort_level']));
 
+  const sessionId = str(firstPresent(d, ['session_id', 'sessionId', 'session.id']));
+
   const out: StatusFields = {};
+  if (sessionId !== undefined) out.sessionId = sessionId;
   if (five !== undefined) out.fiveHourPct = clampPct(five);
   if (seven !== undefined) out.sevenDayPct = clampPct(seven);
   if (context !== undefined) out.contextPct = clampPct(context);
@@ -124,6 +135,28 @@ export function parseStatuslinePayload(input: unknown): StatusFields {
   if (model !== undefined) out.model = model;
   if (effort !== undefined) out.effort = effort;
   return out;
+}
+
+/** The fields that describe ONE conversation. Everything else in the payload (5-hour and weekly usage and their
+ *  resets) belongs to the account and is true whichever session wrote the file. */
+const PER_SESSION_FIELDS = ['model', 'effort', 'contextPct', 'contextWindow'] as const;
+
+/**
+ * Scope a parsed payload to the tab that is asking. The payload file is global: it is whatever the LAST Claude Code
+ * session on the machine wrote, so its model, effort and context describe that session, which may be a different
+ * conversation from the tab's. Showing them would put another session's numbers on this tab and look right.
+ * So the per-session fields survive only on a positive match: both ids present, non-empty and equal. A missing id on
+ * either side counts as "no match" (hide rather than risk showing the wrong session's data). The account-wide
+ * fields are always kept. The payload's own sessionId is dropped from the result: the renderer only needs the verdict.
+ */
+export function scopeStatusToSession(file: StatusFields, tabSessionId: string | null | undefined): StatusFields & { sessionMatch: boolean } {
+  const { sessionId, ...rest } = file;
+  const sessionMatch = typeof sessionId === 'string' && sessionId !== ''
+    && typeof tabSessionId === 'string' && tabSessionId !== ''
+    && sessionId === tabSessionId;
+  const out: StatusFields = { ...rest };
+  if (!sessionMatch) for (const f of PER_SESSION_FIELDS) delete out[f];
+  return { ...out, sessionMatch };
 }
 
 // ── (b) merging sources ─────────────────────────────────────────────
@@ -147,6 +180,9 @@ export function mergeStatus(sdk: StatusFields | undefined, file: StatusFields | 
     if (a !== undefined) { (out as unknown as Obj)[f] = a; fromSdk = true; }
     else if (b !== undefined) { (out as unknown as Obj)[f] = b; fromFile = true; }
   }
+  // the scoping verdict is not a data field (it would count as a source): the first source that made one wins
+  const verdict = sdk?.sessionMatch ?? file?.sessionMatch;
+  if (verdict !== undefined) out.sessionMatch = verdict;
   if (fromSdk && fromFile) out.source = 'mixed';
   else if (fromSdk) out.source = 'sdk';
   else if (fromFile) out.source = 'file';
