@@ -67,3 +67,18 @@ test('the hold sits in the bus loop, before every type, and gives up under the h
   assert.match(bus.slice(at, at + 600), /MAX_HOLD_MS[\s\S]*markUndelivered/);
   assert.doesNotMatch(app, /holdBusSend/, 'the renderer never types a held message on its own');
 });
+
+test('the pane re-checks with no gap and the bus keeps the request without spending an attempt', () => {
+  const send = /case 'sendByName': \{[\s\S]*?\n    \}/.exec(app)?.[0] ?? '';
+  assert.ok(send.indexOf('BUS_DEFERRED_TYPING') > 0 && send.indexOf('BUS_DEFERRED_TYPING') < send.indexOf('submitToPty'));
+  const r = /const BUS_DEFERRED_TYPING = '([^']+)'/.exec(app)?.[1];
+  const m = /const DEFERRED_TYPING = '([^']+)'/.exec(bus)?.[1];
+  assert.ok(r && r === m, 'renderer and bus agree on the deferred reason');
+  const branch = bus.slice(bus.indexOf('sendResult.reason === DEFERRED_TYPING'), bus.indexOf('if (releaseForSibling'));
+  assert.match(branch, /attempts--/);
+  assert.doesNotMatch(branch, /markUndelivered|releaseForSibling/);
+});
+
+test('a dropped path counts as a draft', () => {
+  assert.match(app, /attachDropZone\(el, \(paths\) => \{ noteOperatorKeys\(p, 'drop'\);/);
+});

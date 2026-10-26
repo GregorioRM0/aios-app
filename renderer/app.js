@@ -3913,7 +3913,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
   }
   // drop a file/folder onto THIS terminal → insert its quoted path (not the active one:
   // the pane under the pointer is the one the operator meant)
-  attachDropZone(el, (paths) => { window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' '); setActive(id); });
+  attachDropZone(el, (paths) => { noteOperatorKeys(p, 'drop'); window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' '); setActive(id); });   // #81: a dropped path is a draft
   term.onData((d) => { noteOperatorKeys(p, d); window.glassShell.ptyWrite(id, d); });
   attachPathLinks(term, cwd, id);
   /* AI-64: the session tells us its own name through the tty title. */
@@ -3998,8 +3998,10 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
    writing a draft; the bus (commandBus, operatorComposing) holds its messages meanwhile. Composing =
    any key since the last Enter / Ctrl-C / Ctrl-U OUTSIDE a bracketed paste (a paste can carry line
    breaks and is still a draft; an up-arrow recalls an old prompt, so escapes count as keys). */
+const BUS_DEFERRED_TYPING = 'deferred: the operator is typing in this session';   // commandBus matches it
 function noteOperatorKeys(p, d) {
   if (!p || typeof d !== 'string' || !d) return;
+  p.lastKeyAt = Date.now();
   let rest = '';
   for (let k = 0; k < d.length;) {
     if (d.startsWith('\x1b[200~', k)) { p.inPaste = true; k += 6; continue; }
@@ -6357,6 +6359,7 @@ attachDropZone(document.getElementById('tpanes'), (paths, isDir) => {
   const id = active.term;
   if (id != null && panes.get(id) && !panes.get(id).exited) {
     // several files from Finder arrive as one drop — insert them all, space separated
+    noteOperatorKeys(panes.get(id), 'drop');   // #81: a dropped path is a draft
     window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' ');
     setActive(id);
     return;
@@ -6505,6 +6508,12 @@ window.glassShell.onIntent(async (m) => {
       const p = hit ? panes.get(hit[0]) : null;
       if (!p || p.exited) { window.glassShell.busSendResult(m.name, false, 'no pane by that name in this surface'); return; }
       if (!p.isSession) { window.glassShell.busSendResult(m.name, false, 'that pane is no longer running the session (its Claude exited; it is a shell now)'); return; }
+      /* #81: the last word is the pane's, with no gap: if its operator is writing now, say so and type
+         nothing. The bus keeps the request and does not spend an attempt on it. */
+      if (p.composing || Date.now() - (p.lastKeyAt || 0) < 8000) {
+        window.glassShell.busSendResult(m.name, false, BUS_DEFERRED_TYPING);
+        return;
+      }
       submitToPty(hit[0], m.text);
       // a bus send is agent-to-agent: deliver it in the background unless the operator chose 'follow'
       if (BUS_FOCUS === 'follow') setActive(hit[0]); else markActivity(hit[0]);

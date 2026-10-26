@@ -337,6 +337,7 @@ const alive = (pid: number): boolean => {
    request burning its whole release budget before anyone finds out. */
 /* #81 — what each pane's operator is doing, by session name (renderer → bus:composing). */
 const composing = new Map<string, { composing: boolean; at: number }>();
+const DEFERRED_TYPING = 'deferred: the operator is typing in this session';   // renderer BUS_DEFERRED_TYPING
 ipcMain.on('bus:composing', (_e, v: { name: string; composing: boolean }) => {
   if (v && v.name) composing.set(sessionKey(v.name), { composing: !!v.composing, at: Date.now() });
 });
@@ -715,6 +716,7 @@ async function runSend(
       return;
     }
     attempts++;
+    const firstTry = !firstTypedAt;
     if (!firstTypedAt) firstTypedAt = Date.now();
     const emittedAt = Date.now();
     recordTyped(deliverText, req.name, 'send', req.from);   // AI-172: before typing, so the label can never lose the race
@@ -729,6 +731,16 @@ async function runSend(
        spent both sibling releases, and killed a brief the other App could have delivered.
        So: hand it back first, and only retire when the release budget is genuinely gone. */
     const sendResult = await awaitSendVerdict(req.name, emittedAt);
+    if (sendResult && !sendResult.ok && sendResult.reason === DEFERRED_TYPING) {
+      /* #81: the pane typed nothing because its operator is writing. Not a failure and not an
+         attempt: give the attempt back, keep the request, and wait for the draft to be sent. */
+      attempts--;
+      if (firstTry) firstTypedAt = 0;
+      composing.set(sessionKey(req.name), { composing: true, at: Date.now() });
+      if (!fs.existsSync(heldPath)) return;
+      await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
+      continue;
+    }
     if (sendResult && !sendResult.ok) {
       if (releaseForSibling(heldPath, req, sendResult.reason)) return;   // let another surface try
       markUndelivered(heldPath, req, sendResult.reason);
