@@ -67,16 +67,51 @@ that has ended) do not.
   becomes a round **stop button** while Claude works (`chatSkinControls` is unchanged: stop when working,
   send disabled without text). Enter sends; Shift+Enter inserts a newline; IME composition never sends. Esc
   cuts the running turn (only while something is running — see § 3). Slash commands are sent like any other
-  message, with no filter and no special path. Focus is a visible ring around the whole card.
+  message, with no filter and no special path. The box is neutral: its border does not change colour on
+  focus (a slightly stronger neutral edge and a faint halo), keyboard focus on the small controls is a neutral
+  outline, and **the accent colour is used for the send button and nothing else** in the chat — markdown
+  links take a cool `--chat-link` token (the house has no link token, and the markdown viewer's coral links
+  are spoken for here). The chips stay **inside the card** and the meters go **under it**: model and effort
+  say what will answer *this message* (they are part of the act of writing it), whereas the meters are the
+  ambient cost of the session, read at a glance and never while typing. Putting all five in one row made the
+  row a toolbar; split, the card stays a calm box and the row below stays quiet.
+- **The usage row under the card.** The 5-hour, weekly and context meters are not in the header any more
+  (the header carries the `Terminal | Chat` switch and the Aa button). They are a thin row under the card:
+  each meter is a small ring (the glance), the label and the value (the fact), neutral up to 70, `--st-warn`
+  from 70 and `--st-error` from 90 (thresholds on the percentage, whatever number is on show). A reading we
+  do not have is `—` with an empty ring, never `0`. Every meter is focusable (`role="img"`, an
+  `aria-label` with the value and the detail) and answers hover **and** keyboard focus with a tooltip of its
+  own (not a `title`): the window's usage, **when it resets** (clock time today, weekday and time
+  otherwise, plus the two largest units left) and, for context, **tokens used over the window**. The reset
+  lines appear only when the statusline payload carried `rate_limits.*.resets_at` (read by
+  `parseStatuslinePayload`, § 6); a reset already behind us says the reading is from the previous window and
+  dims it. The grey "Enter sends · Shift+Enter…" line became a short hint at the right end of the same row
+  that shows **only while the caret is in the box**; the full sentence is the textarea's tooltip and its
+  accessible description. While a dialog docks the live terminal strip (`.pane.cs-strip`), the whole compose
+  block (card, row and hint) is hidden, since nothing can be typed.
+- **Slash commands.** Typing `/` at the very start of the box opens a popup above the card listing what the
+  operator can run: Claude Code's built-in commands, the AIOS plugin's `/aios:*`, the operator's own
+  (`<config dir>/commands`), the project's (`.claude/commands` of the pane's folder) and the installed
+  plugins'. Each row shows the name, its usage hint (`argument-hint`) and what it does (`description`), plus a
+  small tag when it is the operator's or the project's own. It filters as they type (name, then alias, then
+  the part after a `plugin:` prefix, then any word). ↑/↓ move (and wrap), **Enter or Tab complete** the
+  highlighted command into the box as `/name ` and **never send** — the operator still reads the line and sends
+  it with a second Enter; a click completes too; **Esc closes the popup and does not cut the turn** (its
+  listener runs before the interrupt one, as the Aa popover's does). It closes on blur, on sending, when the
+  text stops being a lone slash word and when the command is already complete. Accessibility: the textarea is
+  a `combobox` over a `listbox` of `option`s with `aria-activedescendant`. It only ever completes text; it
+  writes nothing to the pty.
+- **Files in the box.** Dropping files (from Finder or from the explorer) or an image on the card, or pasting
+  an image, inserts its **absolute path in double quotes** at the caret, as Claude Code's own terminal does;
+  it never sends. The drop stops at the card (the pane under it has its own drop zone that would write the
+  path to the pty a second time). A picture with no file behind it goes through main, which saves it under
+  the system temp folder (`aios-chat-paste/`, a name main chooses, png/jpeg/gif/webp, ≤ 25 MB, own files older
+  than a day swept) and returns the path.
 - **Reading settings.** Font and size no longer take header space: an **Aa** button opens a small popover
   (each font drawn in itself, the size as a row of numbers, a live sample), persisted through the same
   `chatFontFamily` / `chatFontSize` settings and shared by every chat view; a stack or size saved by hand
   stays selectable. It closes with Esc or a press outside, and **that Esc must not cut the turn**: its
   listener runs before the interrupt one and stops the event (§ 9: a test pins the order).
-- **Usage meters.** 5-hour, weekly and context are fine meters in the header (label, a 4 px bar, the value;
-  neutral up to 70, `--st-warn` from 70, `--st-error` from 90). A reading we do not have is `—` with an empty
-  bar, never `0`, and each meter carries its value in `title` and `aria-label`. Model and effort are the
-  composer's chips. See § 6 for which of these belong to the pane and which to the account.
 - **Cards for the states.** *Connecting*, *waiting*, *empty* and *error* are one centred card (icon, a short
   title, a sentence; the error one adds a button back to the terminal). *The terminal needs you* (a dialog) and
   *quiet for a while* (a stalled turn) are a status card in the column — `--st-input` and `--st-warn` — with
@@ -335,6 +370,14 @@ machine. It is global, not per tab. Therefore:
 - **Context and model of the pane come from this session's own transcript** (the `usage` event) whenever
   it has them: the context shows as tokens (for example `84k`), the model overrides the payload's. The
   payload only fills what the transcript cannot say, field by field.
+- **Resets and the context window.** The payload also carries `rate_limits.five_hour.resets_at` and
+  `rate_limits.seven_day.resets_at` (Unix seconds) and `context_window.context_window_size`.
+  `parseStatuslinePayload` returns them as `fiveHourResetsAt`, `sevenDayResetsAt` and `contextWindow` only
+  when they are usable numbers (a reset written in milliseconds is scaled; anything else is dropped);
+  `mergeStatus` carries them with the same field-by-field rule. Nothing is inferred: with no reset in the
+  payload the tooltip simply has no reset line. The context meter's percentage is this pane's own tokens over
+  the window size **only when they agree** (tokens above the window mean the payload describes another
+  session's model), and the tooltip then reads `used / total`.
 - An absent field is shown as `—`, never `0%`: a bar that shows `0%` for a missing number is a fabricated
   reading. `chat:status` returns the merge of nothing with the parsed payload (`parseStatuslinePayload`,
   `mergeStatus`) and is refreshed about every 20 s while a chat view is up.
@@ -412,6 +455,22 @@ there being one session.
   `src/test/chatSkin.test.ts` holds the wiring invariants of § 7. Fixtures are written by hand; no real
   transcript is copied into the repo. The controls are real: breaking the UTF-8 decoder on purpose made the
   multi-byte test fail.
+- **Guards that read the code and run it.** `src/test/chatSkin.test.ts` also pins, each with a negative
+  control (the check is run against a deliberately broken copy and must fail): coral only in the send button
+  (every stylesheet rule that reaches for `--accent` inside the chat is listed and only the send button
+  passes); the meters are no longer in the header; the popup's Esc listener is registered before the
+  interrupt one and stops the event (the two listeners are replayed in registration order with a fake event);
+  Enter with the popup open completes and is consumed, so it cannot send; the drop inserts the double-quoted
+  path and stops the event before its early return. The usage row, the popup and the drop/paste code are
+  **run for real** from the real source against a stand-in DOM (dash and empty ring for a missing reading,
+  70/90 colours, resets present or absent, a stale reset, a stale popup answer ignored, caret and spacing of
+  an inserted path). `src/test/slashCommands.test.ts` covers the pure module (merge precedence, ranking,
+  what the box is asking for) and `src/test/usageReader.test.ts` covers the statusline parser, the new reset
+  and window-size fields included (absent, unusable and millisecond values).
+- **Shots.** `npm run chat:shot` (hidden window) renders hand-written cases in dark and light and in narrow
+  and wide panes: the usage row at rest, each tooltip forced open by the fixture, high and empty readings,
+  dense tool rows, the slash popup (all sources, filtered, narrow, and through the real IPC) and the drop
+  veil and inserted paths.
 - **End-to-end gate in the smoke run** (`chatViewSmoke` in `src/main/main.ts`, `97cf42d`). The last step of
   `npm run smoke` (`electron . --smoke`), run in the hidden window the smoke already uses (`show: !SMOKE`),
   after the fast gates and outside their 25 s ceiling, because it waits on a model and has deadlines of its
@@ -484,7 +543,7 @@ there being one session.
   transcript and the terminal. A very long output, or a diff rendered as a diff, is not drawn.
 - **Thinking and subagent activity** are not shown (subagent lines are dropped on purpose).
 - **Answering dialogs** from the chat; they are only pointed at (§ 5).
-- **Attachments, images, drag-and-drop, `@` mentions** in the box.
+- **`@` mentions** in the box (files and images arrive as quoted paths, § 2, not as attachment chips).
 - **A permission-mode picker.** The chat follows what the session already runs under.
 - **Accessibility pass** beyond the log region, the alert notice and `aria-pressed` on the switch.
 - **Cloud mode.** The tail reads a local file; moving sessions behind a host is the cloud-mode RFC's
