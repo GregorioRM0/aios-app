@@ -698,6 +698,68 @@
         "chatSkinSlashShow(ctx.cs, [{\"name\": \"compact\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.compact\", \"argumentHint\": \"<optional custom summarization instructions>\", \"source\": \"builtin\"}, {\"name\": \"config\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.config\", \"argumentHint\": \"key=value\", \"source\": \"builtin\"}, {\"name\": \"context\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.context\", \"argumentHint\": \"[all]\", \"source\": \"builtin\"}, {\"name\": \"copy\", \"description\": \"\", \"descKey\": \"chat.slash.cmd.copy\", \"source\": \"builtin\"}]);",
         "chatSkinSlashMove(ctx.cs, 0, true);"
       ]
+    },
+    {
+      "name": "drop-over-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "await ctx.sleep(250);",
+        "ctx.cs.input.focus();",
+        "ctx.cs.input.value = \"Compare these two screens\";",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "ctx.cs.box.classList.add('dropok');"
+      ]
+    },
+    {
+      "name": "drop-inserted-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "await ctx.sleep(250);",
+        "ctx.cs.input.focus();",
+        "ctx.cs.input.value = \"What is different between\";",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "ctx.cs.input.setSelectionRange(ctx.cs.input.value.length, ctx.cs.input.value.length);",
+        "chatSkinInsertPaths(ctx.cs, ['/work/app/screens/Home before.png', '/work/app/screens/Home after.png']);"
+      ]
+    },
+    {
+      "name": "drop-over-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "await ctx.sleep(250);",
+        "ctx.cs.input.focus();",
+        "ctx.cs.input.value = \"Compare these two screens\";",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "ctx.cs.box.classList.add('dropok');"
+      ]
+    },
+    {
+      "name": "drop-inserted-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "await ctx.sleep(250);",
+        "ctx.cs.input.focus();",
+        "ctx.cs.input.value = \"What is different between\";",
+        "chatSkinAutosize(ctx.cs); chatSkinControls(ctx.p);",
+        "ctx.cs.input.setSelectionRange(ctx.cs.input.value.length, ctx.cs.input.value.length);",
+        "chatSkinInsertPaths(ctx.cs, ['/work/app/screens/Home before.png', '/work/app/screens/Home after.png']);"
+      ]
     }
   ]
 }

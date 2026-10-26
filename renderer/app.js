@@ -7525,7 +7525,10 @@ function chatSkinBuild(id, p) {
   stopBtn.hidden = true;
   const ccRow = el('div', 'cc-row');
   ccRow.append(chips, el('span', 'cs-fill'), stopBtn, sendBtn);
-  box.append(input, ccRow);
+  /* The drop affordance: a quiet veil over the card while a file is dragged across it (see chatSkinDropBind). */
+  const dropEl = el('div', 'cc-drop', t('chat.drop.label'));
+  dropEl.setAttribute('aria-hidden', 'true');
+  box.append(input, ccRow, dropEl);
   /* The box sits in its own wrapper so anything that floats against the card (the slash popup) is positioned
      against the card, not the whole compose block. Under it, the meta row: the meters on the left, and on the
      right the keys hint, which only shows while the caret is in the box. */
@@ -7592,6 +7595,7 @@ function chatSkinBuild(id, p) {
   });
   input.addEventListener('input', () => { chatSkinAutosize(cs); chatSkinControls(p); chatSkinSlashRefresh(cs, p); });
   input.addEventListener('blur', () => chatSkinSlashClose(cs));
+  chatSkinDropBind(cs);
   /* REGISTERED BEFORE the Enter listener below, and it stops the event for it: with the popup open Enter (and Tab)
      complete the highlighted command into the box and NEVER send — the operator still reads and edits the line,
      then sends it with a second Enter. */
@@ -8041,6 +8045,89 @@ function chatSkinSlashKey(cs, e) {
   }
   if ((e.key === 'Enter' || e.key === 'Tab') && !e.shiftKey) { e.preventDefault(); chatSkinSlashPick(cs, s.index); return true; }
   return false;
+}
+/* ── files into the box: drop and paste ─────────────────────────────────────────────────────────────────────
+   Dropping a file or an image on the card, or pasting an image, writes its absolute path into the box inside double
+   quotes — what Claude Code's own terminal does, and what it recognises as a file (a quoted path survives spaces).
+   It INSERTS at the caret and never sends: the path is the start of a message the operator is still writing, the same
+   rule as a drop on a terminal pane. Same sources as that drop (droppedPaths: our explorer rows, Finder files,
+   file:// lists); a picture that has no file behind it (a screenshot on the clipboard, an image dragged from a
+   browser) goes through main (chat:savePastedImage), which stores it in a temp file and returns the path. */
+function chatSkinQuotePath(p) {
+  const s = String(p);
+  // a double quote inside a path is vanishingly rare; the shell-style single quote form (xQuote) handles it without escaping games
+  return s.includes('"') ? xQuote(s) : '"' + s + '"';
+}
+/* Put `paths` at the caret, separated by spaces, with a space before when the text before the caret does not end in
+   one and a space after, so the operator can keep typing. The value is set and the box told, as if it had been typed. */
+function chatSkinInsertPaths(cs, paths) {
+  if (!paths.length) return;
+  const el_ = cs.input;
+  const v = el_.value;
+  const a = el_.selectionStart ?? v.length, b = el_.selectionEnd ?? v.length;
+  const before = v.slice(0, a), after = v.slice(b);
+  const ins = (before && !/\s$/.test(before) ? ' ' : '') + paths.map(chatSkinQuotePath).join(' ') + (/^\s/.test(after) ? '' : ' ');
+  el_.value = before + ins + after;
+  const at = before.length + ins.length;
+  el_.setSelectionRange(at, at);
+  chatSkinSlashClose(cs);
+  chatSkinAutosize(cs);
+  chatSkinControls(cs.pane);
+  try { el_.focus({ preventScroll: true }); } catch { /* detached */ }
+}
+/* The paths of a list of File objects: the real path when the file lives on disk, else (an image only) a temp copy
+   made by main. Files that are neither are skipped, and the caller says so once. Resolves to { paths, failed }. */
+async function chatSkinFilePaths(files) {
+  const paths = []; let failed = 0;
+  for (const f of files) {
+    let real = '';
+    try { real = window.glassShell.pathForFile(f) || ''; } catch { real = ''; }
+    if (real) { paths.push(real); continue; }
+    const saved = /^image\//.test(f.type || '') ? await f.arrayBuffer().then((buf) => window.glassShell.chatSavePastedImage(buf, f.type)).catch(() => null) : null;
+    if (saved) paths.push(saved); else failed++;
+  }
+  return { paths, failed };
+}
+function chatSkinDropBind(cs) {
+  const zone = cs.box;
+  const wants = (ev) => { const ty = [...(ev.dataTransfer?.types || [])]; return !ty.includes('application/x-aios-tab') && ty.some((x) => x === 'Files' || x === 'application/x-aios-path' || x === 'text/uri-list'); };
+  const lit = (on) => { zone.classList.toggle('dropok', on); if (on) cs.pane.el?.classList.remove('dropok'); };   // the pane's own zone would light its coral ring behind the card
+  zone.addEventListener('dragenter', (ev) => { if (wants(ev)) { ev.preventDefault(); ev.stopPropagation(); lit(true); } });
+  zone.addEventListener('dragover', (ev) => {
+    if (!wants(ev)) return;
+    ev.preventDefault(); ev.stopPropagation();   // stopPropagation: the pane under the card has its own drop zone, which would write the path to the pty
+    ev.dataTransfer.dropEffect = 'copy';
+    lit(true);
+  });
+  zone.addEventListener('dragleave', (ev) => { if (!ev.relatedTarget || !zone.contains(ev.relatedTarget)) lit(false); });
+  zone.addEventListener('drop', (ev) => {
+    lit(false);
+    clearDragging();
+    // ALWAYS stop it here: a drop of plain text on the box is the textarea's own (it inserts the text), and must not also reach the pane's zone
+    ev.stopPropagation();
+    if (!wants(ev)) return;
+    ev.preventDefault();
+    const dt = ev.dataTransfer;
+    const own = dt.getData('application/x-aios-path');
+    const files = own ? [] : [...(dt.files || [])];   // read before any await: a DataTransfer is dead once the handler returns
+    const listed = own || files.length ? [] : (droppedPaths(ev)).filter((x) => /^(\/|[A-Za-z]:[\\/])/.test(x));
+    void (async () => {
+      const fromFiles = await chatSkinFilePaths(files);
+      const paths = own ? [own] : files.length ? fromFiles.paths : listed;
+      if (paths.length) chatSkinInsertPaths(cs, paths);
+      if (fromFiles.failed) toast(t('chat.drop.failed'));
+    })();
+  });
+  // an image on the clipboard: a screenshot, or "Copy image" from a browser. Text pastes stay the textarea's own.
+  cs.input.addEventListener('paste', (ev) => {
+    const files = [...(ev.clipboardData?.files || [])];
+    if (!files.length) return;
+    ev.preventDefault();
+    void chatSkinFilePaths(files).then(({ paths, failed }) => {
+      if (paths.length) chatSkinInsertPaths(cs, paths);
+      if (failed) toast(t('chat.drop.failed'));
+    });
+  });
 }
 /* Which glyph a tool wears, by its name: what it DOES, so a column of calls scans at a glance.
    MCP and unknown tools fall through to the wrench. */

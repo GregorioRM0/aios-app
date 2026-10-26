@@ -1019,6 +1019,8 @@ class FakeNode {
   tag: string; className = ''; textContent = ''; id = ''; hidden = false; value = ''; scrollTop = 0;
   attrs: Record<string, string> = {}; children: FakeNode[] = []; handlers: Record<string, Array<(e: unknown) => void>> = {};
   selection: [number, number] | null = null;
+  get selectionStart(): number { return this.selection ? this.selection[0] : this.value.length; }
+  get selectionEnd(): number { return this.selection ? this.selection[1] : this.value.length; }
   constructor(tag: string, cls = '', text = '') { this.tag = tag; this.className = cls; this.textContent = text; }
   classList = {
     toggle: (c: string, on: boolean): void => { const s = new Set(this.className.split(/\s+/).filter(Boolean)); if (on) s.add(c); else s.delete(c); this.className = [...s].join(' '); },
@@ -1254,4 +1256,165 @@ test('chat-shot fixture: the slash popup is shot open (all sources, filtered, na
   const rows = JSON.parse(/chatSkinSlashShow\(ctx\.cs, (\[[\s\S]*?\])\);/.exec(js('slash-dark'))?.[1] ?? '[]') as Array<{ source: string; descKey?: string; name: string }>;
   assert.deepEqual([...new Set(rows.map((r) => r.source))].sort(), ['builtin', 'plugin', 'project', 'user']);
   assert.ok(rows.some((r) => r.descKey && loc.en[r.descKey]), 'built-in rows name a real description key');
+});
+
+// ── files into the box: drop and paste ──────────────────────────────────────
+
+interface DropHarness {
+  cs: { input: FakeNode; box: FakeNode; pane: { el: { classList: { remove: (c: string) => void } } } };
+  calls: string[]; saved: Array<[number, string]>; toasts: string[];
+  fire: (zone: FakeNode, ev: string, e: Record<string, unknown>) => Promise<void>;
+}
+/** The drop/paste code from the real source, wired to fakes. `savedPath` is what main would answer for a picture with no file. */
+function dropHarness(src: string = skin, o: { savedPath?: string | null; realPath?: (f: { name: string }) => string } = {}): DropHarness {
+  const from = src.indexOf('function chatSkinQuotePath(');
+  const to = src.indexOf('/* Which glyph a tool wears');
+  assert.ok(from > 0 && to > from, 'the drop block was found');
+  const calls: string[] = []; const saved: Array<[number, string]> = []; const toasts: string[] = [];
+  const glassShell = {
+    pathForFile: (f: { name: string }): string => (o.realPath ? o.realPath(f) : `/Users/op/${f.name}`),
+    chatSavePastedImage: async (buf: { byteLength: number }, mime: string): Promise<string | null> => { saved.push([buf.byteLength, mime]); return o.savedPath === undefined ? '/tmp/aios-chat-paste/paste-1-abc.png' : o.savedPath; },
+    ptyWrite: (): void => { calls.push('ptyWrite'); },
+  };
+  const make = new Function('window', 'xQuote', 'droppedPaths', 'clearDragging', 'toast', 't', 'chatSkinSlashClose', 'chatSkinAutosize', 'chatSkinControls',
+    `${src.slice(from, to)}\nreturn { bind: chatSkinDropBind };`) as (...a: unknown[]) => { bind: (cs: unknown) => void };
+  const input = new FakeNode('textarea'); const box = new FakeNode('div');
+  const cs = { input, box, pane: { el: { classList: { remove: (c: string): void => { calls.push('pane-remove-' + c); } } } } };
+  make({ glassShell }, (p: string) => `'${p}'`, (ev: { dataTransfer: { getData: (t: string) => string } }) => (ev.dataTransfer.getData('text/uri-list') || '').split('\n').filter(Boolean).map((u) => u.replace(/^file:\/\//, '')),
+    () => calls.push('clearDragging'), (m: string) => toasts.push(m), (k: string) => `«${k}»`, () => calls.push('slashClose'), () => calls.push('autosize'), () => calls.push('controls')).bind(cs);
+  return { cs, calls, saved, toasts, fire: async (zone, ev, e) => { for (const fn of zone.handlers[ev] || []) fn(e); await new Promise((r) => setTimeout(r, 0)); } };
+}
+interface FakeDrop { stops: number; prevents: number; [k: string]: unknown }
+const dropEv = (o: { types?: string[]; data?: Record<string, string>; files?: Array<{ name: string; type?: string; size?: number }> } = {}): FakeDrop => {
+  const e: FakeDrop = {
+    stops: 0, prevents: 0, relatedTarget: null,
+    dataTransfer: { types: o.types ?? ['Files'], getData: (t: string) => o.data?.[t] ?? '', files: (o.files ?? []).map((f) => ({ type: '', size: 3, arrayBuffer: async () => ({ byteLength: f.size ?? 3 }), ...f })), dropEffect: '' },
+    preventDefault() { e.prevents++; }, stopPropagation() { e.stops++; },
+  };
+  return e;
+};
+
+test('drop and paste, run for real: a dropped file lands at the caret as a double-quoted absolute path, never sent, and the pane under the card never hears of it', async () => {
+  const h = dropHarness();
+  const zone = h.cs.box;
+  // dragover: accepted, copy cursor, the card lights up, the pane's own zone is told to dim and the event stops here
+  const over = dropEv();
+  await h.fire(zone, 'dragover', over);
+  assert.equal(over.prevents, 1); assert.equal(over.stops, 1);
+  assert.match(zone.className, /dropok/);
+  assert.ok(h.calls.includes('pane-remove-dropok'), 'the pane\'s coral drop ring does not light up behind the card');
+  // a tab being reordered is not a file: not accepted, not stopped
+  const tab = dropEv({ types: ['application/x-aios-tab', 'text/plain'] });
+  await h.fire(zone, 'dragover', tab);
+  assert.equal(tab.prevents, 0);
+  // an empty box: the path alone, quoted, with a space after so typing continues
+  const drop = dropEv({ files: [{ name: 'My Notes v2.pdf' }] });
+  await h.fire(zone, 'drop', drop);
+  assert.equal(h.cs.input.value, '"/Users/op/My Notes v2.pdf" ');
+  assert.deepEqual(h.cs.input.selection, [h.cs.input.value.length, h.cs.input.value.length]);
+  assert.equal(drop.stops, 1, 'the drop stops here: the pane\'s terminal zone would write the path to the pty'); assert.equal(drop.prevents, 1);
+  assert.ok(!/dropok/.test(zone.className), 'the veil is gone after the drop');
+  assert.ok(!h.calls.includes('ptyWrite'), 'the drop only edits the box');
+  // text already in the box: a space is added before the path when needed, and the caret decides where it lands
+  h.cs.input.value = 'look at'; h.cs.input.selection = [7, 7];
+  await h.fire(zone, 'drop', dropEv({ files: [{ name: 'a.png' }, { name: 'b.png' }] }));
+  assert.equal(h.cs.input.value, 'look at "/Users/op/a.png" "/Users/op/b.png" ');
+  h.cs.input.value = 'compare  and then'; h.cs.input.selection = [8, 8];
+  await h.fire(zone, 'drop', dropEv({ files: [{ name: 'c.png' }] }));
+  assert.equal(h.cs.input.value, 'compare "/Users/op/c.png" and then', 'in the middle: one space each side, none doubled');
+  // one of our explorer rows
+  h.cs.input.value = ''; h.cs.input.selection = [0, 0];
+  await h.fire(zone, 'drop', dropEv({ types: ['application/x-aios-path', 'text/plain'], data: { 'application/x-aios-path': '/work/app/src' } }));
+  assert.equal(h.cs.input.value, '"/work/app/src" ');
+  // plain text: the textarea's own business — the drop still stops here (so the pane's zone does not write it to the pty) but nothing is inserted by us
+  h.cs.input.value = ''; h.cs.input.selection = [0, 0];
+  const text = dropEv({ types: ['text/plain'], data: { 'text/plain': 'hello' } });
+  await h.fire(zone, 'drop', text);
+  assert.equal(text.stops, 1); assert.equal(text.prevents, 0); assert.equal(h.cs.input.value, '');
+  assert.ok(!h.calls.includes('ptyWrite'));
+});
+
+test('drop and paste, run for real: a picture with no file behind it is saved by main and its path inserted; anything else that cannot be attached says so once', async () => {
+  const h = dropHarness();
+  // an image dragged out of a browser: no path from the OS, the bytes go to main, the temp path comes back
+  const real = (f: { name: string }): string => (/^(photo|image)\.png$/.test(f.name) ? '' : `/Users/op/${f.name}`);
+  const h2 = dropHarness(skin, { realPath: real });
+  await h2.fire(h2.cs.box, 'drop', dropEv({ files: [{ name: 'photo.png', type: 'image/png', size: 2048 }] }));
+  assert.deepEqual(h2.saved, [[2048, 'image/png']]);
+  assert.equal(h2.cs.input.value, '"/tmp/aios-chat-paste/paste-1-abc.png" ');
+  // a paste of that same picture: native paste is cancelled, the same path is inserted
+  const pasteEv = { clipboardData: { files: [{ name: 'image.png', type: 'image/png', size: 10, arrayBuffer: async () => ({ byteLength: 10 }) }] }, prevents: 0, preventDefault() { pasteEv.prevents++; } };
+  h2.cs.input.value = 'what is wrong here?'; h2.cs.input.selection = [19, 19];
+  await h2.fire(h2.cs.input, 'paste', pasteEv);
+  assert.equal(pasteEv.prevents, 1);
+  assert.equal(h2.cs.input.value, 'what is wrong here? "/tmp/aios-chat-paste/paste-1-abc.png" ');
+  // control: a text paste has no files, so it is left to the textarea (we never cancel it)
+  const textPaste = { clipboardData: { files: [] }, prevents: 0, preventDefault() { textPaste.prevents++; } };
+  await h2.fire(h2.cs.input, 'paste', textPaste);
+  assert.equal(textPaste.prevents, 0);
+  // not an image and no path (or main refused): nothing inserted, one message
+  const h3 = dropHarness(skin, { realPath: () => '', savedPath: null });
+  await h3.fire(h3.cs.box, 'drop', dropEv({ files: [{ name: 'x.bin', type: 'application/octet-stream' }, { name: 'y.png', type: 'image/png' }] }));
+  assert.equal(h3.cs.input.value, '');
+  assert.deepEqual(h3.toasts, ['«chat.drop.failed»'], 'once, however many files failed');
+  assert.equal(h3.saved.length, 1, 'only the picture is offered to main');
+  assert.ok(h.calls.length === 0 || !h.calls.includes('ptyWrite'));
+  // a double quote in a path falls back to the shell-style quote rather than a broken pair
+  const h4 = dropHarness(skin, { realPath: () => '/Users/op/say "hi".png' });
+  await h4.fire(h4.cs.box, 'drop', dropEv({ files: [{ name: 'q.png' }] }));
+  assert.equal(h4.cs.input.value, `'/Users/op/say "hi".png' `);
+});
+
+guarded('the drop on the card inserts the double-quoted absolute path and stops the event, so the pane under it does not also write to the pty',
+  (src) => {
+    const s = slice(src);
+    const quote = fnBody(s, 'chatSkinQuotePath');
+    const bind = fnBody(s, 'chatSkinDropBind');
+    const insert = fnBody(s, 'chatSkinInsertPaths');
+    const dropAt = bind.indexOf("zone.addEventListener('drop'");
+    const stopAt = bind.indexOf('ev.stopPropagation();', dropAt);
+    const guardAt = bind.indexOf('if (!wants(ev)) return;', dropAt);
+    return /'"' \+ s \+ '"'/.test(quote)
+      && dropAt > 0 && stopAt > dropAt && stopAt < guardAt   // stopped BEFORE the early return: a text drop must not fall through to the pane either
+      && /chatSkinInsertPaths\(cs, paths\)/.test(bind) && /paths\.map\(chatSkinQuotePath\)/.test(insert)
+      && !/ptyWrite|submitToPty|chatSkinSendNow/.test(quote + bind + insert + fnBody(s, 'chatSkinFilePaths'));
+  },
+  (src) => src.replace("    // ALWAYS stop it here: a drop of plain text on the box is the textarea's own (it inserts the text), and must not also reach the pane's zone\n    ev.stopPropagation();\n", ''));
+
+guarded('a path is only ever quoted with double quotes unless it holds one itself, and a dragover over the card never lights the pane\'s coral ring',
+  (src) => {
+    const s = slice(src);
+    return /return s\.includes\('"'\) \? xQuote\(s\) : '"' \+ s \+ '"'/.test(fnBody(s, 'chatSkinQuotePath'))
+      && /cs\.pane\.el\?\.classList\.remove\('dropok'\)/.test(fnBody(s, 'chatSkinDropBind'));
+  },
+  (src) => src.replace("return s.includes('\"') ? xQuote(s) : '\"' + s + '\"';", 'return xQuote(s);'));
+
+test('drop and paste: the picture-saving IPC is bounded, names its own file, sweeps only its own files, and the card has a neutral drop veil', () => {
+  assert.match(preload, /chatSavePastedImage: \(bytes: ArrayBuffer, mime: string\): Promise<string \| null> => ipcRenderer\.invoke\('chatFiles:savePastedImage', bytes, mime\)/);
+  const h = /ipcMain\.handle\('chatFiles:savePastedImage'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
+  assert.ok(h.length > 400, 'handler found');
+  assert.match(h, /PASTE_EXT\[mime\.toLowerCase\(\)\]/, 'only the image types on the allow-list');
+  assert.match(main, /const PASTE_MAX_BYTES = 25 \* 1024 \* 1024/);
+  assert.match(h, /buf\.length > PASTE_MAX_BYTES\) return null/);
+  assert.match(h, /path\.join\(fs\.realpathSync\(os\.tmpdir\(\)\), 'aios-chat-paste'\)/, 'one folder under the system temp');
+  assert.match(h, /paste-\$\{Date\.now\(\)\}-\$\{crypto\.randomBytes\(3\)\.toString\('hex'\)\}\.\$\{ext\}/, 'main names the file; the renderer chooses no path or extension');
+  assert.match(h, /\^paste-\[\\w-\]\+\\\.\(png\|jpg\|gif\|webp\)\$/, 'the sweep only touches files that look like its own');
+  assert.match(h, /mode: 0o600/);
+  assert.doesNotMatch(h, /\.\.\/|ev\.|_e\./, 'no renderer-supplied path anywhere');
+  // control: a handler that took the file name from the renderer would show up as a second parameter being joined into the path
+  assert.doesNotMatch(h.replace('paste-${Date.now()}', '${name}'), /paste-\$\{Date\.now\(\)\}/);
+  const rules = skinRules(css);
+  const rule = (sel: string): string => rules.find(([s]) => s === sel)?.[1] ?? '';
+  assert.match(rule('.cc-drop'), /pointer-events: none/);
+  assert.match(rule('.cc-drop'), /border: 1\.5px dashed var\(--line-strong\)/);
+  assert.ok(!coralUsers(css).some((s) => /cc-drop|dropok/.test(s) && !/termcard/.test(s)), 'no coral on the card\'s drop veil');
+  for (const l of Object.keys(loc)) for (const k of ['chat.drop.label', 'chat.drop.failed']) assert.ok(typeof loc[l][k] === 'string' && loc[l][k].length > 0, `${l}.json lacks ${k}`);
+});
+
+test('chat-shot fixture: the drop veil and an inserted pair of paths are shot in dark and light, with paths that name nothing personal', () => {
+  const byName = (n: string): FxShot | undefined => fixture.shots.find((s) => s.name === n);
+  for (const n of ['drop-over-dark', 'drop-over-light', 'drop-inserted-dark', 'drop-inserted-light']) assert.ok(byName(n), `missing shot ${n}`);
+  assert.match([byName('drop-over-dark')?.js].flat().join('\n'), /box\.classList\.add\('dropok'\)/, 'the veil is forced by the fixture');
+  const ins = [byName('drop-inserted-light')?.js].flat().join('\n');
+  assert.match(ins, /chatSkinInsertPaths\(ctx\.cs, \['\/work\/app\//, 'it goes through the real insert function, with neutral paths');
 });

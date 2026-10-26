@@ -1310,5 +1310,7 @@
   "chat.slash.cmd.usage": "Show cost, plan usage and activity",
   "chat.slash.cmd.voice": "Turn voice mode on or off",
   "settings.chatViewDefault": "Open Claude sessions as chat",
-  "settings.chatViewDefaultHint": "New Claude sessions start in the chat view. You can switch any tab back to the terminal at any time."
+  "settings.chatViewDefaultHint": "New Claude sessions start in the chat view. You can switch any tab back to the terminal at any time.",
+  "chat.drop.label": "Drop to add the path",
+  "chat.drop.failed": "Couldn't attach that file"
 }

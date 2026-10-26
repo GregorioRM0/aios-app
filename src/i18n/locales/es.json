@@ -1310,5 +1310,7 @@
   "chat.slash.cmd.usage": "Ver el costo, el uso del plan y la actividad",
   "chat.slash.cmd.voice": "Activar o desactivar el modo de voz",
   "settings.chatViewDefault": "Abrir las sesiones de Claude como chat",
-  "settings.chatViewDefaultHint": "Las sesiones nuevas de Claude empiezan en la vista de chat. Puedes volver cualquier pestaña a la terminal cuando quieras."
+  "settings.chatViewDefaultHint": "Las sesiones nuevas de Claude empiezan en la vista de chat. Puedes volver cualquier pestaña a la terminal cuando quieras.",
+  "chat.drop.label": "Suelta para agregar la ruta",
+  "chat.drop.failed": "No se pudo adjuntar ese archivo"
 }

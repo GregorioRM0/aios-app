@@ -450,6 +450,36 @@ ipcMain.handle('slashCommands:list', async (_e, cwd: unknown, text: unknown): Pr
   return slashSuggestions(await hit.list, text);
 });
 
+/* An image pasted (or dragged from a browser) into the chat composer has no file on disk, and Claude Code reads a
+   picture from a PATH in the message. So main writes the bytes to a file of its own naming and hands back the path.
+   Where it lands: <system temp>/aios-chat-paste/paste-<time>-<random>.<ext>. The system temp folder is the right home
+   for a thing that only has to outlive the message that mentions it: the OS sweeps it, and a pasted screenshot never
+   becomes a stray file in the operator's project. Bounded on every side: only the four image types a model can read,
+   a size ceiling, a name the renderer never chooses (so it cannot aim a write anywhere), and files older than a day
+   are removed on the next paste. Nothing is read back and nothing outside that one folder is touched. */
+const PASTE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' };
+const PASTE_MAX_BYTES = 25 * 1024 * 1024;
+ipcMain.handle('chatFiles:savePastedImage', async (_e, bytes: unknown, mime: unknown): Promise<string | null> => {
+  const ext = typeof mime === 'string' ? PASTE_EXT[mime.toLowerCase()] : undefined;
+  if (!ext || !(bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes))) return null;
+  const buf = bytes instanceof ArrayBuffer ? Buffer.from(bytes) : Buffer.from((bytes as ArrayBufferView).buffer, (bytes as ArrayBufferView).byteOffset, (bytes as ArrayBufferView).byteLength);
+  if (!buf.length || buf.length > PASTE_MAX_BYTES) return null;
+  try {
+    const dir = path.join(fs.realpathSync(os.tmpdir()), 'aios-chat-paste');
+    await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+    const cutoff = Date.now() - 24 * 3600 * 1000;
+    for (const f of await fs.promises.readdir(dir).catch(() => [] as string[])) {
+      if (!/^paste-[\w-]+\.(png|jpg|gif|webp)$/.test(f)) continue;   // only our own files are ever swept
+      const full = path.join(dir, f);
+      const st = await fs.promises.stat(full).catch(() => null);
+      if (st && st.mtimeMs < cutoff) await fs.promises.unlink(full).catch(() => undefined);
+    }
+    const file = path.join(dir, `paste-${Date.now()}-${crypto.randomBytes(3).toString('hex')}.${ext}`);
+    await fs.promises.writeFile(file, buf, { mode: 0o600 });
+    return file;
+  } catch { return null; }
+});
+
 /* ── SMOKE: the chat view over a REAL Claude Code session, end to end ───────────────────────────
    Everything else in this file proves the chat view with fixtures; this proves it against the real
    `claude`, in the hidden smoke window, by driving the same functions the operator's hands drive:

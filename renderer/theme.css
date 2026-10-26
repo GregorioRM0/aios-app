@@ -1814,6 +1814,12 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
           background: var(--chat-composer-bg); border: 1px solid var(--chat-composer-line); box-shadow: var(--chat-float);
           transition: border-color .15s ease, box-shadow .15s ease; }
 .cc-box:focus-within { border-color: var(--chat-focus-line); box-shadow: var(--chat-float), 0 0 0 3px var(--chat-focus-soft); }
+/* A file is being dragged over the card: a veil with a dashed neutral edge and one line of text. Neutral like the focus ring
+   (the accent is for the send button alone). It never takes the pointer, so the drop lands on the card itself. */
+.cc-box { position: relative; }
+.cc-drop { display: none; position: absolute; inset: 0; z-index: 2; align-items: center; justify-content: center; box-sizing: border-box; border-radius: inherit; pointer-events: none;
+           background: color-mix(in srgb, var(--chat-composer-bg) 95%, transparent); border: 1.5px dashed var(--line-strong); color: var(--subtle); font-size: 13px; letter-spacing: .005em; }
+.cc-box.dropok .cc-drop { display: flex; }
 .chat-input { display: block; width: 100%; box-sizing: border-box; resize: none; min-height: 25px; max-height: 220px; padding: 0; margin: 0;
               background: none; color: var(--ink); border: 0; outline: none; font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px);
               line-height: 1.55; user-select: text; }
