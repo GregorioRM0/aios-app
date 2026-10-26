@@ -168,6 +168,7 @@ const ICONS = {
   sparkles: '<path d="M12 3l1.6 4.9L18.5 9l-4.9 1.1L12 15l-1.6-4.9L5.5 9l4.9-1.1z"/>',
   note: '<path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l7-7V5a2 2 0 0 0-2-2z"/><path d="M15 21v-6a1 1 0 0 1 1-1h6"/>',
   guide: '<circle cx="12" cy="12" r="9.5"/><polygon points="16.2 7.8 13.4 13.4 7.8 16.2 10.6 10.6 16.2 7.8"/>',
+  stack: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
   wrench: '<path d="M14.6 6.4a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.7-3.7a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9l-3.7 3.7z"/>',
   trash: '<path d="M3 6h18M8 6V4h8v2m-9 0 1 14h8l1-14"/>',
   sync: '<path d="M21 12a9 9 0 0 0-9-9 9 9 0 0 0-6.4 2.6L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9 9 0 0 0 6.4-2.6L21 16"/><path d="M21 21v-5h-5"/>',
@@ -7600,6 +7601,8 @@ function chatSkinBuild(id, p) {
     effort: { open: false, off: null, pop: effortPop, opts: effortOpts },   // the effort menu: see chatSkinEffortMenu
     slash: { open: false, items: [], index: 0, seq: 0, pop: slashPop, list: slashList },   // the slash popup: see chatSkinSlashRefresh
     items: new Map(),            // transcript uuid -> { node, role, … }
+    groups: new Map(),           // first tool's uuid -> the folded run of tool calls it opens (see chatSkinRegroup)
+    groupOpen: new Map(),        // same key -> whether the operator has it unfolded; outlives the node so a re-split run keeps its state
     status: {}, model: '', ctxTokens: undefined, statusAt: 0,
     watched: null,               // the sessionId main is tailing for this pane, or null
     gen: 0,                      // bumps on every watch/unwatch so a late reply can tell it is stale
@@ -8249,10 +8252,8 @@ function chatSkinMakeTool(cs) {
    moves from running to ok/error or the output arrives. */
 function chatSkinPaintTool(rec, item) {
   const tl = item.tool || {};
-  const status = tl.status === 'ok' || tl.status === 'error' ? tl.status : 'running';
+  const { name, summary, status } = chatToolInfo(item);
   const x = rec.tool;
-  const name = String(tl.name || '');
-  const summary = String(tl.summary || '');
   const k = chatToolKind(name);
   rec.node.classList.remove('running', 'ok', 'error');
   rec.node.classList.add(status);
@@ -8276,23 +8277,165 @@ function chatSkinPaintTool(rec, item) {
   x.note.hidden = !!text && !cut;
   x.note.textContent = cut ? t('chat.skin.tool.truncated') : text ? '' : t(status === 'running' ? 'chat.skin.tool.runningNoOutput' : 'chat.skin.tool.noOutput');
 }
-/* Consecutive tool rows read as ONE object: a joined card with shared hairlines. The runs are
-   recomputed from the visible rows after every batch (rows can arrive, hide or change in any order, and
-   a hidden row — an assistant message that was only tool calls — must not split a run). */
-function chatSkinRegroup(cs) {
-  let run = [];
-  const flush = () => {
-    run.forEach((n, i) => {
-      n.classList.remove('tg-solo', 'tg-first', 'tg-mid', 'tg-last');
-      n.classList.add(run.length === 1 ? 'tg-solo' : i === 0 ? 'tg-first' : i === run.length - 1 ? 'tg-last' : 'tg-mid');
-    });
-    run = [];
-  };
-  for (const n of cs.log.children) {
-    if (n.hidden) continue;
-    if (n.classList.contains('chat-tool')) run.push(n); else flush();
+/* What the column needs to know about a tool call, normalised once: the row paints from it and the folded
+   summary of a run counts it. Anything that is not 'ok' or 'error' is still running. */
+function chatToolInfo(item) {
+  const tl = (item && item.tool) || {};
+  return { name: String(tl.name || ''), summary: String(tl.summary || ''), status: tl.status === 'ok' || tl.status === 'error' ? tl.status : 'running' };
+}
+/* Runs of consecutive tool calls. `items` is the column in order, each entry { tool, hidden }: a tool call, a
+   hidden row (an assistant message that was only tool calls leaves no bubble) or anything else that is visible.
+   A run is the indices of the tool calls between two visible non-tool rows; a hidden row does not split it. Pure,
+   so a test can run it. */
+function chatToolRuns(items) {
+  const runs = [];
+  let cur = null;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i] || {};
+    if (it.tool) { if (!cur) cur = []; cur.push(i); continue; }
+    if (it.hidden) continue;
+    if (cur) { runs.push(cur); cur = null; }
   }
-  flush();
+  if (cur) runs.push(cur);
+  return runs;
+}
+/* One run of calls ({ name, summary, status } each) as the numbers its folded row shows. Counts are by name, in order of
+   first appearance (not by frequency): the line is read while the run is still growing, and a ranking would reorder
+   it under the eye every time a call lands. `current` is the call that is running now (the latest one, when several are). */
+function chatToolSummary(run) {
+  const counts = [];
+  const at = new Map();
+  let running = 0, failed = 0, ok = 0, current = null;
+  for (const x of run) {
+    const name = String(x.name || '').trim() || '?';
+    if (!at.has(name)) { at.set(name, counts.length); counts.push({ name, n: 0 }); }
+    counts[at.get(name)].n++;
+    if (x.status === 'error') failed++;
+    else if (x.status === 'ok') ok++;
+    else { running++; current = { name, summary: String(x.summary || '') }; }
+  }
+  return { total: run.length, counts, running, failed, ok, status: running ? 'running' : failed ? 'error' : 'ok', current };
+}
+/* The same counts as the sentence under the eye: "Bash ×3, Read ×4"; a name used once is just the name. */
+const chatToolCountsText = (counts) => counts.map((c) => (c.n > 1 ? t('chat.skin.tg.each', { name: c.name, n: c.n }) : c.name)).join(', ');
+let chatGroupSeq = 0;
+/* A run of two or more calls is ONE row — an icon, "7 actions", what they were, how it stands, a chevron — that opens
+   to the ordinary rows. The node is made once per run (keyed by the run's first call) and only ever repainted, so
+   whether it is unfolded survives more calls landing, the run growing and the column being re-sorted. */
+function chatSkinMakeGroup(cs, key) {
+  const node = el('div', 'chat-tg');
+  const head = el('button', 'cg-head');
+  head.type = 'button';
+  head.setAttribute('aria-expanded', 'false');
+  const kind = el('span', 'cg-kind');
+  kind.setAttribute('aria-hidden', 'true');
+  kind.appendChild(csIcon('stack', 12));
+  const count = el('span', 'cg-n');
+  const list = el('span', 'cg-list');
+  const live = el('span', 'cg-live');
+  const liveName = el('span', 'cg-ln');
+  const liveArg = el('span', 'cg-la');
+  live.append(liveName, liveArg);
+  const fail = el('span', 'cg-fail');
+  fail.setAttribute('aria-hidden', 'true');   // the screen reader hears it once, in the state text
+  const state = el('span', 'cg-state');
+  const chev = csIcon('chevR', 11);
+  chev.classList.add('ct-chev');
+  head.append(kind, count, list, live, fail, state, chev);
+  const body = el('div', 'cg-body');
+  body.id = 'cs-tg-' + (++chatGroupSeq);
+  body.hidden = true;
+  head.setAttribute('aria-controls', body.id);
+  node.append(head, body);
+  const g = { node, head, body, kind, count, list, live, liveName, liveArg, fail, state, key, status: '', failed: -1, open: false };
+  node.csGroup = g;
+  head.addEventListener('click', () => {
+    chatSkinGroupOpen(g, !g.open);
+    cs.groupOpen.set(key, g.open);
+    if (g.open) chatSkinScroll(cs);   // unfolding the last run must not push it below the fold while the view is following the tail
+  });
+  return g;
+}
+function chatSkinGroupOpen(g, open) {
+  g.open = open;
+  g.head.setAttribute('aria-expanded', String(open));
+  g.body.hidden = !open;
+  g.node.classList.toggle('open', open);
+}
+/* Paint a run's summary IN PLACE. The spinner and the mark are only rebuilt when the state moves, so the spinner turns
+   without a hitch while calls land around it. */
+function chatSkinPaintGroup(g, sum) {
+  const counts = chatToolCountsText(sum.counts);
+  const total = t('chat.skin.tg.count', { n: sum.total });
+  g.count.textContent = total;
+  g.list.textContent = counts;
+  const cur = sum.current;
+  g.liveName.textContent = cur ? cur.name : '';
+  g.liveArg.textContent = cur ? cur.summary : '';
+  const failText = sum.failed ? t(sum.failed === 1 ? 'chat.skin.tg.failed.one' : 'chat.skin.tg.failed.other', { n: sum.failed }) : '';
+  g.fail.textContent = failText;
+  g.fail.hidden = !failText;
+  g.node.classList.remove('running', 'ok', 'error');
+  g.node.classList.add(sum.status);
+  g.head.title = total + ' · ' + counts + (cur ? ' — ' + cur.name + (cur.summary ? ' · ' + cur.summary : '') : '') + (failText ? ' — ' + failText : '');
+  if (g.status !== sum.status || g.failed !== sum.failed) {
+    g.status = sum.status; g.failed = sum.failed;
+    const mark = sum.status === 'running' ? el('span', 'ct-spin') : csIcon(sum.status === 'ok' ? 'check' : 'x', 12);
+    mark.setAttribute('aria-hidden', 'true');
+    const word = sum.status === 'error' ? failText : t('chat.skin.tool.' + sum.status) + (failText ? ' · ' + failText : '');   // the mark is a picture; this is what a screen reader hears
+    g.state.replaceChildren(mark, el('span', 'cs-sr', word));
+  }
+}
+/* Make `parent`'s children exactly `want`, in order, moving only what is out of place: a node that is already where it
+   belongs is not touched (re-inserting a node blurs it, restarts its animation and can reset a scrolled output). */
+function chatSkinReconcile(parent, want) {
+  let i = 0;
+  for (const w of want) {
+    if (parent.children[i] !== w) parent.insertBefore(w, parent.children[i] || null);
+    i++;
+  }
+  while (parent.children.length > want.length) parent.children[want.length].remove();
+}
+/* Consecutive tool calls fold into ONE row (chatToolRuns decides which). Recomputed from the visible rows after every
+   batch: rows can arrive, hide or change in any order, and a hidden row inside a run stays in the run's body so the
+   order is never lost. A run of one stays a plain row. Whether a run is unfolded is remembered by its first call's
+   uuid; a new run starts folded, except when the operator had already opened one of its rows (it must not vanish). */
+function chatSkinRegroup(cs) {
+  const groups = cs.groups || (cs.groups = new Map());
+  const opened = cs.groupOpen || (cs.groupOpen = new Map());
+  const flat = [];
+  for (const n of [...cs.log.children]) {
+    if (n.csGroup) flat.push(...n.csGroup.body.children); else flat.push(n);
+  }
+  const isItem = (n) => n.classList.contains('chat-row') || n.classList.contains('chat-note');
+  const runs = chatToolRuns(flat.map((n) => ({ tool: n.classList.contains('chat-tool') && !!n.csRec, hidden: !!n.hidden && isItem(n) })));
+  const spans = new Map();
+  for (const r of runs) if (r.length > 1) spans.set(r[0], r[r.length - 1]);
+  const focus = typeof document !== 'undefined' ? document.activeElement : null;
+  const top = [];
+  const live = new Set();
+  for (let i = 0; i < flat.length; i++) {
+    if (!spans.has(i)) { top.push(flat[i]); continue; }
+    const members = flat.slice(i, spans.get(i) + 1);
+    const key = flat[i].csRec.uuid;
+    let g = groups.get(key);
+    if (!g) {
+      g = chatSkinMakeGroup(cs, key);
+      groups.set(key, g);
+      const open = opened.has(key) ? opened.get(key) : members.some((m) => m.classList.contains('open'));
+      opened.set(key, open);
+      chatSkinGroupOpen(g, open);
+    }
+    members.forEach((m) => m.classList.remove('cs-in'));   // a row folded away never plays its entrance: it would play when the run is opened
+    chatSkinReconcile(g.body, members);
+    chatSkinPaintGroup(g, chatToolSummary(members.filter((m) => m.csRec && m.csRec.info).map((m) => m.csRec.info)));
+    live.add(key);
+    top.push(g.node);
+    i = spans.get(i);
+  }
+  chatSkinReconcile(cs.log, top);
+  for (const key of [...groups.keys()]) if (!live.has(key)) groups.delete(key);
+  if (focus && focus !== document.activeElement && cs.log.contains(focus)) { try { focus.focus({ preventScroll: true }); } catch { /* detached */ } }   // a moved node loses the focus; give it back
 }
 /* The session's own name stands in for "Claude" across the chat view: the operator runs several
    named sessions side by side (the primary, agents, rituals) and wants to see which one is talking.
@@ -8316,6 +8459,8 @@ function chatSkinUpsert(cs, item, animate) {
   let rec = cs.items.get(item.uuid);
   if (!rec) {
     rec = chatSkinMakeItem(item.role, cs);
+    rec.uuid = item.uuid;
+    if (rec.role === 'tool') rec.node.csRec = rec;   // the column is regrouped from its nodes, which need to find their tool call again
     cs.items.set(item.uuid, rec);
     cs.log.insertBefore(rec.node, (cs.stream && cs.stream.rec.node) || cs.dlg || cs.workEl);   // the working indicator stays the last child of the column, and what is still being written or asked stays under everything that has landed
     if (animate) {   // a few px of rise and a fade; only for news, never for history being loaded
@@ -8331,6 +8476,7 @@ function chatSkinUpsert(cs, item, animate) {
     if (rec.text !== text) { rec.body.textContent = text; rec.text = text; }   // textContent: the operator's text is never parsed as HTML either
     rec.node.hidden = !text.trim();
   } else if (rec.role === 'tool') {
+    rec.info = chatToolInfo(item);
     chatSkinPaintTool(rec, item);
   } else {
     rec.body.textContent = text;
@@ -8406,7 +8552,7 @@ function chatSkinHandleEvent(ev) {
   const cs = p.chatSkin;
   switch (ev.type) {
     case 'reset':
-      cs.items.clear();
+      cs.items.clear(); cs.groups.clear(); cs.groupOpen.clear();
       cs.stream = null; cs.dlg = null; cs.dlgSig = '';   // replaceChildren below removes their nodes; a dialog still open is drawn again at the end of this case
       cs.log.replaceChildren(cs.stateEl, cs.workEl);
       cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true; cs.resetAt = Date.now();
