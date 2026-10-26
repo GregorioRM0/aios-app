@@ -16,6 +16,12 @@ export interface ChatStatus {
   fiveHourPct?: number;
   sevenDayPct?: number;
   contextPct?: number;
+  /** When the 5-hour / weekly window resets, as Unix SECONDS — only when the payload carries it. Never guessed
+   *  from the window length: a reset time we were not given is simply absent. */
+  fiveHourResetsAt?: number;
+  sevenDayResetsAt?: number;
+  /** The context window size in tokens, from the payload (the pane's own used tokens come from its transcript). */
+  contextWindow?: number;
   model?: string;
   effort?: string;
   /** Where the fields came from: the live session, the statusline file, or a blend of both. */
@@ -41,6 +47,15 @@ function str(v: unknown): string | undefined {
 }
 
 const clampPct = (n: number): number => Math.min(100, Math.max(0, n));
+
+/** A reset instant as Unix seconds. The payload writes seconds; a value that is plainly milliseconds
+ *  (after year 5138 as seconds) is scaled down rather than shown as a date in the far future. Zero,
+ *  negatives and non-numbers are "not given". */
+function epochSeconds(v: unknown): number | undefined {
+  const n = num(v);
+  if (n === undefined || n <= 0) return undefined;
+  return n > 1e11 ? Math.round(n / 1000) : Math.round(n);
+}
 
 /** First defined value among dotted paths — the same idea as the statusline hook's
  *  `first_present`, because the payload's field names have moved between Claude Code versions. */
@@ -90,6 +105,10 @@ export function parseStatuslinePayload(input: unknown): StatusFields {
     'rate_limits.weekly.used_percentage', 'weekly.usage_pct',
   ]));
 
+  const fiveReset = epochSeconds(firstPresent(d, ['rate_limits.five_hour.resets_at', 'session_5h.resets_at']));
+  const sevenReset = epochSeconds(firstPresent(d, ['rate_limits.seven_day.resets_at', 'rate_limits.weekly.resets_at']));
+  const windowSize = num(firstPresent(d, ['context_window.context_window_size', 'context.window_size']));
+
   // `model` is an object ({id, display_name}) in current payloads and a bare string in older ones
   const m = d.model;
   const model = str(firstPresent(d, ['model.display_name', 'model.id'])) ?? str(m);
@@ -99,6 +118,9 @@ export function parseStatuslinePayload(input: unknown): StatusFields {
   if (five !== undefined) out.fiveHourPct = clampPct(five);
   if (seven !== undefined) out.sevenDayPct = clampPct(seven);
   if (context !== undefined) out.contextPct = clampPct(context);
+  if (fiveReset !== undefined) out.fiveHourResetsAt = fiveReset;
+  if (sevenReset !== undefined) out.sevenDayResetsAt = sevenReset;
+  if (windowSize !== undefined && windowSize > 0) out.contextWindow = Math.round(windowSize);
   if (model !== undefined) out.model = model;
   if (effort !== undefined) out.effort = effort;
   return out;
@@ -106,7 +128,7 @@ export function parseStatuslinePayload(input: unknown): StatusFields {
 
 // ── (b) merging sources ─────────────────────────────────────────────
 
-const FIELDS = ['fiveHourPct', 'sevenDayPct', 'contextPct', 'model', 'effort'] as const;
+const FIELDS = ['fiveHourPct', 'sevenDayPct', 'contextPct', 'fiveHourResetsAt', 'sevenDayResetsAt', 'contextWindow', 'model', 'effort'] as const;
 
 /**
  * The live session wins field by field; the file fills what the session cannot know (rate limits

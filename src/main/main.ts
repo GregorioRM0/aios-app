@@ -1631,7 +1631,8 @@ if (process.platform === 'win32') {
                                                  // while the last turn event left the turn open)
    An <event> is what chatSkinHandleEvent takes minus paneId (reset · items · turn · usage · prompt ·
    missing · error) plus one extra type, "status", which feeds the usage bar like the statusline does
-   ({ "type": "status", "fiveHourPct": 42, … }). A shot's "js" runs in the renderer with
+   ({ "type": "status", "fiveHourPct": 42, … }; a "fiveHourResetsAt" / "sevenDayResetsAt" of "+8280" means
+   8280 seconds from the moment of the shot, so a reset never ends up in the past). A shot's "js" runs in the renderer with
    ctx = { id, p (the pane), cs (p.chatSkin), root (the chat overlay), $ / $$ (querySelector(All) in
    it), sleep(ms), feed(events) }; throwing fails the run, naming the shot. Adding a shot is adding an
    object to "shots" — main.ts never changes.
@@ -1697,7 +1698,13 @@ const CHAT_SHOT_DRIVER = String.raw`(() => {
     const cs = p && p.chatSkin;
     if (!cs) throw new Error('the pane has no chat view');
     for (const ev of events) {
-      if (ev.type === 'status') { const s = Object.assign({}, ev); delete s.type; chatApplyStatus(cs, s); continue; }
+      if (ev.type === 'status') {
+        const s = Object.assign({}, ev); delete s.type;
+        // a reset written as '+8280' means "that many seconds from now": a fixture cannot hold a real instant, which would be in the past by the next run
+        for (const k of Object.keys(s)) if (/ResetsAt$/.test(k) && typeof s[k] === 'string' && /^\+\d+$/.test(s[k])) s[k] = Math.floor(Date.now() / 1000) + Number(s[k].slice(1));
+        chatApplyStatus(cs, s);
+        continue;
+      }
       chatSkinHandleEvent(Object.assign({ paneId: id }, ev));
     }
   };

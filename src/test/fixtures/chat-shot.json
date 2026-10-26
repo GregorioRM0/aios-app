@@ -10,7 +10,10 @@
         "sevenDayPct": 71,
         "contextPct": 38,
         "model": "claude-sonnet-5-5",
-        "effort": "high"
+        "effort": "high",
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+8280",
+        "sevenDayResetsAt": "+190000"
       },
       {
         "type": "usage",
@@ -120,7 +123,15 @@
       {
         "type": "status",
         "fiveHourPct": 78,
-        "sevenDayPct": 93
+        "sevenDayPct": 93,
+        "fiveHourResetsAt": "+1500",
+        "sevenDayResetsAt": "+90000",
+        "contextWindow": 200000
+      },
+      {
+        "type": "usage",
+        "contextTokens": 186000,
+        "model": "claude-sonnet-5-5"
       }
     ],
     "connecting": [],
@@ -128,6 +139,119 @@
       {
         "type": "error",
         "code": "read-failed"
+      }
+    ],
+    "tools-dense": [
+      {
+        "type": "status",
+        "fiveHourPct": 31,
+        "sevenDayPct": 12,
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+11400",
+        "sevenDayResetsAt": "+420000",
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      {
+        "type": "usage",
+        "contextTokens": 52000,
+        "model": "claude-sonnet-5-5"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "d-u1",
+            "role": "user",
+            "text": "Find where the cache is invalidated and make the TTL configurable."
+          },
+          {
+            "uuid": "d-a1",
+            "role": "assistant",
+            "text": "Looking at the cache module first, then its callers."
+          },
+          {
+            "uuid": "d-1",
+            "role": "tool",
+            "tool": {
+              "id": "dt-1",
+              "name": "Glob",
+              "summary": "src/cache/**/*.ts",
+              "status": "ok",
+              "output": "src/cache/index.ts\nsrc/cache/store.ts\nsrc/cache/ttl.ts"
+            }
+          },
+          {
+            "uuid": "d-2",
+            "role": "tool",
+            "tool": {
+              "id": "dt-2",
+              "name": "Read",
+              "summary": "src/cache/ttl.ts",
+              "status": "ok",
+              "output": "1  export const DEFAULT_TTL = 300;\n2  export function ttlFor(key: string): number {\n3    return DEFAULT_TTL;\n4  }"
+            }
+          },
+          {
+            "uuid": "d-3",
+            "role": "tool",
+            "tool": {
+              "id": "dt-3",
+              "name": "Grep",
+              "summary": "ttlFor( in src/",
+              "status": "ok",
+              "output": "src/cache/store.ts:41:  const ttl = ttlFor(key);\nsrc/api/handlers.ts:88:  cache.set(id, body, ttlFor(id));"
+            }
+          },
+          {
+            "uuid": "d-4",
+            "role": "tool",
+            "tool": {
+              "id": "dt-4",
+              "name": "Read",
+              "summary": "src/cache/store.ts",
+              "status": "ok",
+              "output": "1  import { ttlFor } from \"./ttl\";\n2  \n3  export class Store {\n4    set(key: string, value: unknown) {"
+            }
+          },
+          {
+            "uuid": "d-5",
+            "role": "tool",
+            "tool": {
+              "id": "dt-5",
+              "name": "Edit",
+              "summary": "src/cache/ttl.ts",
+              "status": "ok",
+              "output": "The file src/cache/ttl.ts has been updated."
+            }
+          },
+          {
+            "uuid": "d-6",
+            "role": "tool",
+            "tool": {
+              "id": "dt-6",
+              "name": "Bash",
+              "summary": "npm test -- --grep ttl",
+              "status": "error",
+              "output": "1 failing\n  ttl\n    reads TTL_SECONDS from the environment\n      AssertionError: expected 300 to equal 60"
+            }
+          },
+          {
+            "uuid": "d-7",
+            "role": "tool",
+            "tool": {
+              "id": "dt-7",
+              "name": "mcp__tracker__create_issue",
+              "summary": "Follow-up: document TTL_SECONDS",
+              "status": "running",
+              "output": ""
+            }
+          }
+        ]
+      },
+      {
+        "type": "turn",
+        "open": true
       }
     ]
   },
@@ -315,6 +439,156 @@
         "const row = ctx.$('.chat-tool[data-kind=\"search\"] .ct-head');",
         "row.click();",
         "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
+      ]
+    },
+    {
+      "name": "tools-dense-dark",
+      "theme": "dark",
+      "events": [
+        "tools-dense"
+      ],
+      "js": [
+        "ctx.$('.chat-tool[data-kind=\"search\"] .ct-head').click();",
+        "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "tools-dense-light",
+      "theme": "light",
+      "events": [
+        "tools-dense"
+      ],
+      "js": [
+        "ctx.$('.chat-tool[data-kind=\"search\"] .ct-head').click();",
+        "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "usage-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "composer": "",
+      "clip": "pane",
+      "js": [
+        "ctx.cs.input.focus();"
+      ]
+    },
+    {
+      "name": "usage-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "composer": "",
+      "clip": "pane",
+      "js": [
+        "ctx.cs.input.focus();"
+      ]
+    },
+    {
+      "name": "usage-tip-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "chatSkinTip(ctx.$$('.chat-usage .cu')[0], true);"
+      ]
+    },
+    {
+      "name": "usage-tip-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "clip": "pane",
+      "js": [
+        "chatSkinTip(ctx.$$('.chat-usage .cu')[1], true);"
+      ]
+    },
+    {
+      "name": "usage-tip-context-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "chatSkinTip(ctx.$$('.chat-usage .cu')[2], true);"
+      ]
+    },
+    {
+      "name": "usage-tip-high-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "usage-high"
+      ],
+      "clip": "pane",
+      "js": [
+        "chatSkinTip(ctx.$$('.chat-usage .cu')[1], true);"
+      ]
+    },
+    {
+      "name": "usage-tip-high-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "usage-high"
+      ],
+      "clip": "pane",
+      "js": [
+        "chatSkinTip(ctx.$$('.chat-usage .cu')[0], true);"
+      ]
+    },
+    {
+      "name": "usage-none-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.cs.status = { model: 'claude-sonnet-5-5', effort: 'high' };",
+        "ctx.cs.ctxTokens = undefined;",
+        "chatPaintUsage(ctx.cs);",
+        "chatSkinTip(ctx.$$('.chat-usage .cu')[0], true);"
+      ]
+    },
+    {
+      "name": "usage-narrow-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Short question?",
+      "clip": "pane",
+      "js": [
+        "ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = '400px'; ctx.p.el.style.alignSelf = 'flex-start';",
+        "await ctx.sleep(300);",
+        "chatSkinTip(ctx.$$('.chat-usage .cu')[2], true);"
+      ]
+    },
+    {
+      "name": "usage-narrow-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "usage-high"
+      ],
+      "composer": "Short question?",
+      "clip": "pane",
+      "js": [
+        "ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = '400px'; ctx.p.el.style.alignSelf = 'flex-start';",
+        "await ctx.sleep(300);",
+        "chatSkinTip(ctx.$$('.chat-usage .cu')[1], true);"
       ]
     }
   ]

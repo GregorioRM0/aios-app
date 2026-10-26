@@ -698,13 +698,13 @@ guarded('Esc closes the settings menu and does NOT cut the turn: its listener ru
   },
   (src) => src.replace('e.preventDefault(); e.stopImmediatePropagation();', 'e.preventDefault();'));
 
-test('the usage meters never paint a missing reading as zero, and carry their value for assistive tech', () => {
+test('the usage meters never paint a missing reading as zero, and carry their value for assistive tech (source)', () => {
   const paint = fnBody(skin, 'chatPaintUsage');
   assert.match(paint, /const has = typeof pct === 'number' && Number\.isFinite\(pct\)/);
-  assert.match(paint, /style\.width = has \? /, 'the bar is empty without a reading');
+  assert.match(paint, /setProperty\('--p', has \? /, 'the ring is empty without a reading');
   assert.match(paint, /has \? Math\.round\(pct\) \+ '%' : '—'/, 'a missing reading shows a dash');
   assert.match(paint, /pct >= 90 \? ' hi' : pct >= 70 \? ' mid'/, 'warn from 70, error from 90');
-  assert.match(paint, /setAttribute\('aria-label', tip\)/);
+  assert.match(paint, /cell\.setAttribute\('aria-label', \[/, 'the accessible name carries the value and the detail');
   // control: a paint that coerced the absence to 0 would fail the dash rule
   assert.doesNotMatch(paint.replace("has ? Math.round(pct) + '%' : '—'", 'Math.round(pct || 0) + \'%\''), /has \? Math\.round\(pct\) \+ '%' : '—'/);
 });
@@ -810,4 +810,202 @@ test('tool rows are dense: a short row, small type for the name and the argument
   assert.ok(px('.ct-arg') >= 10.5 && px('.ct-arg') <= 11.5, 'the argument is 11 px (mono) — smaller than the name, never below 10.5');
   // control: the pre-density row (36 px, 6 px padding) fails the same bounds
   assert.equal(36 >= 26 && 36 <= 30, false);
+});
+
+// ── the usage row under the composer ────────────────────────────────────────
+
+/** chatPaintUsage and the helpers it needs, evaluated against a hand-made stand-in for the DOM: the real
+ *  code, run for real, with `t` echoing its key so a test can see which sentence was chosen. */
+function loadUsage(): { paint: (cs: unknown) => void; left: (sec: number, now: number) => string; when: (sec: number, now: number) => string; fake: () => FakeEl } {
+  const s = skin;
+  const from = s.indexOf('const CHAT_USAGE_FIELDS = [');
+  const to = s.indexOf('function chatSkinTip(');
+  assert.ok(from > 0 && to > from, 'the usage block was found');
+  const src = s.slice(from, to);
+  const fake = (): FakeEl => {
+    const e: FakeEl = {
+      className: '', textContent: '', title: '', attrs: {}, props: {}, kids: [], parentElement: null, q: {},
+      classList: {
+        add(c: string) { const set = new Set(e.className.split(/\s+/).filter(Boolean)); set.add(c); e.className = [...set].join(' '); },
+        toggle(c: string, on: boolean) { const set = new Set(e.className.split(/\s+/).filter(Boolean)); if (on) set.add(c); else set.delete(c); e.className = [...set].join(' '); },
+      },
+      style: { setProperty(k: string, v: string) { e.props[k] = v; } },
+      setAttribute(k: string, v: string) { e.attrs[k] = v; },
+      replaceChildren(...n: FakeEl[]) { e.kids = n; },
+      querySelector(sel: string) { return e.q[sel] ?? null; },
+    };
+    return e;
+  };
+  const make = new Function('t', 'el', 'window', `${src}\nreturn { paint: chatPaintUsage, left: chatResetLeft, when: chatResetWhen };`) as
+    (t: (k: string, v?: Record<string, unknown>) => string, el: (tag: string, cls?: string, text?: string) => FakeEl, w: unknown) => { paint: (cs: unknown) => void; left: (sec: number, now: number) => string; when: (sec: number, now: number) => string };
+  const t = (k: string, v?: Record<string, unknown>): string => (v ? `${k}${JSON.stringify(v)}` : k);
+  const el = (_tag: string, cls = '', text = ''): FakeEl => { const n = fake(); n.className = cls; n.textContent = text; return n; };
+  return { ...make(t, el, { i18n: { getLocale: () => 'en' } }), fake };
+}
+interface FakeEl {
+  className: string; textContent: string; title: string; attrs: Record<string, string>; props: Record<string, string>; kids: FakeEl[]; parentElement: FakeEl | null; q: Record<string, FakeEl>;
+  classList: { add(c: string): void; toggle(c: string, on: boolean): void }; style: { setProperty(k: string, v: string): void };
+  setAttribute(k: string, v: string): void; replaceChildren(...n: FakeEl[]): void; querySelector(sel: string): FakeEl | null;
+}
+/** A composer-shaped `cs` with the three meters and the two chips, as chatSkinBuild makes them. */
+function usageCs(u: ReturnType<typeof loadUsage>, status: Record<string, unknown>, extra: Record<string, unknown> = {}): { cs: Record<string, unknown>; cells: Record<string, FakeEl>; vals: Record<string, FakeEl> } {
+  const cells: Record<string, FakeEl> = {};
+  const vals: Record<string, FakeEl> = {};
+  for (const k of ['fiveHourPct', 'sevenDayPct', 'contextPct']) {
+    const cell = u.fake(), v = u.fake(), tip = u.fake();
+    v.parentElement = cell;
+    cell.q['.cu-tip'] = tip;
+    for (const part of ['.cut-h', '.cut-v', '.cut-d']) tip.q[part] = u.fake();
+    cells[k] = cell; vals[k] = v;
+  }
+  for (const k of ['model', 'effort']) { const chip = u.fake(), v = u.fake(); v.parentElement = chip; vals[k] = v; }
+  return { cs: { status, usageVals: vals, ...extra }, cells, vals };
+}
+const tipOf = (cell: FakeEl): { h: string; v: string; d: string[] } => {
+  const tip = cell.q['.cu-tip'];
+  return { h: tip.q['.cut-h'].textContent, v: tip.q['.cut-v'].textContent, d: tip.q['.cut-d'].kids.map((k) => k.textContent) };
+};
+
+test('usage row, run for real: a missing reading is a dash and an empty ring; a present one is the percentage, coloured at 70 and 90', () => {
+  const u = loadUsage();
+  const none = usageCs(u, {});
+  u.paint(none.cs);
+  for (const k of ['fiveHourPct', 'sevenDayPct', 'contextPct']) {
+    assert.equal(none.vals[k].textContent, '—', `${k}: a dash, never 0`);
+    assert.equal(none.cells[k].props['--p'], '0');
+    assert.match(none.cells[k].className, /\bnone\b/);
+    assert.equal(tipOf(none.cells[k]).v, 'chat.usage.none');
+    assert.deepEqual(tipOf(none.cells[k]).d, [], 'no invented detail');
+  }
+  const some = usageCs(u, { fiveHourPct: 42, sevenDayPct: 71, contextPct: 93 });
+  u.paint(some.cs);
+  assert.equal(some.vals.fiveHourPct.textContent, '42%');
+  assert.equal(some.cells.fiveHourPct.props['--p'], '42');
+  assert.doesNotMatch(some.cells.fiveHourPct.className, /\b(mid|hi|none)\b/, 'neutral below 70');
+  assert.match(some.cells.sevenDayPct.className, /\bmid\b/);
+  assert.match(some.cells.contextPct.className, /\bhi\b/);
+  assert.match(some.cells.fiveHourPct.attrs['aria-label'], /42%/, 'the value is in the accessible name');
+  // an honest zero is a zero (a real reading), unlike an absent one
+  const zero = usageCs(u, { fiveHourPct: 0 });
+  u.paint(zero.cs);
+  assert.equal(zero.vals.fiveHourPct.textContent, '0%');
+  assert.doesNotMatch(zero.cells.fiveHourPct.className, /\bnone\b/);
+});
+
+test('usage row, run for real: resets appear only when the payload carried them, and a reset already behind us marks the reading stale', () => {
+  const u = loadUsage();
+  const now = Date.now();
+  const sec = (ms: number): number => Math.floor((now + ms) / 1000);
+  const without = usageCs(u, { fiveHourPct: 42, sevenDayPct: 10 });
+  u.paint(without.cs);
+  assert.deepEqual(tipOf(without.cells.fiveHourPct).d, [], 'no reset in the payload → no reset line (nothing is derived from "5 hours")');
+  assert.deepEqual(tipOf(without.cells.sevenDayPct).d, []);
+  const withR = usageCs(u, { fiveHourPct: 42, sevenDayPct: 10, fiveHourResetsAt: sec(2 * 3600e3 + 10 * 60e3), sevenDayResetsAt: sec(50 * 3600e3) });
+  u.paint(withR.cs);
+  assert.match(tipOf(withR.cells.fiveHourPct).d[0], /^chat\.usage\.tip\.resets\{/);
+  assert.match(tipOf(withR.cells.fiveHourPct).d[0], /"left":"chat\.usage\.unit\.h\{\\"n\\":2\}[^"]*chat\.usage\.unit\.m\{\\"n\\":(9|10)\}"/, 'in 2 h 10 min');
+  assert.match(tipOf(withR.cells.sevenDayPct).d[0], /"left":"chat\.usage\.unit\.d\{\\"n\\":2\} chat\.usage\.unit\.h\{\\"n\\":2\}"/, 'in 2 d 2 h (no minutes once days are shown)');
+  const stale = usageCs(u, { fiveHourPct: 90, fiveHourResetsAt: sec(-60e3) });
+  u.paint(stale.cs);
+  assert.deepEqual(tipOf(stale.cells.fiveHourPct).d, ['chat.usage.tip.stale']);
+  assert.match(stale.cells.fiveHourPct.className, /\bstale\b/);
+  assert.doesNotMatch(withR.cells.fiveHourPct.className, /\bstale\b/);
+  // control: a reset line for a meter that has no reset field (context) never appears
+  assert.deepEqual(tipOf(withR.cells.contextPct).d, []);
+});
+
+test('usage row, run for real: the context meter is this pane\'s own tokens over the window, and says so only when they agree', () => {
+  const u = loadUsage();
+  const ok = usageCs(u, { contextPct: 5, contextWindow: 200000 }, { ctxTokens: 84000 });
+  u.paint(ok.cs);
+  assert.equal(ok.vals.contextPct.textContent, '84k');
+  assert.equal(ok.cells.contextPct.props['--p'], '42', 'own tokens / window, not the global payload\'s percentage');
+  assert.match(tipOf(ok.cells.contextPct).d[0], /^chat\.usage\.tip\.ctxOf\{"used":"84,000","total":"200,000"\}$/);
+  // tokens above the payload's window: the payload describes another session's model — tokens only, no percentage
+  const clash = usageCs(u, { contextPct: 5, contextWindow: 200000 }, { ctxTokens: 300000 });
+  u.paint(clash.cs);
+  assert.equal(clash.vals.contextPct.textContent, '300k');
+  assert.equal(clash.cells.contextPct.props['--p'], '0');
+  assert.match(tipOf(clash.cells.contextPct).d[0], /^chat\.usage\.tip\.ctxUsed\{/);
+  // no window size known: the payload's own percentage still drives the ring, the tokens are what is shown
+  const nowin = usageCs(u, { contextPct: 31 }, { ctxTokens: 62000 });
+  u.paint(nowin.cs);
+  assert.equal(nowin.cells.contextPct.props['--p'], '31');
+});
+
+test('usage row: the reset formatters give the two largest units, and a clock time today or weekday + time otherwise', () => {
+  const u = loadUsage();
+  const now = new Date(2026, 9, 26, 12, 0, 0).getTime();
+  const at = (ms: number): number => Math.floor((now + ms) / 1000);
+  assert.equal(u.left(at(14 * 60e3), now), 'chat.usage.unit.m{"n":14}');
+  assert.equal(u.left(at(60 * 60e3), now), 'chat.usage.unit.h{"n":1}', 'a whole hour has no "0 min"');
+  assert.equal(u.left(at(26 * 3600e3), now), 'chat.usage.unit.d{"n":1} chat.usage.unit.h{"n":2}');
+  assert.equal(u.left(at(-5000), now), 'chat.usage.unit.m{"n":0}', 'never negative');
+  assert.match(u.when(at(3 * 3600e3), now), /^\d{1,2}:\d{2}/, 'later today: just the time');
+  assert.match(u.when(at(30 * 3600e3), now), /^[A-Za-z]{3}\.? \d{1,2}:\d{2}/, 'another day: weekday and time');
+});
+
+guarded('the meters left the header: the usage row is built into the compose block, under the card, and the header carries only the switch and the settings',
+  (src) => {
+    const b = fnBody(slice(src), 'chatSkinBuild');
+    const head = /head\.append\((.*)\);/.exec(b)?.[1] ?? '';
+    return head.length > 0 && !/usageEl|chat-usage/.test(head) && /sw, el\('span', 'cs-fill'\), gear, menu/.test(head)
+      && /meta\.append\(usageEl, hint\)/.test(b) && /compose\.append\(jumpBtn, wrap, meta\)/.test(b)
+      && b.indexOf('wrap.appendChild(box)') > 0 && b.indexOf('wrap.appendChild(box)') < b.indexOf('compose.append(')
+      && !/\.cs-head \.chat-usage/.test(css);
+  },
+  (src) => src.replace("head.append(sw, el('span', 'cs-fill'), gear, menu);", "head.append(sw, el('span', 'cs-fill'), usageEl, gear, menu);"));
+
+guarded('every meter answers hover AND keyboard focus with a tooltip of its own, aria-labelled, and the tooltip is not read twice',
+  (src) => {
+    const b = fnBody(slice(src), 'chatSkinBuild');
+    const tip = fnBody(slice(src), 'chatSkinTip');
+    return /cell\.tabIndex = 0/.test(b) && /cell\.addEventListener\('pointerenter', \(\) => chatSkinTip\(cell, true\)\)/.test(b)
+      && /cell\.addEventListener\('focus', \(\) => chatSkinTip\(cell, true\)\)/.test(b) && /cell\.addEventListener\('blur', \(\) => chatSkinTip\(cell, false\)\)/.test(b)
+      && /tip\.setAttribute\('aria-hidden', 'true'\)/.test(b)
+      && /classList\.toggle\('tip-open', on\)/.test(tip)
+      && !/cell\.title\s*=|\.parentElement\.title = tip/.test(fnBody(slice(src), 'chatPaintUsage').split("if (kind === 'text')")[0]);   // no native title on a meter: the tooltip is ours
+  },
+  (src) => src.replace("cell.addEventListener('focus', () => chatSkinTip(cell, true));", ''));
+
+test('the usage row\'s CSS: own tooltip, ring arc from --p, neutral until 70/90, hidden with the rest of the compose block under a dialog strip, hint only with focus', () => {
+  const rules = skinRules(css);
+  const rule = (sel: string): string => rules.find(([s]) => s === sel)?.[1] ?? '';
+  assert.match(rule('.cu-ring .r-val'), /stroke-dasharray: var\(--p, 0\) 100/);
+  assert.match(rule('.chat-usage .cu.mid .r-val'), /--st-warn/);
+  assert.match(rule('.chat-usage .cu.hi .r-val'), /--st-error/);
+  assert.match(rule('.cu-tip'), /position: absolute/);
+  assert.match(rule('.cu.tip-open .cu-tip'), /opacity: 1/);
+  const strip = rules.find(([s]) => s.startsWith('.pane.cs-strip > .chatskin .chat-usage'));
+  assert.ok(strip && /\.cc-meta/.test(strip[0]) && /\.chat-compose/.test(strip[0]) && /display: none/.test(strip[1]), 'the strip rule hides the usage row (and the whole compose block) for a live dialog');
+  assert.match(rule('.cc-hint'), /opacity: 0/, 'the keys hint is invisible until the box has focus');
+  assert.match(rule('.cc-wrap:focus-within + .cc-meta .cc-hint'), /opacity: 1/);
+  // control: the old always-visible grey line (a centred 11 px hint under the card) is gone
+  assert.equal(rule('.cc-hint').includes('text-align: center'), false);
+  // the tooltip's animation has a reduced-motion fallback (the generic animation test only sees `animation:`, this one is a transition)
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.chat-usage \.cu, \.cu-ring \.r-val, \.cu-tip \{ transition: none; \}/);
+});
+
+test('the usage row\'s sentences exist in every locale (the three built at run time included), with the same placeholders', () => {
+  const keys = ['chat.hintShort', 'chat.usage.tip.fiveHour', 'chat.usage.tip.sevenDay', 'chat.usage.tip.context', 'chat.usage.tip.used', 'chat.usage.tip.resets', 'chat.usage.tip.stale',
+    'chat.usage.tip.ctxOf', 'chat.usage.tip.ctxUsed', 'chat.usage.unit.d', 'chat.usage.unit.h', 'chat.usage.unit.m'];
+  for (const k of keys) for (const l of Object.keys(loc)) assert.ok(typeof loc[l][k] === 'string' && loc[l][k].length > 0, `${l}.json lacks ${k}`);
+  const holes = (s: string): string => (s.match(/\{[a-zA-Z]+\}/g) || []).sort().join(',');
+  for (const k of keys) for (const l of ['es', 'pt-br']) assert.equal(holes(loc[l][k]), holes(loc.en[k]), `${l} ${k}`);
+  assert.equal(holes(loc.en['chat.usage.tip.resets']), '{left},{when}');
+  // every key the paint code builds at run time is in the list above
+  assert.deepEqual([...skin.matchAll(/t\('chat\.usage\.tip\.' \+ \(k === 'fiveHourPct' \? '(\w+)' : k === 'sevenDayPct' \? '(\w+)' : '(\w+)'\)\)/g)].flatMap((m) => m.slice(1)), ['fiveHour', 'sevenDay', 'context']);
+  assert.equal(typeof loc.en['chat.usage.contextTokens'], 'undefined', 'the old title-attribute sentence is gone with the title attribute');
+});
+
+test('chat-shot fixture: the usage row (resting, hover tooltip on each meter, high, empty, narrow) and the dense tool rows are shot in dark and light', () => {
+  const byName = (n: string): FxShot | undefined => fixture.shots.find((s) => s.name === n);
+  for (const n of ['usage-dark', 'usage-light', 'usage-tip-dark', 'usage-tip-light', 'usage-tip-context-dark', 'usage-tip-high-dark', 'usage-tip-high-light', 'usage-none-dark', 'usage-narrow-dark', 'usage-narrow-light', 'tools-dense-dark', 'tools-dense-light']) assert.ok(byName(n), `missing shot ${n}`);
+  for (const n of ['usage-tip-dark', 'usage-tip-light', 'usage-tip-context-dark', 'usage-tip-high-dark', 'usage-none-dark', 'usage-narrow-dark']) assert.match(String([byName(n)?.js].flat().join('\n')), /chatSkinTip\(/, `${n} forces its tooltip open`);
+  // resets in the fixture are relative ("+seconds"), never an instant that would be in the past by the next run
+  const resets = Object.values(fixture.streams).flat().flatMap((e) => Object.entries(e).filter(([k]) => /ResetsAt$/.test(k)).map(([, v]) => v));
+  assert.ok(resets.length >= 4 && resets.every((v) => typeof v === 'string' && /^\+\d+$/.test(v)), `relative resets only (${resets.join(', ')})`);
+  assert.match(main, /\/ResetsAt\$\/\.test\(k\) && typeof s\[k\] === 'string' && \/\^\\\+\\d\+\$\/\.test\(s\[k\]\)/, 'the driver understands them');
+  // the three states of the tooltip (window usage with resets, tokens of context, no reading) are all covered
+  assert.ok(fixture.streams.conversation[0].contextWindow && fixture.streams['usage-high'].some((e) => e.type === 'usage'));
 });
