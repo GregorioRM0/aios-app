@@ -968,9 +968,17 @@
       "composer": "Also check that the retry count is logged",
       "js": [
         "openSettingsTab();",
-        "await ctx.sleep(400);"
+        "await ctx.sleep(400);",
+        "// the font and size now live here and nowhere else: bring their rows into view, and FAIL the run if the sample is not on screen",
+        "const sample = document.querySelector('.chat-pref-sample');",
+        "if (!sample) throw new Error('the Settings tab has no chat font sample');",
+        "sample.scrollIntoView({ block: 'center' });",
+        "await ctx.sleep(250);",
+        "const sr = sample.getBoundingClientRect();",
+        "if (!(sr.width > 40 && sr.height > 8 && sr.top >= 0 && sr.bottom <= window.innerHeight)) throw new Error('the chat font sample is not visible in the Settings tab');"
       ],
-      "clip": "window"
+      "clip": "window",
+      "layout": "workbench"
     },
     {
       "name": "settings-light",
@@ -981,9 +989,17 @@
       "composer": "Also check that the retry count is logged",
       "js": [
         "openSettingsTab();",
-        "await ctx.sleep(400);"
+        "await ctx.sleep(400);",
+        "// the font and size now live here and nowhere else: bring their rows into view, and FAIL the run if the sample is not on screen",
+        "const sample = document.querySelector('.chat-pref-sample');",
+        "if (!sample) throw new Error('the Settings tab has no chat font sample');",
+        "sample.scrollIntoView({ block: 'center' });",
+        "await ctx.sleep(250);",
+        "const sr = sample.getBoundingClientRect();",
+        "if (!(sr.width > 40 && sr.height > 8 && sr.top >= 0 && sr.bottom <= window.innerHeight)) throw new Error('the chat font sample is not visible in the Settings tab');"
       ],
-      "clip": "window"
+      "clip": "window",
+      "layout": "workbench"
     },
     {
       "name": "markdown-light",

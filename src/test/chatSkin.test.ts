@@ -2765,6 +2765,11 @@ test('chat-shot fixture: every v3 scenario is shot in dark and light, wide and n
     // what is judged is the pane, except where the tab icon is the subject
     if (n !== 'no-header') assert.equal((shot as { clip?: string }).clip, 'pane', `${shot?.name} is cropped to the pane`);
   }
+  // the Settings shots show the font and size rows (the workbench layout, so the tab is not hidden behind the maximised dock) and fail when the sample is not on screen
+  for (const n of ['settings-dark', 'settings-light']) {
+    assert.equal(byName(n)?.layout, 'workbench', `${n} is shot in the workbench layout`);
+    assert.match([byName(n)?.js].flat().join('\n'), /chat-pref-sample[\s\S]*the chat font sample is not visible/, `${n} checks the sample is visible`);
+  }
   // the helpers fail the run, they do not just take a picture
   const setup = [fixture.setup].flat().join('\n');
   assert.match(setup, /the chat view has a header again/);
