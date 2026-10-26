@@ -3996,7 +3996,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
    after the paste has closed; so do we. */
 /* #81 (26 Oct, Luigi: "sessions jump in" while he types). The pane reports whether its operator is
    writing a draft; the bus (commandBus, operatorComposing) holds its messages meanwhile. Composing =
-   any key since the last Enter / Ctrl-C / Ctrl-U OUTSIDE a bracketed paste (a paste can carry line
+   any key since the last Enter / Ctrl-C OUTSIDE a bracketed paste (a paste can carry line
    breaks and is still a draft; an up-arrow recalls an old prompt, so escapes count as keys). */
 const BUS_DEFERRED_TYPING = 'deferred: the operator is typing in this session';   // commandBus matches it
 function noteOperatorKeys(p, d) {
@@ -4012,7 +4012,7 @@ function noteOperatorKeys(p, d) {
   const was = !!p.composing;
   if (p.inPaste) p.composing = true;
   else {
-    const last = Math.max(rest.lastIndexOf('\r'), rest.lastIndexOf('\x03'), rest.lastIndexOf('\x15'));
+    const last = Math.max(rest.lastIndexOf('\r'), rest.lastIndexOf('\x03'));   // not Ctrl-U: it may clear only to the cursor
     p.composing = last < 0 ? true : last < rest.length - 1;   // text after the last send/clear is a new draft
   }
   const now = Date.now();

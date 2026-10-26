@@ -736,7 +736,8 @@ async function runSend(
          attempt: give the attempt back, keep the request, and wait for the draft to be sent. */
       attempts--;
       if (firstTry) firstTypedAt = 0;
-      composing.set(sessionKey(req.name), { composing: true, at: Date.now() });
+      const prev = composing.get(sessionKey(req.name));   // keep the pane's own draft state: this is a timed hold
+      composing.set(sessionKey(req.name), { composing: !!prev && prev.composing, at: Date.now() });
       if (!fs.existsSync(heldPath)) return;
       await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
       continue;

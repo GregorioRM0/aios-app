@@ -27,12 +27,12 @@ function keys() {
 
 test('the renderer helper exists and reports to the bus', () => { assert.ok(fn, 'noteOperatorKeys in renderer/app.js'); });
 
-test('typing is a draft; Enter, Ctrl-C and Ctrl-U end it', () => {
+test('typing is a draft; Enter and Ctrl-C end it; Ctrl-U does not (it may clear only to the cursor)', () => {
   const { note, sent } = keys(); const p: Record<string, unknown> = { name: 'ali' };
   note(p, 'half a sen'); assert.equal(p.composing, true);
   note(p, '\r'); assert.equal(p.composing, false);
   note(p, 'x'); note(p, '\x03'); assert.equal(p.composing, false);
-  note(p, 'y'); note(p, '\x15'); assert.equal(p.composing, false);
+  note(p, 'y'); note(p, '\x1b[D\x1b[D'); note(p, '\x15'); assert.equal(p.composing, true, 'text after the cursor may remain');
   assert.deepEqual(sent[0], ['ali', true]);
 });
 
@@ -81,4 +81,10 @@ test('the pane re-checks with no gap and the bus keeps the request without spend
 
 test('a dropped path counts as a draft', () => {
   assert.match(app, /attachDropZone\(el, \(paths\) => \{ noteOperatorKeys\(p, 'drop'\);/);
+});
+
+test('a deferral is a timed hold: it never latches a draft the pane did not report', () => {
+  const branch = bus.slice(bus.indexOf('sendResult.reason === DEFERRED_TYPING'), bus.indexOf('if (releaseForSibling'));
+  assert.match(branch, /composing: !!prev && prev\.composing, at: Date\.now\(\)/);
+  assert.doesNotMatch(branch, /composing: true/);
 });
