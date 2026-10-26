@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { UsageReader, feedUsage, type UsageIo } from '../core/usageReader';
-import { parseStatuslinePayload, mergeStatus } from '../core/chatEvents';
+import { parseStatuslinePayload, mergeStatus, scopeStatusToSession } from '../core/chatEvents';
 
 const skill = (name: string) => JSON.stringify({ message: { content: [{ type: 'tool_use', name: 'Skill', input: { skill: name } }] } }) + '\n';
 
@@ -129,4 +129,72 @@ test('mergeStatus carries the new fields from the file, and the session still wi
   // control: with nothing read, nothing appears
   const empty = mergeStatus(undefined, {});
   assert.ok(!('fiveHourResetsAt' in empty) && !('contextWindow' in empty));
+});
+
+/* ── the payload file is GLOBAL: model, effort and context are shown only for the session that wrote them ──
+   Hand-written ids, invented. The negative control (tab Y vs payload X) is the test that matters: it is the one that
+   fails if the filter is removed and `scopeStatusToSession` just hands the payload back. */
+const SID_X = '11111111-1111-4111-8111-111111111111';
+const SID_Y = '22222222-2222-4222-8222-222222222222';
+const SCOPED_PAYLOAD = { ...PAYLOAD, session_id: SID_X };
+const SESSION_FIELDS = ['model', 'effort', 'contextPct', 'contextWindow'] as const;
+
+test('parseStatuslinePayload reads session_id from the tolerated paths', () => {
+  assert.equal(parseStatuslinePayload(SCOPED_PAYLOAD).sessionId, SID_X);
+  assert.equal(parseStatuslinePayload({ sessionId: SID_X }).sessionId, SID_X);
+  assert.equal(parseStatuslinePayload({ session: { id: SID_X } }).sessionId, SID_X);
+  assert.ok(!('sessionId' in parseStatuslinePayload(PAYLOAD)), 'no session_id in the payload: none invented');
+});
+
+test('scope: the tab whose id equals the payload\'s keeps model, effort and context, and sessionMatch is true', () => {
+  const s = scopeStatusToSession(parseStatuslinePayload(SCOPED_PAYLOAD), SID_X);
+  assert.equal(s.sessionMatch, true);
+  assert.equal(s.model, 'Example 1');
+  assert.equal(s.effort, 'high');
+  assert.equal(s.contextPct, 29);
+  assert.equal(s.contextWindow, 1000000);
+  assert.equal(s.fiveHourPct, 42);
+  assert.equal(s.sevenDayResetsAt, 1793012400);
+  assert.ok(!('sessionId' in s), 'the payload\'s own id is not passed on');
+  const merged = mergeStatus(undefined, s);
+  assert.equal(merged.sessionMatch, true);
+  assert.equal(merged.model, 'Example 1');
+});
+
+test('scope NEGATIVE CONTROL: the same payload for ANOTHER tab hides the per-session fields and keeps the account\'s', () => {
+  const s = scopeStatusToSession(parseStatuslinePayload(SCOPED_PAYLOAD), SID_Y);
+  assert.equal(s.sessionMatch, false);
+  for (const f of SESSION_FIELDS) assert.ok(!(f in s), `${f} belongs to another session and must be absent`);
+  assert.equal(s.fiveHourPct, 42);
+  assert.equal(s.sevenDayPct, 71);
+  assert.equal(s.fiveHourResetsAt, 1793001000);
+  assert.equal(s.sevenDayResetsAt, 1793012400);
+  const merged = mergeStatus(undefined, s);
+  assert.equal(merged.sessionMatch, false);
+  for (const f of SESSION_FIELDS) assert.ok(!(f in merged), `${f} must not survive the merge either`);
+  assert.equal(merged.fiveHourPct, 42);
+});
+
+test('scope: a missing id on either side is "no match" — hide rather than show another session\'s data', () => {
+  const withId = parseStatuslinePayload(SCOPED_PAYLOAD);
+  const withoutId = parseStatuslinePayload(PAYLOAD);
+  const cases: Array<[string, ReturnType<typeof parseStatuslinePayload>, string | null | undefined]> = [
+    ['payload without session_id, tab with an id', withoutId, SID_X],
+    ['tab id null', withId, null],
+    ['tab id undefined', withId, undefined],
+    ['tab id empty', withId, ''],
+    ['both missing', withoutId, null],
+    ['payload id empty string', parseStatuslinePayload({ ...PAYLOAD, session_id: '' }), ''],
+  ];
+  for (const [label, file, tab] of cases) {
+    const s = scopeStatusToSession(file, tab);
+    assert.equal(s.sessionMatch, false, label);
+    for (const f of SESSION_FIELDS) assert.ok(!(f in s), `${label}: ${f} must be absent`);
+    assert.equal(s.fiveHourPct, 42, `${label}: account numbers stay`);
+  }
+});
+
+test('mergeStatus without a scoping verdict leaves sessionMatch absent (nothing was scoped, nothing is claimed)', () => {
+  assert.ok(!('sessionMatch' in mergeStatus(undefined, parseStatuslinePayload(PAYLOAD))));
+  assert.equal(mergeStatus(undefined, { sessionMatch: false }).sessionMatch, false);
 });

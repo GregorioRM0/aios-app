@@ -288,7 +288,7 @@ test('the preload exposes exactly the contract the renderer programs against', (
   assert.match(preload, /chatSkinWatch: \(paneId: number, sessionId: string \| null\): Promise<\{ ok: true; file: string \} \| \{ ok: false; error: string \}>/);
   assert.match(preload, /chatSkinUnwatch: \(paneId: number\): Promise<void>/);
   assert.match(preload, /onChatSkinEvent: \(cb: \(ev: ChatSkinEvent\) => void\)/);
-  assert.match(preload, /chatStatus: \(\): Promise<ChatStatus>/);
+  assert.match(preload, /chatStatus: \(sessionId: string \| null\): Promise<ChatStatus> => ipcRenderer\.invoke\('chat:status', sessionId\)/);
   for (const t of ['reset', 'items', 'turn', 'usage', 'prompt', 'missing', 'error']) {
     assert.match(preload, new RegExp(`type: '${t}'`), `event type ${t} is part of the contract`);
   }
@@ -320,7 +320,10 @@ test('chatViewDefault is a boolean setting, off unless literally true, and setta
 });
 
 test('chat:status reads the global statusline payload without the SDK', () => {
-  assert.match(main, /ipcMain\.handle\('chat:status', async \(\) => \{/);
+  assert.match(main, /ipcMain\.handle\('chat:status', async \(_e, sessionId: unknown\) => \{/);
   assert.match(main, /statusline-payload\.json/);
-  assert.match(main, /mergeStatus\(undefined, parseStatuslinePayload\(/);
+  // the payload is global: it must pass through the per-session filter before anything reaches the renderer
+  assert.match(main, /mergeStatus\(undefined, scopeStatusToSession\(parseStatuslinePayload\(/);
+  assert.match(main, /isSessionId\(sessionId\) \? sessionId : null/);
+  assert.doesNotMatch(main, /mergeStatus\(undefined, parseStatuslinePayload\(/, 'an unscoped merge would hand back another session\'s model and context');
 });
