@@ -630,6 +630,239 @@
           }
         ]
       }
+    ],
+    "tools-live": [
+      {
+        "type": "status",
+        "sessionMatch": true,
+        "fiveHourPct": 31,
+        "sevenDayPct": 12,
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+11400",
+        "sevenDayResetsAt": "+420000",
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      {
+        "type": "usage",
+        "contextTokens": 52000,
+        "model": "claude-sonnet-5-5"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "g-u1",
+            "role": "user",
+            "text": "Make the cache TTL configurable from the environment and run the tests."
+          },
+          {
+            "uuid": "g-a1",
+            "role": "assistant",
+            "text": "I'll read the cache module and its callers, change the TTL lookup, then run the tests."
+          },
+          {
+            "uuid": "g-1",
+            "role": "tool",
+            "tool": {
+              "id": "gt-1",
+              "name": "Glob",
+              "summary": "src/cache/**/*.ts",
+              "status": "ok",
+              "output": "src/cache/index.ts\nsrc/cache/store.ts\nsrc/cache/ttl.ts"
+            }
+          },
+          {
+            "uuid": "g-2",
+            "role": "tool",
+            "tool": {
+              "id": "gt-2",
+              "name": "Read",
+              "summary": "src/cache/ttl.ts",
+              "status": "ok",
+              "output": "1  export const DEFAULT_TTL = 300;\n2  export function ttlFor(key: string): number {\n3    return DEFAULT_TTL;\n4  }"
+            }
+          },
+          {
+            "uuid": "g-3",
+            "role": "tool",
+            "tool": {
+              "id": "gt-3",
+              "name": "Grep",
+              "summary": "ttlFor( in src/",
+              "status": "ok",
+              "output": "src/cache/store.ts:41:  const ttl = ttlFor(key);\nsrc/api/handlers.ts:88:  cache.set(id, body, ttlFor(id));"
+            }
+          },
+          {
+            "uuid": "g-4",
+            "role": "tool",
+            "tool": {
+              "id": "gt-4",
+              "name": "Read",
+              "summary": "src/cache/store.ts",
+              "status": "ok",
+              "output": "1  import { ttlFor } from \"./ttl\";\n2  \n3  export class Store {\n4    set(key: string, value: unknown) {"
+            }
+          },
+          {
+            "uuid": "g-5",
+            "role": "tool",
+            "tool": {
+              "id": "gt-5",
+              "name": "Read",
+              "summary": "src/api/handlers.ts",
+              "status": "ok",
+              "output": "80  export async function handle(req: Request) {\n81    const id = req.params.id;\n82    const body = await load(id);\n83    return body;\n84  }"
+            }
+          },
+          {
+            "uuid": "g-6",
+            "role": "tool",
+            "tool": {
+              "id": "gt-6",
+              "name": "Edit",
+              "summary": "src/cache/ttl.ts",
+              "status": "ok",
+              "output": "The file src/cache/ttl.ts has been updated."
+            }
+          },
+          {
+            "uuid": "g-7",
+            "role": "tool",
+            "tool": {
+              "id": "gt-7",
+              "name": "Bash",
+              "summary": "npm test -- --grep ttl --reporter spec --runInBand",
+              "status": "running",
+              "output": ""
+            }
+          }
+        ]
+      },
+      {
+        "type": "turn",
+        "open": true
+      }
+    ],
+    "tools-fail": [
+      {
+        "type": "status",
+        "sessionMatch": true,
+        "fiveHourPct": 31,
+        "sevenDayPct": 12,
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+11400",
+        "sevenDayResetsAt": "+420000",
+        "model": "claude-sonnet-5-5",
+        "effort": "high"
+      },
+      {
+        "type": "usage",
+        "contextTokens": 52000,
+        "model": "claude-sonnet-5-5"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "g-u1",
+            "role": "user",
+            "text": "Make the cache TTL configurable from the environment and run the tests."
+          },
+          {
+            "uuid": "g-a1",
+            "role": "assistant",
+            "text": "I'll read the cache module and its callers, change the TTL lookup, then run the tests."
+          },
+          {
+            "uuid": "g-1",
+            "role": "tool",
+            "tool": {
+              "id": "gt-1",
+              "name": "Glob",
+              "summary": "src/cache/**/*.ts",
+              "status": "ok",
+              "output": "src/cache/index.ts\nsrc/cache/store.ts\nsrc/cache/ttl.ts"
+            }
+          },
+          {
+            "uuid": "g-2",
+            "role": "tool",
+            "tool": {
+              "id": "gt-2",
+              "name": "Read",
+              "summary": "src/cache/ttl.ts",
+              "status": "ok",
+              "output": "1  export const DEFAULT_TTL = 300;\n2  export function ttlFor(key: string): number {\n3    return DEFAULT_TTL;\n4  }"
+            }
+          },
+          {
+            "uuid": "g-3",
+            "role": "tool",
+            "tool": {
+              "id": "gt-3",
+              "name": "Grep",
+              "summary": "ttlFor( in src/",
+              "status": "ok",
+              "output": "src/cache/store.ts:41:  const ttl = ttlFor(key);\nsrc/api/handlers.ts:88:  cache.set(id, body, ttlFor(id));"
+            }
+          },
+          {
+            "uuid": "g-4",
+            "role": "tool",
+            "tool": {
+              "id": "gt-4",
+              "name": "Read",
+              "summary": "src/cache/store.ts",
+              "status": "ok",
+              "output": "1  import { ttlFor } from \"./ttl\";\n2  \n3  export class Store {\n4    set(key: string, value: unknown) {"
+            }
+          },
+          {
+            "uuid": "g-5",
+            "role": "tool",
+            "tool": {
+              "id": "gt-5",
+              "name": "Read",
+              "summary": "src/api/handlers.ts",
+              "status": "ok",
+              "output": "80  export async function handle(req: Request) {\n81    const id = req.params.id;\n82    const body = await load(id);\n83    return body;\n84  }"
+            }
+          },
+          {
+            "uuid": "g-6",
+            "role": "tool",
+            "tool": {
+              "id": "gt-6",
+              "name": "Edit",
+              "summary": "src/cache/ttl.ts",
+              "status": "ok",
+              "output": "The file src/cache/ttl.ts has been updated."
+            }
+          },
+          {
+            "uuid": "g-7",
+            "role": "tool",
+            "tool": {
+              "id": "gt-7",
+              "name": "Bash",
+              "summary": "npm test -- --grep ttl --reporter spec --runInBand",
+              "status": "error",
+              "output": "1 failing\n  ttl\n    reads TTL_SECONDS from the environment\n      AssertionError: expected 300 to equal 60\n      at Context.<anonymous> (test/ttl.test.ts:12:20)"
+            }
+          },
+          {
+            "uuid": "g-a2",
+            "role": "assistant",
+            "text": "One test still fails: the lookup ignores `TTL_SECONDS`. I'll read it from the environment next."
+          }
+        ]
+      },
+      {
+        "type": "turn",
+        "open": false
+      }
     ]
   },
   "shots": [
@@ -1369,6 +1602,230 @@
         "if (ctx.cs.barParts.model.v.textContent !== 'Sonnet 5.5') throw new Error('the model must come from the transcript: ' + ctx.cs.barParts.model.v.textContent);",
         "if (ctx.cs.status.fiveHourPct !== 42) throw new Error('the account-wide 5 h reading must still be taken');"
       ]
+    },
+    {
+      "name": "no-header-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await headerShot(ctx);"
+      ]
+    },
+    {
+      "name": "no-header-narrow-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await headerShot(ctx, { pane: 400 });"
+      ]
+    },
+    {
+      "name": "effort-menu-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await effortShot(ctx);"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "effort-menu-narrow-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await effortShot(ctx, { pane: 440 });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-live-dark",
+      "theme": "dark",
+      "events": [
+        "tools-live"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'running' });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-live-narrow-dark",
+      "theme": "dark",
+      "events": [
+        "tools-live"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'running', pane: 400 });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-done-fail-dark",
+      "theme": "dark",
+      "events": [
+        "tools-fail"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'error' });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-done-fail-narrow-dark",
+      "theme": "dark",
+      "events": [
+        "tools-fail"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'error', pane: 400 });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-open-row-dark",
+      "theme": "dark",
+      "events": [
+        "tools-fail"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'error', open: true });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-open-row-narrow-dark",
+      "theme": "dark",
+      "events": [
+        "tools-fail"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'error', open: true, pane: 400 });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "no-header-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await headerShot(ctx);"
+      ]
+    },
+    {
+      "name": "no-header-narrow-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await headerShot(ctx, { pane: 400 });"
+      ]
+    },
+    {
+      "name": "effort-menu-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await effortShot(ctx);"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "effort-menu-narrow-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await effortShot(ctx, { pane: 440 });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-live-light",
+      "theme": "light",
+      "events": [
+        "tools-live"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'running' });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-live-narrow-light",
+      "theme": "light",
+      "events": [
+        "tools-live"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'running', pane: 400 });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-done-fail-light",
+      "theme": "light",
+      "events": [
+        "tools-fail"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'error' });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-done-fail-narrow-light",
+      "theme": "light",
+      "events": [
+        "tools-fail"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'error', pane: 400 });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-open-row-light",
+      "theme": "light",
+      "events": [
+        "tools-fail"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'error', open: true });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "group-open-row-narrow-light",
+      "theme": "light",
+      "events": [
+        "tools-fail"
+      ],
+      "js": [
+        "await groupShot(ctx, { state: 'error', open: true, pane: 400 });"
+      ],
+      "clip": "pane"
     }
   ],
   "setup": [
@@ -1405,6 +1862,57 @@
     "  // FAIL the run when the popup shows more than seven whole rows (a row cut by the edge, under the fade, does not count) or the active row is not fully in view.",
     "  if (!o.pane && vis > 7) throw new Error('slash popup shows ' + vis + ' rows (list ' + list.clientHeight + 'px, row ' + list.children[0].offsetHeight + 'px, top ' + list.scrollTop + ')');",
     "  if (on.top < box.top - 1 || on.bottom > box.bottom + 1) throw new Error('the active slash row is out of view');",
+    "};",
+    "// The no-header shots: the pane has no title strip of its own any more, so the chat starts at the very top of the pane and the way back to the terminal is the bubble icon on the tab.",
+    "window.headerShot = async (ctx, o) => {",
+    "  o = o || {};",
+    "  if (o.pane) { ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = o.pane + 'px'; ctx.p.el.style.alignSelf = 'flex-start'; }",
+    "  await ctx.sleep(350);",
+    "  // FAIL the run if a header came back, if the icon is not on the tab and pressed, or if the log does not start at the top edge of the chat",
+    "  if (ctx.$('.cs-head, .cs-switch, .cs-gear')) throw new Error('the chat view has a header again');",
+    "  const icon = ctx.p.tab.querySelector('.tview');",
+    "  if (!icon || !icon.classList.contains('on') || icon.getAttribute('aria-pressed') !== 'true') throw new Error('the tab has no pressed view icon');",
+    "  const r = (e) => e.getBoundingClientRect();",
+    "  if (r(ctx.cs.log).top - r(ctx.root).top > 1.5) throw new Error('there is a gap above the log where the header used to be');",
+    "  ctx.cs.log.scrollTop = 0;   // the start of the conversation: the first thing in the chat sits right under the tab strip",
+    "};",
+    "// The effort menu shots: open the popover from the segment on the bar (a real click), then FAIL the run if it is cut off, leaves the pane or does not show the current level as checked.",
+    "window.effortShot = async (ctx, o) => {",
+    "  o = o || {};",
+    "  if (o.pane) { ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = o.pane + 'px'; ctx.p.el.style.alignSelf = 'flex-start'; }",
+    "  ctx.cs.input.focus();",
+    "  await ctx.sleep(450);",
+    "  ctx.cs.effortSeg.click();",
+    "  await ctx.sleep(300);",
+    "  const r = (e) => e.getBoundingClientRect();",
+    "  const pop = ctx.$('.cb-pop'), pane = r(ctx.p.el), seg = r(ctx.cs.effortSeg);",
+    "  if (!pop || pop.hidden) throw new Error('the effort menu did not open');",
+    "  const pr = r(pop);",
+    "  if (pr.left < pane.left - 0.5 || pr.right > pane.right + 0.5 || pr.top < pane.top - 0.5) throw new Error('the effort menu is cut off by the pane');",
+    "  if (pr.bottom > seg.top + 0.5) throw new Error('the effort menu overlaps the bar instead of sitting above it');",
+    "  if (!ctx.$('.cbp-opt[aria-checked=\"true\"]')) throw new Error('no level is checked in the effort menu');",
+    "};",
+    "// The tool-group shots: wait for the folded row, optionally unfold it and open the failed inner row, then FAIL the run if the row is not in the expected state or its text overflows the row.",
+    "window.groupShot = async (ctx, o) => {",
+    "  o = o || {};",
+    "  if (o.pane) { ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = o.pane + 'px'; ctx.p.el.style.alignSelf = 'flex-start'; }",
+    "  await ctx.sleep(350);",
+    "  const g = ctx.$('.chat-tg');",
+    "  if (!g) throw new Error('the run of tool calls was not folded into a group');",
+    "  if (!g.classList.contains(o.state)) throw new Error('the group is not ' + o.state + ' (' + g.className + ')');",
+    "  if (o.open) {",
+    "    ctx.$('.cg-head').click();",
+    "    await ctx.sleep(120);",
+    "    ctx.$('.cg-body .chat-tool.error .ct-head').click();",
+    "    await ctx.sleep(120);",
+    "    if (!g.classList.contains('open') || !ctx.$('.cg-body .chat-tool.error .ct-body:not([hidden])')) throw new Error('the group did not unfold with the failed row open');",
+    "  } else if (g.classList.contains('open')) throw new Error('the group should be folded');",
+    "  const head = g.querySelector('.cg-head'), hr = head.getBoundingClientRect();",
+    "  for (const c of head.querySelectorAll('.cg-n, .cg-list, .cg-live, .cg-fail, .cg-state')) {",
+    "    const cr = c.getBoundingClientRect();",
+    "    if (cr.width && cr.right > hr.right + 0.5) throw new Error('the summary row text overflows its row: ' + c.className);",
+    "  }",
+    "  ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;",
     "};"
   ]
 }

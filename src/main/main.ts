@@ -2038,8 +2038,9 @@ async function runChatShot(win: BrowserWindow): Promise<void> {
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
   const finish = (code: number): void => { dropChatShotUserData(); app.exit(code); };
   const fail = (msg: string): void => { console.error('chat-shot: FAILED — ' + msg); finish(1); };
-  /* A hung renderer must not hang whoever called us (the runner has its own, longer, kill timer). */
-  setTimeout(() => fail('timed out after 150 s'), 150_000);
+  /* A hung renderer must not hang whoever called us (the runner has its own, longer, kill timer). 300 s, because
+     the full shot list takes about two minutes and grows with every scenario added. */
+  setTimeout(() => fail('timed out after 300 s'), 300_000);
   try {
     if (!CHAT_SHOT_DIR) throw new Error('missing output folder: --chat-shot=<dir>');
     const outDir = path.resolve(CHAT_SHOT_DIR);

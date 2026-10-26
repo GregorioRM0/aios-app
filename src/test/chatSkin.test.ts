@@ -571,13 +571,13 @@ test('chat-shot: 1280x860 CSS px at 2x, throwaway userData, a 2x switch set befo
       && /backgroundThrottling: false/.test(src)
       && /--user-data-dir must be an existing folder under/.test(top) && /process\.exit\(1\)/.test(top)
       && /mkdtempSync\(path\.join\(os\.tmpdir\(\), 'aios-chatshot-ud-'\)\)/.test(top)
-      && /setTimeout\(\(\) => fail\('timed out after 150 s'\), 150_000\)/.test(chatShotBlock(src))
+      && /setTimeout\(\(\) => fail\('timed out after 300 s'\), 300_000\)/.test(chatShotBlock(src))
       && /finish\(0\)/.test(chatShotBlock(src)) && /app\.exit\(code\)/.test(chatShotBlock(src));
   };
   assert.ok(holds(main));
   assert.equal(holds(main.replace("appendSwitch('force-device-scale-factor', '2')", "appendSwitch('force-device-scale-factor', '1')")), false, 'control: a 1x capture');
   assert.equal(holds(main.replace("'aios-chatshot-ud-'", "'aios-chatshot-'")), false, 'control: userData named something the cleanup would not recognise');
-  assert.equal(holds(main.replace('150_000', '1_500_000')), false, 'control: a timeout nobody would wait for');
+  assert.equal(holds(main.replace('300_000', '3_000_000')), false, 'control: a timeout nobody would wait for');
 });
 
 test('chat-shot: the renderer driver only feeds the skin and the xterm — it never writes to the pty', () => {
@@ -2736,4 +2736,67 @@ test('the folded row\'s CSS: as short as a tool row, the call in progress only w
   assert.match(decl('.cg-head') + ' min-height: 36px;', /min-height: 36px/);
   assert.notEqual(/min-height:\s*(\d+)px/.exec('min-height: 36px')?.[1], /min-height:\s*(\d+)px/.exec(head)?.[1]);
   assert.match('.chat-tg.ok .cg-state { color: var(--accent); }', /--accent/);
+});
+
+// ── the v3 shots: no header, the effort menu, the folded run (live · failed · unfolded with a row open) ──────────────
+
+const V3_SCENARIOS: Array<[string, string]> = [['no-header', 'headerShot'], ['effort-menu', 'effortShot'], ['group-live', 'groupShot'], ['group-done-fail', 'groupShot'], ['group-open-row', 'groupShot']];
+const v3Names = (): string[] => V3_SCENARIOS.flatMap(([n]) => ['dark', 'light'].flatMap((th) => [`${n}-${th}`, `${n}-narrow-${th}`]));
+/** What a stream of tool calls looks like to the folded row: the longest run, how many are running, how many failed. */
+function runFacts(events: FxEvent[]): { run: number; running: number; failed: number; turnOpen: boolean } {
+  const items = events.filter((e) => e.type === 'items').flatMap((e) => e.items ?? []);
+  let run = 0, best = 0;
+  for (const i of items) { run = i.role === 'tool' ? run + 1 : 0; best = Math.max(best, run); }
+  const tools = items.filter((i) => i.role === 'tool').map((i) => i.tool as FxTool);
+  const last = [...events].reverse().find((e) => e.type === 'turn');
+  return { run: best, running: tools.filter((x) => x.status === 'running').length, failed: tools.filter((x) => x.status === 'error').length, turnOpen: last?.open === true };
+}
+
+test('chat-shot fixture: every v3 scenario is shot in dark and light, wide and narrow, through its shared helper', () => {
+  const byName = (n: string): (FxShot & { clip?: string }) | undefined => fixture.shots.find((s) => s.name === n);
+  const names = v3Names();
+  assert.equal(names.length, 20);
+  for (const [n, helper] of V3_SCENARIOS) for (const th of ['dark', 'light']) for (const sfx of ['', '-narrow']) {
+    const shot = byName(`${n}${sfx}-${th}`);
+    assert.ok(shot, `missing shot ${n}${sfx}-${th}`);
+    assert.equal(shot?.theme, th);
+    assert.match([shot?.js].flat().join('\n'), new RegExp(`await ${helper}\\(ctx[,)]`), `${shot?.name} goes through ${helper}`);
+    if (sfx) assert.match([shot?.js].flat().join('\n'), /pane: \d+/, `${shot?.name}: a narrow PANE (the window width alone would only shrink the layout around it)`);
+    // what is judged is the pane, except where the tab icon is the subject
+    if (n !== 'no-header') assert.equal((shot as { clip?: string }).clip, 'pane', `${shot?.name} is cropped to the pane`);
+  }
+  // the helpers fail the run, they do not just take a picture
+  const setup = [fixture.setup].flat().join('\n');
+  assert.match(setup, /the chat view has a header again/);
+  assert.match(setup, /the tab has no pressed view icon/);
+  assert.match(setup, /a gap above the log/);
+  assert.match(setup, /the effort menu is cut off by the pane/);
+  assert.match(setup, /the effort menu overlaps the bar/);
+  assert.match(setup, /no level is checked in the effort menu/);
+  assert.match(setup, /was not folded into a group/);
+  assert.match(setup, /the group did not unfold with the failed row open/);
+  assert.match(setup, /the summary row text overflows its row/);
+  // a QA helper only looks: nothing it does can reach the pty or pick a level
+  assert.doesNotMatch(setup + names.map((n) => [byName(n)?.js].flat().join('\n')).join('\n'), /ptyWrite|chatSkinSubmit|chatSkinEffortPick|\.cbp-opt[^'"]*['"]\)\.click/);
+});
+
+test('chat-shot fixture: the streams behind the folded-run shots really are a live run, and a finished run with exactly one failure', () => {
+  const live = runFacts(fixture.streams['tools-live']);
+  assert.ok(live.run >= 5 && live.running === 1 && live.failed === 0 && live.turnOpen, `live: ${JSON.stringify(live)}`);
+  const fail = runFacts(fixture.streams['tools-fail']);
+  assert.ok(fail.run >= 5 && fail.running === 0 && fail.failed === 1 && !fail.turnOpen, `fail: ${JSON.stringify(fail)}`);
+  // the live one ends on the running call, so the row can show the action in progress
+  const liveItems = fixture.streams['tools-live'].filter((e) => e.type === 'items').flatMap((e) => e.items ?? []);
+  assert.equal((liveItems[liveItems.length - 1].tool as FxTool).status, 'running');
+  // controls: a stream with two failures, or with nothing running, is not what the shots claim
+  const two = JSON.parse(JSON.stringify(fixture.streams['tools-fail'])) as FxEvent[];
+  ((two.find((e) => e.type === 'items') as FxEvent).items as FxItem[]).find((i) => i.tool?.status === 'ok')!.tool!.status = 'error';
+  assert.notEqual(runFacts(two).failed, 1);
+  const calm = JSON.parse(JSON.stringify(fixture.streams['tools-live'])) as FxEvent[];
+  ((calm.find((e) => e.type === 'items') as FxEvent).items as FxItem[]).forEach((i) => { if (i.tool) i.tool.status = 'ok'; });
+  assert.equal(runFacts(calm).running, 0);
+  // the effort and the bar are the ones the menu is opened from: an idle turn, a known level, so the segment is a live button
+  const idle = runFacts(fixture.streams['bar-idle']);
+  assert.equal(idle.turnOpen, false);
+  assert.equal((fixture.streams.conversation.find((e) => e.type === 'status') as FxEvent).effort, 'high');
 });

@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PREFIX = 'aios-chatshot-';
-const RUN_LIMIT_MS = 180_000;   // main has its own 150 s timer; this one only matters if main itself hangs
+const RUN_LIMIT_MS = 360_000;   // main has its own 300 s timer; this one only matters if main itself hangs
 
 const args = process.argv.slice(2);
 const opt = (name) => {
