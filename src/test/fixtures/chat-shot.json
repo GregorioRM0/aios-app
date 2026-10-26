@@ -734,9 +734,10 @@
       ],
       "composer": "Also check that the retry count is logged",
       "js": [
-        "ctx.cs.gear.click();"
+        "openSettingsTab();",
+        "await ctx.sleep(400);"
       ],
-      "clip": "pane"
+      "clip": "window"
     },
     {
       "name": "settings-light",
@@ -746,9 +747,10 @@
       ],
       "composer": "Also check that the retry count is logged",
       "js": [
-        "ctx.cs.gear.click();"
+        "openSettingsTab();",
+        "await ctx.sleep(400);"
       ],
-      "clip": "pane"
+      "clip": "window"
     },
     {
       "name": "markdown-light",
@@ -825,6 +827,7 @@
         "tools-dense"
       ],
       "js": [
+        "ctx.$('.cg-head').click();",
         "ctx.$('.chat-tool[data-kind=\"search\"] .ct-head').click();",
         "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
       ],
@@ -837,6 +840,7 @@
         "tools-dense"
       ],
       "js": [
+        "ctx.$('.cg-head').click();",
         "ctx.$('.chat-tool[data-kind=\"search\"] .ct-head').click();",
         "ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;"
       ],
@@ -1361,7 +1365,7 @@
         "chatPaintUsage(ctx.cs);",
         "await barShot(ctx);",
         "if (ctx.cs.status.effort !== undefined || ctx.cs.status.model !== undefined || ctx.cs.status.contextWindow !== undefined) throw new Error('per-session fields were written from a payload that is not this tab\\'s');",
-        "if (!ctx.cs.barParts.effort.seg.hidden) throw new Error('the effort must be hidden when no matching payload ever reported it');",
+        "if (ctx.cs.barParts.effort.v.textContent !== t('chat.bar.effortWord')) throw new Error('with no matching payload the effort shows only its dim word, never another session\\'s level: ' + ctx.cs.barParts.effort.v.textContent);",
         "if (ctx.cs.barParts.model.v.textContent !== 'Sonnet 5.5') throw new Error('the model must come from the transcript: ' + ctx.cs.barParts.model.v.textContent);",
         "if (ctx.cs.status.fiveHourPct !== 42) throw new Error('the account-wide 5 h reading must still be taken');"
       ]
