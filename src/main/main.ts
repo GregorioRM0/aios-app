@@ -4,6 +4,7 @@ import { installWebPermissionPolicy } from './webPermissions';
 import { withDefaultLocale } from './termLocale';
 import { createTranscriptTail, isSessionId } from './transcriptTail';
 import { createPromptMonitor, type PromptMonitor } from '../core/tuiPrompt';
+import { createStreamTracker, sameMessage, normalizeForMatch, type StreamTracker } from '../core/screenStream';
 import { mergeStatus, parseStatuslinePayload } from '../core/chatEvents';
 import { builtinCommands, slashSuggestions, type SlashCommand } from '../core/slashCommands';
 import { listSlashCommands } from './slashCommandsIo';
@@ -363,9 +364,18 @@ ipcMain.on('pty:kill', (_e, { id }: { id: number }) => { ptys.get(id)?.kill(); p
    The chat never types for the operator and never answers a dialog; it points at the terminal.
    `paneId` IS the pty id: pty:spawn returns it, the renderer keys its `panes` Map and ptyWrite by
    it, and `ptys` is keyed by it here — one number all the way through. */
-interface Skin { sender: Electron.WebContents; monitor: PromptMonitor; onGone: () => void; screenFed: boolean; }
+interface Skin {
+  sender: Electron.WebContents; monitor: PromptMonitor; onGone: () => void; screenFed: boolean;
+  /** Reads the reply being written off the screen snapshots (core/screenStream). Only fed while a transcript is followed. */
+  stream: StreamTracker; following: boolean; send: (ev: Record<string, unknown>) => void;
+}
 const skins = new Map<number, Skin>();
 const tail = createTranscriptTail();
+/* A window onto everything main sends to a chat view, for the smoke gate only: it measures the streaming
+   (how many previews arrived before the transcript line, how early) without the gate re-implementing any
+   of the pipeline. Null in a normal run, and it only ever READS. `screen` entries are internal timings. */
+let skinTap = null as ((paneId: number, ev: Record<string, unknown>) => void) | null;
+
 
 async function endSkin(paneId: number, flush: boolean): Promise<void> {
   const k = skins.get(paneId);
@@ -390,35 +400,56 @@ ipcMain.handle('chatSkin:watch', async (e, paneId: number, sessionId: string | n
   let k = skins.get(id);
   if (k && k.sender !== sender) { await endSkin(id, false); k = undefined; }
   tail.unwatch(id);                               // one transcript per pane: a new session id replaces the old one
-  const send = (ev: unknown): void => { if (!sender.isDestroyed()) sender.send('chatSkin:event', ev); };
   if (!k) {
+    const send = (body: Record<string, unknown>): void => {
+      const ev = { paneId: id, ...body };
+      skinTap?.(id, ev);
+      if (!sender.isDestroyed()) sender.send('chatSkin:event', ev);
+    };
     const monitor = createPromptMonitor({
-      onChange: (kind, hint) => send({ paneId: id, type: 'prompt', kind, ...(hint ? { hint } : {}) }),
+      onChange: (kind, hint) => send({ type: 'prompt', kind, ...(hint ? { hint } : {}) }),
     });
     const onGone = (): void => { void endSkin(id, false); };
     sender.once('destroyed', onGone);             // a closed or reloaded window must not leave a watcher behind
-    k = { sender, monitor, onGone, screenFed: false };
+    k = { sender, monitor, onGone, screenFed: false, stream: createStreamTracker(), following: false, send };
     skins.set(id, k);
     const seen = ptyTails.get(id);
     if (seen) monitor.push(seen);
   }
+  k.following = transcript;
+  k.stream.reset();                               // a new watch is a new transcript: a preview of the old one has nothing to be replaced by
   if (!transcript) return { ok: true, file: '' };
-  const monitor = k.monitor;
+  const skin = k;
   return tail.watch(id, sessionId as string, (ev) => {
     // a finished tool or a new operator message proves the dialog that was open has been answered
-    if (ev.type === 'items' && ev.items.some((it) => it.role === 'user' || (it.tool && it.tool.status !== 'running'))) monitor.clear();
-    send(ev);
+    if (ev.type === 'items' && ev.items.some((it) => it.role === 'user' || (it.tool && it.tool.status !== 'running'))) skin.monitor.clear();
+    /* The finished message replaces the preview: tell the renderer which transcript line IS the previewed text BEFORE
+       the items event, so it hands the preview's node to that item (same place, no second bubble, no jump). */
+    if (ev.type === 'items') { const a = skin.stream.items(ev.items); if (a) skin.send({ ...a }); }
+    else if (ev.type === 'turn') { if (ev.open) skin.stream.begin(); else skin.stream.end(); }
+    else if (ev.type === 'reset') skin.stream.reset();
+    const { paneId: _pid, ...rest } = ev as { paneId: number } & Record<string, unknown>;
+    skin.send(rest);
   });
 });
 /* The renderer's terminal emulator is the only thing that knows what the screen looks like NOW, so
    it sends snapshots while the chat view is up; once one arrives the raw stream is no longer fed to
    the monitor (a mix of the two would let a differential repaint talk the monitor out of a dialog
-   that is still open). Only the sender that owns the watch may feed it. */
+   that is still open). Only the sender that owns the watch may feed it. The same snapshot also feeds the
+   streaming preview. That extractor runs HERE, not in the renderer: it is a pure TypeScript core with unit
+   tests (the renderer is plain JS with no imports, so it would need a second copy), it needs the transcript
+   items to decide when the preview becomes the real message (main sees both streams), and the renderer
+   then receives only the text that changed instead of a screenful every 150 ms. */
 ipcMain.on('chatSkin:screen', (e, paneId: number, text: string) => {
   const k = skins.get(Number(paneId));
   if (!k || k.sender !== e.sender || typeof text !== 'string') return;
   k.screenFed = true;
   k.monitor.screen(text.slice(-8192));
+  if (!k.following) return;                       // no transcript to take the preview's place: a bubble that is never replaced must never be drawn
+  const t0 = performance.now();
+  const ev = k.stream.screen(text);
+  skinTap?.(Number(paneId), { type: 'screen', bytes: text.length, ms: performance.now() - t0 });
+  if (ev) k.send({ ...ev });
 });
 ipcMain.handle('chatSkin:unwatch', (_e, paneId: number) => endSkin(Number(paneId), false));
 /* The usage bar. ~/.claude/statusline-payload.json is the LAST payload ANY Claude Code session on this
@@ -542,7 +573,7 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
   let result: SmokeChatVerdict = { status: 'failed', detail: 'did not finish' };
 
   const probe = (): Promise<{ view: string; exited: boolean; sessionId: string | null; watched: string | null; prompt: string | null;
-    state: string | null; ptyAge: number; hidden: boolean; screen: string[]; rows: Array<{ who: string; text: string; hidden: boolean }> } | null> => js(`(() => {
+    state: string | null; ptyAge: number; hidden: boolean; turnOpen: boolean; screen: string[]; rows: Array<{ who: string; text: string; hidden: boolean }> } | null> => js(`(() => {
       const p = panes.get(${paneId}); if (!p) return null;
       const cs = p.chatSkin;
       const buf = p.term.buffer.active; const screen = [];
@@ -552,7 +583,7 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
         text: (r.querySelector('.chat-bubble') || r).textContent || '', hidden: r.hidden })) : [];
       return { view: p.view || 'term', exited: !!p.exited, sessionId: p.sessionId || null, watched: cs ? cs.watched : null,
         prompt: cs ? cs.promptKind : null, state: cs ? cs.state : null, ptyAge: Date.now() - (p.lastPtyAt || 0),
-        hidden: document.hidden, screen: screen.slice(-8), rows };
+        hidden: document.hidden, turnOpen: cs ? !!cs.turnOpen : false, screen: screen.slice(-8), rows };
     })()`);
   const fail = (why: string, p?: { screen: string[] } | null): never => {
     throw new Error(why + (p && p.screen.length ? ` | screen: ${p.screen.slice(-4).map((l) => l.trim()).join(' / ').slice(0, 300)}` : ''));
@@ -650,7 +681,73 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
     if (!userBubble) return fail(`no operator bubble with ${word} after ${((Date.now() - sentAt) / 1000).toFixed(0)}s`, st);
     if (!answer) return fail(`no assistant bubble with ${word} after ${((Date.now() - sentAt) / 1000).toFixed(0)}s (rows: ${st?.rows.map((r) => r.who).join(',')})`, st);
     say(`operator bubble and assistant bubble both carry ${word} (${((Date.now() - sentAt) / 1000).toFixed(1)}s after Enter)`);
-    result = { status: 'ok', detail: 'real session, chat view, composer, bubbles' };
+
+    // 6. STREAMING, measured: a long answer, with a tap on everything main sends to the view
+    const tapped: Array<{ t: number; ev: Record<string, unknown> }> = [];
+    skinTap = (pid, ev) => { if (pid === paneId) tapped.push({ t: Date.now(), ev }); };
+    const metrics0 = app.getAppMetrics();
+    const cpu: Array<{ main: number; renderer: number }> = [];
+    const askLong = 'write 25 numbered short lines about rivers';
+    const sentLong = await js<boolean>(`(() => {
+      const cs = panes.get(${paneId}).chatSkin;
+      cs.input.value = ${JSON.stringify(askLong)};
+      cs.input.dispatchEvent(new Event('input', { bubbles: true }));
+      cs.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return cs.input.value === '';
+    })()`);
+    if (!sentLong) return fail('Enter in the composer did not send the long-answer request');
+    const sentLongAt = Date.now();
+    void metrics0;
+    const finalItem = (): { t: number; uuid: string; text: string } | null => {
+      for (const x of tapped) {
+        if (x.ev.type !== 'items') continue;
+        for (const it of x.ev.items as Array<{ uuid: string; role: string; text?: string }>) {
+          if (it.role === 'assistant' && typeof it.text === 'string' && /(^|\n)\s*25[.)]/.test(it.text)) return { t: x.t, uuid: it.uuid, text: it.text };
+        }
+      }
+      return null;
+    };
+    let fin = finalItem();
+    for (let i = 0; Date.now() < sentLongAt + 90000 && !fin; i++) {
+      await sleep(500);
+      const m = app.getAppMetrics();
+      cpu.push({ main: m.filter((x) => x.type === 'Browser').reduce((a, x) => a + x.cpu.percentCPUUsage, 0), renderer: m.filter((x) => x.type === 'Tab').reduce((a, x) => a + x.cpu.percentCPUUsage, 0) });
+      st = await probe();
+      if (st && st.prompt) return fail(`dialog '${st.prompt}' while waiting for the long answer`, st);
+      // mark the provisional bubble's node, so that after the finished message lands we can tell whether it took that SAME node over
+      await js(`(() => { const n = panes.get(${paneId}).chatSkin.log.querySelector('.cs-prov'); if (n && !n.dataset.smk) n.dataset.smk = String(Date.now()); return true; })()`);
+      fin = finalItem();
+    }
+    if (!fin) return fail('the long answer never reached the transcript', st);
+    await sleep(1200);   // let the turn close and the last events land
+    skinTap = null;
+    const streams = tapped.filter((x) => x.ev.type === 'stream');
+    const before = streams.filter((x) => typeof x.ev.text === 'string' && x.t < fin!.t);
+    const screens = tapped.filter((x) => x.ev.type === 'screen' && x.t >= sentLongAt);
+    const prefixOk = before.filter((x) => sameMessage(String(x.ev.text), fin!.text, { headCut: x.ev.headCut === true })).length;
+    const adopts = streams.filter((x) => x.ev.adopt === fin!.uuid).length;
+    const lens = before.map((x) => String(x.ev.text).length);
+    const avg = (a: number[]): number => a.length ? a.reduce((p, c) => p + c, 0) / a.length : 0;
+    const extractMs = screens.map((x) => Number(x.ev.ms));
+    const snapMs = await js<number>(`(() => { const p = panes.get(${paneId}); const t0 = performance.now(); for (let i = 0; i < 40; i++) chatSkinScreenText(p); return (performance.now() - t0) / 40; })()`);
+    say(`streaming — final message ${fin.text.length} chars, ${before.length} stream events before the transcript line`
+      + (before.length ? `, first text ${((fin.t - before[0].t) / 1000).toFixed(1)}s before it, previews ${lens[0]} → ${lens[lens.length - 1]} chars (${(100 * lens[lens.length - 1] / fin.text.length).toFixed(0)}% of the final)` : '')
+      + `; prefix of the final: ${prefixOk}/${before.length}; adopt events for the final item: ${adopts}`);
+    say(`streaming cost — ${screens.length} screen snapshots in ${((fin.t - sentLongAt) / 1000).toFixed(1)}s; extractor ${avg(extractMs).toFixed(2)} ms avg / ${Math.max(0, ...extractMs).toFixed(2)} ms max in main; snapshot build ${snapMs.toFixed(2)} ms in the renderer; cpu avg main ${avg(cpu.map((c) => c.main)).toFixed(1)}% renderer ${avg(cpu.map((c) => c.renderer)).toFixed(1)}%`);
+    // what the operator SAW: one bubble for the answer, in the node the preview used, and nothing left hanging
+    const seen = await js<{ rows: number; marked: boolean; leftover: number; text: number }>(`(() => {
+      const cs = panes.get(${paneId}).chatSkin;
+      const norm = (x) => String(x || '').toLowerCase().replace(/[^\\p{L}\\p{N}]+/gu, '');
+      const rows = [...cs.log.querySelectorAll('.chat-row.who-claude')].filter((r) => !r.hidden && norm(r.textContent).includes(${JSON.stringify(normalizeForMatch(fin.text.replace(/^\s*(?:\d+[.)]|[-*•])\s+/gm, '')).slice(0, 40))}));
+      return { rows: rows.length, marked: rows.length === 1 && !!rows[0].dataset.smk, leftover: cs.log.querySelectorAll('.cs-prov').length, text: rows.length ? (rows[0].textContent || '').length : 0 };
+    })()`);
+    say(`streaming, as painted — answer bubbles: ${seen.rows}; the final bubble is the node the preview used: ${seen.marked}; previews left hanging: ${seen.leftover}`);
+    if (seen.rows !== 1) return fail(`the long answer is on screen ${seen.rows} times (a preview was duplicated or the message never painted)`);
+    if (seen.leftover) return fail('a provisional bubble was left hanging after the message landed');
+    if (before.length > 0 && !seen.marked) return fail('the finished message did not take the preview\'s node over (no same-position replacement)');
+    if (process.env.AIOS_SMOKE_CHAT_DEBUG) { for (const x of before.slice(0, 3).concat(before.slice(-2))) say(`debug stream ${JSON.stringify(String(x.ev.text).slice(0, 160))}`); say(`debug final ${JSON.stringify(fin.text.slice(0, 160))}`); }
+
+    result = { status: 'ok', detail: 'real session, chat view, composer, bubbles, streaming' };
   } catch (e) {
     result = { status: 'failed', detail: String((e as Error)?.message ?? e) };
   } finally {

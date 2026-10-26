@@ -1624,6 +1624,21 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 /* With a dialog up the card is the last thing above the live terminal strip, so it docks onto it: squared bottom, no gap. */
 .pane.cs-strip > .chatskin .cs-alert { margin-top: 6px; margin-bottom: 0; border-bottom: 0; border-radius: 14px 14px 0 0; }
 @container (max-width: 520px) { .cs-alert { flex-wrap: wrap; } .csa-btn { margin-left: 47px; } }
+/* ── the reply being written (a preview of the message the transcript has not recorded yet) ──
+   Not a second kind of message: the same bubble, a step quieter, with a small caret in the busy hue at the end of the last
+   line. When the real message lands this very node takes it over, the class goes and the ink comes up to full. */
+.chat-row.cs-prov .chat-md { color: color-mix(in srgb, var(--ink) 84%, var(--surface)); }
+.chat-row.who-claude .chat-md { transition: color .3s ease; }
+.chat-row.cs-prov.live .chat-md > :is(p, h1, h2, h3, h4, h5, h6):last-child::after,
+.chat-row.cs-prov.live .chat-md > :is(ul, ol):last-child > li:last-child::after {
+  content: ''; display: inline-block; width: 2px; height: 1.02em; margin-left: 4px; vertical-align: -.16em; border-radius: 1px;
+  background: var(--st-busy); animation: cs-caret 1.15s ease-in-out infinite; }
+@keyframes cs-caret { 0%, 100% { opacity: .2; } 50% { opacity: .95; } }
+@media (prefers-reduced-motion: reduce) {
+  .chat-row.cs-prov.live .chat-md > :is(p, h1, h2, h3, h4, h5, h6):last-child::after,
+  .chat-row.cs-prov.live .chat-md > :is(ul, ol):last-child > li:last-child::after { animation: none; background: color-mix(in srgb, var(--st-busy) 70%, transparent); }
+  .chat-row.who-claude .chat-md { transition: none; }
+}
 .cs-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* ── tool rows: one compact line per call, joined into a card when they come in a run ── */
 .chat-tool { --tr: 9px; flex: 0 0 auto; min-width: 0; font-size: 12px; line-height: 1.35; color: var(--ink);

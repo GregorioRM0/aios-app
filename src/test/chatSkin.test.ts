@@ -365,7 +365,7 @@ test('the font and size pickers persist through the same settings as before', ()
 /** The renderer's pane id IS the pty id: every call below passes the `panes` key, and main keys `skins` by the pty id. */
 const contractHolds = (rend: string, pre: string, mn: string): boolean => {
   const chans = ['chatSkin:watch', 'chatSkin:unwatch', 'chatSkin:event', 'chatSkin:screen'];
-  const events = ['reset', 'items', 'turn', 'usage', 'prompt', 'missing', 'error'];
+  const events = ['reset', 'items', 'turn', 'usage', 'prompt', 'stream', 'missing', 'error'];
   const handler = /function chatSkinHandleEvent\(ev\) \{[\s\S]*?\n\}/.exec(rend)?.[0] ?? '';
   return chans.every((c) => pre.includes(`'${c}'`) && mn.includes(`'${c}'`))
     && /ipcMain\.handle\('chatSkin:watch'/.test(mn) && /ipcMain\.handle\('chatSkin:unwatch'/.test(mn)
@@ -443,8 +443,9 @@ test('a differential repaint hides the dialog from the stream but not from the s
 test('the renderer sends screens only while the chat view is up and watching, after xterm parsed the bytes', () => {
   const fn = fnBody(skin, 'chatSkinScreenSoon');
   assert.match(fn, /cs\.watched === null \|\| p\.view !== 'chat'/);
-  assert.match(fn, /cs\.screenTimer\) return/, 'one snapshot per window');
-  assert.match(app, /p\.term\.write\(m\.data, p\.chatSkin && p\.view === 'chat' \? \(\) => chatSkinScreenSoon\(m\.id, p\) : undefined\)/);
+  assert.match(fn, /clearTimeout\(cs\.screenTimer\)/, 'every chunk pushes the snapshot back to the end of the repaint…');
+  assert.match(fn, /cs\.screenSince \+ CS_SCREEN_MAX_MS - now/, '…but never past the ceiling after the first unsent byte');
+  assert.match(app, /p\.term\.write\(m\.data, p\.chatSkin && p\.view === 'chat' \? \(\) => \{ chatSkinFrameState\(p\.chatSkin, m\.data\); chatSkinScreenSoon\(m\.id, p\); \} : undefined\)/);
   assert.match(main, /if \(sk && !sk\.screenFed\) sk\.monitor\.push\(data\)/, 'once a screen arrives the raw stream stops feeding the monitor');
   assert.match(main, /k\.sender !== e\.sender/, 'only the window that owns the watch can feed it');
 });
@@ -1417,4 +1418,242 @@ test('chat-shot fixture: the drop veil and an inserted pair of paths are shot in
   assert.match([byName('drop-over-dark')?.js].flat().join('\n'), /box\.classList\.add\('dropok'\)/, 'the veil is forced by the fixture');
   const ins = [byName('drop-inserted-light')?.js].flat().join('\n');
   assert.match(ins, /chatSkinInsertPaths\(ctx\.cs, \['\/work\/app\//, 'it goes through the real insert function, with neutral paths');
+});
+
+// ── streaming: the reply being written, as ONE provisional bubble the finished message takes over ──────────
+
+/** A DOM stand-in rich enough for the column code: ordered children, classes, attributes, a class-selector query, focus. */
+class Dn {
+  tag: string; className: string; textContent: string; hidden = false; disabled = false; dataset: Record<string, string> = {}; attrs: Record<string, string> = {};
+  children: Dn[] = []; parent: Dn | null = null; handlers: Record<string, Array<(e: unknown) => void>> = {}; value = ''; renders = 0;
+  static active: Dn | null = null;
+  constructor(tag = 'div', cls = '', text = '') { this.tag = tag; this.className = cls; this.textContent = text; }
+  private cls(): Set<string> { return new Set(this.className.split(/\s+/).filter(Boolean)); }
+  classList = {
+    add: (...c: string[]): void => { const s = this.cls(); c.forEach((x) => s.add(x)); this.className = [...s].join(' '); },
+    remove: (...c: string[]): void => { const s = this.cls(); c.forEach((x) => s.delete(x)); this.className = [...s].join(' '); },
+    contains: (c: string): boolean => this.cls().has(c),
+    toggle: (c: string, on?: boolean): void => { const s = this.cls(); if (on === undefined ? !s.has(c) : on) s.add(c); else s.delete(c); this.className = [...s].join(' '); },
+  };
+  insertBefore(n: Dn, ref: Dn | null): Dn { n.remove(); const i = ref ? this.children.indexOf(ref) : -1; this.children.splice(i < 0 ? this.children.length : i, 0, n); n.parent = this; return n; }
+  appendChild(n: Dn): Dn { return this.insertBefore(n, null); }
+  append(...ns: Dn[]): void { ns.forEach((n) => this.appendChild(n)); }
+  remove(): void { if (this.parent) { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; } }
+  replaceChildren(...ns: Dn[]): void { this.children.forEach((c) => { c.parent = null; }); this.children = []; ns.forEach((n) => this.appendChild(n)); }
+  setAttribute(k: string, v: string): void { this.attrs[k] = v; }
+  removeAttribute(k: string): void { delete this.attrs[k]; }
+  getAttribute(k: string): string | null { return k in this.attrs ? this.attrs[k] : null; }
+  addEventListener(ev: string, fn: (e: unknown) => void): void { (this.handlers[ev] ||= []).push(fn); }
+  focus(): void { Dn.active = this; }
+  click(): void { if (this.disabled) return; for (const fn of this.handlers.click ?? []) fn({ target: this, preventDefault: () => undefined }); this.parent?.bubble('click', this); }
+  /** a click on a child reaches the listeners of its ancestors (the card delegates its clicks to the list) */
+  bubble(ev: string, target: Dn): void { for (const fn of this.handlers[ev] ?? []) fn({ target, preventDefault: () => undefined }); this.parent?.bubble(ev, target); }
+  closest(sel: string): Dn | null { for (let n: Dn | null = this; n; n = n.parent) if (n.matches(sel)) return n; return null; }
+  private matches(sel: string): boolean {
+    const notDisabled = sel.includes(':not(:disabled)');
+    const classes = sel.replace(':not(:disabled)', '').split('.').filter(Boolean);
+    return classes.every((c) => this.cls().has(c)) && (!notDisabled || !this.disabled);
+  }
+  querySelectorAll(sel: string): Dn[] { const out: Dn[] = []; const walk = (n: Dn): void => { for (const c of n.children) { if (c.matches(sel)) out.push(c); walk(c); } }; walk(this); return out; }
+  querySelector(sel: string): Dn | null { return this.querySelectorAll(sel)[0] ?? null; }
+}
+const isProv = (n: Dn): boolean => n.classList.contains('cs-prov');
+
+interface StreamHarness { cs: Record<string, any>; handle: (ev: Record<string, unknown>) => void; p: Record<string, any> } // eslint-disable-line @typescript-eslint/no-explicit-any
+/** The column code (items, the provisional bubble, adoption, the event switch) from the real source, wired to stand-ins. */
+function streamHarness(src: string = app): StreamHarness {
+  const from = src.indexOf('function chatSkinRegroup(');
+  const to = src.indexOf('if (window.glassShell && typeof window.glassShell.onChatSkinEvent');
+  assert.ok(from > 0 && to > from, 'the column block was found');
+  const make = new Function('el', 't', 'chatRender', 'chatSkinMakeTool', 'chatSkinPaintTool', 'chatSkinScroll', 'chatSkinPaintJump', 'chatSkinControls', 'chatSkinPaintAlert', 'chatSkinPaintState',
+    'chatSkinCardPaint', 'chatSkinPrompt', 'chatReducedMotion', 'CS_ANIM_AFTER_MS', 'panes',
+    `${src.slice(from, to)}\nreturn chatSkinHandleEvent;`) as (...a: unknown[]) => (ev: Record<string, unknown>) => void;
+  const log = new Dn('div', 'chat-log');
+  const stateEl = new Dn('div', 'cs-card'); const workEl = new Dn('div', 'cs-working');
+  log.append(stateEl, workEl);
+  const p: Record<string, any> = { name: 'chat-qa', view: 'chat' }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const cs: Record<string, any> = { log, stateEl, workEl, items: new Map(), stream: null, dlg: null, dlgSig: '', turnOpen: false, stalled: false, state: 'waiting', stick: true, resetAt: 0, lastEventAt: 0, lastSubmitAt: 0, pane: p }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  p.chatSkin = cs;
+  const handle = make((tag: string, cls?: string, text?: string) => new Dn(tag, cls, text), (k: string) => k,
+    (target: Dn, text: string) => { target.textContent = text; target.renders++; },
+    () => ({ node: new Dn('div', 'chat-tool'), body: null, role: 'tool', tool: {} }), () => undefined, () => undefined, () => undefined, () => undefined, () => undefined, () => undefined,
+    () => undefined, () => undefined, () => false, 1500, new Map([[1, p]]));
+  return { cs, p, handle: (ev) => handle({ paneId: 1, ...ev }) };
+}
+const rowsOf = (cs: StreamHarness['cs']): Dn[] => (cs.log as Dn).children.filter((c) => c.className.includes('who-claude'));
+
+/** The scenario every streaming guard reads: a message, text growing in three snapshots, then the finished message. */
+function streamRun(src: string): { provisionals: number; sameNode: boolean; stillProvisional: boolean; sameSlot: boolean; answerRows: number; finalText: string; renderedOnce: boolean; ariaHiddenGone: boolean } {
+  const { cs, handle } = streamHarness(src);
+  handle({ type: 'items', items: [{ uuid: 'u1', role: 'user', text: 'explain the cap' }] });
+  handle({ type: 'turn', open: true });
+  handle({ type: 'stream', text: 'The cap', anchor: 'the cap', headCut: false });
+  handle({ type: 'stream', text: 'The cap is enforced in nextDelay', anchor: 'the cap is enforced in nextdelay', headCut: false });
+  handle({ type: 'stream', text: 'The cap is enforced in nextDelay: the smaller of both.', anchor: 'the cap is enforced in nextdelay', headCut: false });
+  const log = cs.log as Dn;
+  const provs = log.children.filter(isProv);
+  const slot = log.children.indexOf(provs[0]);
+  const rendersBefore = provs[0]?.querySelector('.chat-md')?.renders ?? 0;
+  handle({ type: 'stream', text: null, adopt: 'a1' });
+  handle({ type: 'items', items: [{ uuid: 'a1', role: 'assistant', text: 'The cap is enforced in `nextDelay`: the smaller of both.' }] });
+  handle({ type: 'turn', open: false });
+  const rec = cs.items.get('a1');
+  return {
+    provisionals: provs.length, sameNode: !!rec && rec.node === provs[0], stillProvisional: !!provs[0] && isProv(provs[0]),
+    sameSlot: !!provs[0] && log.children.indexOf(provs[0]) === slot && slot > 0, answerRows: rowsOf(cs).length,
+    finalText: rec ? String(rec.body.textContent) : '', renderedOnce: rendersBefore >= 3, ariaHiddenGone: !!provs[0] && provs[0].getAttribute('aria-hidden') === null,
+  };
+}
+
+guarded('streaming: text growing is ONE provisional bubble, and the finished message takes over that very node — same place, no second bubble, no flash of nothing',
+  (src) => {
+    const r = streamRun(src);
+    return r.provisionals === 1 && r.sameNode && !r.stillProvisional && r.sameSlot && r.answerRows === 1 && /`nextDelay`/.test(r.finalText) && r.renderedOnce && r.ariaHiddenGone;
+  },
+  (src) => src.replace('  cs.items.set(uuid, st.rec);\n', ''));   // no hand-over: the item makes a NEW node and the preview is left beside it
+
+guarded('streaming: a second preview is never created while the first one is being written',
+  (src) => streamRun(src).provisionals === 1,
+  (src) => src.replace('  if (!st) {\n    const rec = chatSkinMakeItem', '  if (true) {\n    const rec = chatSkinMakeItem'));
+
+guarded('streaming: a tool that lands while a preview is on screen goes ABOVE it, so the preview stays the last thing and keeps its place under the column',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'stream', text: 'Let me check the logs and then', anchor: 'let me check the logs and then', headCut: false });
+    handle({ type: 'items', items: [{ uuid: 't1', role: 'tool', tool: { id: 't1', name: 'Read', summary: 'a.ts', status: 'running' } }] });
+    const kids = (cs.log as Dn).children;
+    const prov = kids.findIndex(isProv); const tool = kids.findIndex((c) => c.className.includes('chat-tool'));
+    return prov > 0 && tool > 0 && tool < prov && kids.indexOf(cs.workEl) === kids.length - 1 && kids[kids.length - 2] === kids[prov];
+  },
+  (src) => src.replace(/\(cs\.stream && cs\.stream\.rec\.node\) \|\| (?:cs\.dlg \|\| )?cs\.workEl/, 'cs.workEl'));
+
+guarded('streaming: a preview that was never adopted is dropped when the turn ends or the view resets, and a frozen one waits for its message until then',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    const provs = (): number => (cs.log as Dn).children.filter(isProv).length;
+    handle({ type: 'stream', text: 'Half of an answer that', anchor: 'half of an answer that', headCut: false });
+    handle({ type: 'stream', text: null });                                   // the spinner went away: freeze, do not remove
+    const frozen = provs() === 1 && !(cs.log as Dn).children.find(isProv)!.classList.contains('live');
+    handle({ type: 'turn', open: false });
+    const afterTurn = provs();
+    handle({ type: 'stream', text: 'Another answer that', anchor: 'another answer that', headCut: false });
+    handle({ type: 'reset' });
+    return frozen && afterTurn === 0 && provs() === 0 && cs.stream === null;
+  },
+  (src) => src.replace("if (!ev.open) { cs.lastSubmitAt = 0; chatSkinStreamDrop(cs); }", 'if (!ev.open) { cs.lastSubmitAt = 0; }'));
+
+guarded('streaming: a different block (its first words are not an extension of the preview\'s) replaces the preview instead of being appended to it',
+  (src) => {
+    const { cs, handle } = streamHarness(src);
+    handle({ type: 'stream', text: 'First block of text here', anchor: 'first block of text here', headCut: false });
+    const first = (cs.log as Dn).children.find(isProv);
+    handle({ type: 'stream', text: 'Second block starts elsewhere', anchor: 'second block starts elsewhere', headCut: false });
+    const provs = (cs.log as Dn).children.filter(isProv);
+    // the old preview was NOT the message that came next: it is gone, and the new one is a node of its own (not the old one rewritten)
+    return provs.length === 1 && provs[0] !== first && !first!.parent && provs[0].querySelector('.chat-md')!.textContent.startsWith('Second');
+  },
+  (src) => src.replace("!anchor.startsWith(st.anchor) && !st.anchor.startsWith(anchor)", 'false'));
+
+test('streaming: the preview is dimmer, never coral, has a reduced-motion fallback, and the screen reader hears the finished message once', () => {
+  const rules = skinRules(css);
+  const all = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(all, /\.chat-row\.cs-prov \.chat-md \{ color: color-mix\(in srgb, var\(--ink\) 84%/, 'a step quieter than the message');
+  const caret = /\.chat-row\.cs-prov\.live[^{]*::after \{[^}]*\}/.exec(all)?.[0] ?? '';
+  assert.match(caret, /background: var\(--st-busy\)/, 'the caret is the busy hue');
+  assert.doesNotMatch(caret, /--accent/, 'coral stays on the send button');
+  assert.match(all, /@media \(prefers-reduced-motion: reduce\) \{[^@]*\.chat-row\.cs-prov\.live[^{]*::after[^}]*animation: none/, 'reduced motion: no blinking');
+  assert.ok(!coralUsers(css).some((s) => /cs-prov|cs-dlg|csd-/.test(s)), `no coral in the preview or the cards: ${coralUsers(css).join(', ')}`);
+  assert.ok(rules.length > 10);
+  assert.match(fnBody(skin, 'chatSkinStream'), /rec\.node\.setAttribute\('aria-hidden', 'true'\)/, 'hidden from assistive tech while it is only a preview');
+  assert.match(fnBody(skin, 'chatSkinStreamAdopt'), /removeAttribute\('aria-hidden'\)/);
+});
+
+test('streaming, main: the extractor runs where the transcript is, the preview is sent only while a transcript can replace it, and the adoption goes out BEFORE the item', () => {
+  const w = /ipcMain\.handle\('chatSkin:watch'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
+  const order = (m: string): boolean => {
+    const a = m.indexOf('skin.stream.items(ev.items)');
+    const b = m.indexOf('skin.send(rest)');
+    return a > 0 && b > a;
+  };
+  assert.ok(order(w), 'the adoption event is computed and sent before the items event');
+  assert.equal(order(w.replace('skin.send(rest)', 'skin.send(rest); /*moved*/').replace(/if \(ev\.type === 'items'\) \{ const a = skin\.stream\.items\(ev\.items\); if \(a\) skin\.send\(\{ \.\.\.a \}\); \}/, '')), false, 'control: without the adoption step the order check fails');
+  const screen = /ipcMain\.on\('chatSkin:screen'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
+  assert.match(screen, /if \(!k\.following\) return;/, 'no transcript, no preview: a bubble that nothing can replace is never drawn');
+  assert.match(screen, /k\.stream\.screen\(text\)/);
+  assert.match(w, /else if \(ev\.type === 'turn'\) \{ if \(ev\.open\) skin\.stream\.begin\(\); else skin\.stream\.end\(\); \}/);
+  assert.match(w, /else if \(ev\.type === 'reset'\) skin\.stream\.reset\(\)/);
+  assert.match(w, /k\.stream\.reset\(\);/, 'a new watch forgets the old transcript\'s preview');
+  assert.match(preload, /\| \{ type: 'stream'; text: string; anchor: string; headCut: boolean \}\n\s+\| \{ type: 'stream'; text: null; adopt\?: string \}/);
+});
+
+test('streaming, sampling: a snapshot waits for the repaint to finish, never longer than the old ceiling, and the cost was measured rather than guessed', () => {
+  const fn = fnBody(skin, 'chatSkinScreenSoon');
+  assert.match(skin, /const CS_SCREEN_QUIET_MS = 40;/);
+  assert.match(skin, /const CS_SCREEN_MAX_MS = 150;/, 'the worst case is the old fixed window');
+  assert.match(fn, /Math\.min\(CS_SCREEN_QUIET_MS, cs\.screenSince \+ CS_SCREEN_MAX_MS - now\)/);
+  assert.match(fn, /cs\.screenTimer = 0; cs\.screenSince = 0;/, 'the window restarts after each snapshot');
+  assert.match(fn, /cs\.framing && performance\.now\(\) - cs\.screenSince < CS_SCREEN_MAX_MS \+ CS_FRAME_WAIT_MS/, 'a half-painted frame is waited for, but not for ever');
+  assert.match(skin, /const CS_FRAME_WAIT_MS = 250;/);
+  assert.match(main, /extractor \$\{avg\(extractMs\)\.toFixed\(2\)\} ms avg/, 'the smoke gate prints what the extractor and the snapshot cost');
+});
+
+/** The frame-open tracker and the snapshot timer, run for real against a fake clock: a half-painted frame is waited for, an open frame that never closes is not. */
+function frameHarness(src: string = app): { feed: (data: string) => void; soon: () => void; sent: number[]; tick: (ms: number) => void; cs: Record<string, any> } { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const from = src.indexOf('function chatSkinFrameState(');
+  const to = src.indexOf('/* Called wherever app.js learns, changes or forgets a pane\'s session. */');
+  assert.ok(from > 0 && to > from);
+  const consts = ['CS_SCREEN_QUIET_MS', 'CS_SCREEN_MAX_MS', 'CS_FRAME_WAIT_MS'].map((n) => new RegExp(`const ${n} = [^\\n]+`).exec(src)![0]).join('\n');
+  const sent: number[] = [];
+  let now = 0;
+  const timers: Array<{ at: number; fn: () => void; id: number }> = [];
+  let seq = 0;
+  const cs: Record<string, any> = { watched: 'sid', screenTimer: 0, screenSince: 0, framing: false }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const p = { chatSkin: cs, view: 'chat', exited: false };
+  const make = new Function('performance', 'setTimeout', 'clearTimeout', 'panes', 'window', 'chatSkinScreenText', `${consts}\n${src.slice(from, to)}\nreturn { state: chatSkinFrameState, soon: chatSkinScreenSoon };`) as (...a: unknown[]) => { state: (cs: unknown, d: string) => void; soon: (id: number, p: unknown) => void };
+  const api = make({ now: () => now }, (fn: () => void, ms: number) => { const id = ++seq; timers.push({ at: now + ms, fn, id }); return id; },
+    (id: number) => { const i = timers.findIndex((t) => t.id === id); if (i >= 0) timers.splice(i, 1); }, new Map([[1, p]]),
+    { glassShell: { chatSkinScreen: () => { sent.push(now); } } }, () => 'screen');
+  return {
+    cs, sent,
+    feed: (data) => { api.state(cs, data); api.soon(1, p); },
+    soon: () => api.soon(1, p),
+    tick: (ms) => { const end = now + ms; for (;;) { timers.sort((a, b) => a.at - b.at); const t0 = timers[0]; if (!t0 || t0.at > end) break; timers.shift(); now = t0.at; t0.fn(); } now = end; },
+  };
+}
+const HIDE = '\x1b[?25l'; const SHOW = '\x1b[?25h';
+
+guarded('a snapshot is not taken between the pieces of one repaint: it waits for the cursor to be shown again, and gives up after a while so a menu that keeps it hidden is still seen',
+  (src) => {
+    const a = frameHarness(src);
+    a.feed(HIDE + 'x'.repeat(1000));                       // the first piece of a long frame: the frame is open
+    a.tick(100);
+    const heldBack = a.sent.length === 0;
+    a.feed('y'.repeat(30) + SHOW);                         // the last piece
+    a.tick(60);
+    const afterClose = a.sent.length === 1;
+    // a menu that hides the cursor and keeps it hidden is still reported, within the ceiling plus the patience
+    const b = frameHarness(src);
+    b.feed(HIDE + 'menu');
+    b.tick(150 + 250 + 40);
+    const neverHeldForever = b.sent.length === 1;
+    // a complete frame in one piece goes out quickly
+    const c = frameHarness(src);
+    c.feed(HIDE + 'whole' + SHOW);
+    c.tick(60);
+    return heldBack && afterClose && neverHeldForever && c.sent.length === 1;
+  },
+  (src) => src.replace("if (cs.framing && performance.now() - cs.screenSince < CS_SCREEN_MAX_MS + CS_FRAME_WAIT_MS) { cs.screenTimer = setTimeout(fire, 15); return; }", ''));
+
+test('chat-shot fixture: the reply half-written and the same reply after the finished message took its place are shot in dark and light, from neutral, hand-written events', () => {
+  const byName = (n: string): FxShot | undefined => fixture.shots.find((s) => s.name === n);
+  for (const n of ['stream-half-dark', 'stream-half-light', 'stream-final-dark', 'stream-final-light']) assert.ok(byName(n), `missing shot ${n}`);
+  // the half-written reply: ends mid-word, the finished one replaces it by adoption
+  const half = fixture.streams['streaming-half'][0] as FxEvent & { text: string; anchor: string };
+  assert.equal(half.type, 'stream');
+  assert.ok(/[a-z]$/.test(half.text) && !/[.!?:]$/.test(half.text), 'the preview ends mid-sentence');
+  const fin = fixture.streams['streaming-final'];
+  assert.equal((fin[0] as FxEvent & { adopt?: string }).adopt, 's-a2');
+  assert.equal(((fin[1].items ?? [])[0] ?? {}).uuid, 's-a2', 'the adoption names the item that follows it');
+  // the harness only feeds the skin: no shot answers anything
+  for (const s of fixture.shots) assert.doesNotMatch([s.js].flat().join('\n'), /chatSkinPick\(|ptyWrite/, `${s.name} must not write to the pty`);
 });

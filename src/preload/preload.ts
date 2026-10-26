@@ -15,13 +15,18 @@ type ConnRow = {
 type ConnResult = { ok: boolean; error?: string; row?: ConnRow };
 
 /** Events on 'chatSkin:event'. `reset` empties the view (before a backfill or on a file change);
- *  `items` upserts by uuid; `prompt` with kind null means the terminal dialog is gone. */
+ *  `items` upserts by uuid; `prompt` with kind null means the terminal dialog is gone. `stream` is the
+ *  reply being written, read off the screen (core/screenStream): a string is the preview so far, null is
+ *  "nothing is being written now" (keep the preview frozen), and `adopt` names the transcript item that IS
+ *  the previewed message (it arrives in the next `items` event and takes the preview's place). */
 type ChatSkinEvent = { paneId: number } & (
   | { type: 'reset' }
   | { type: 'items'; items: ChatItem[] }
   | { type: 'turn'; open: boolean }
   | { type: 'usage'; contextTokens?: number; model?: string }
   | { type: 'prompt'; kind: TuiPromptKind | null; hint?: string }
+  | { type: 'stream'; text: string; anchor: string; headCut: boolean }
+  | { type: 'stream'; text: null; adopt?: string }
   | { type: 'missing' }
   | { type: 'error'; code: string }
 );

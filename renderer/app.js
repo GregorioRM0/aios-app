@@ -4144,7 +4144,7 @@ window.glassShell.onPtyData((m) => {
   const p = panes.get(m.id);
   if (!p || p.kind !== 'term') return;
   p.lastPtyAt = Date.now();   // the chat view's "working" indicator and stalled-transcript check read this
-  p.term.write(m.data, p.chatSkin && p.view === 'chat' ? () => chatSkinScreenSoon(m.id, p) : undefined);   // the callback fires once xterm has PARSED the bytes
+  p.term.write(m.data, p.chatSkin && p.view === 'chat' ? () => { chatSkinFrameState(p.chatSkin, m.data); chatSkinScreenSoon(m.id, p); } : undefined);   // the callback fires once xterm has PARSED the bytes
   if (p.scheduleAtlasClear) p.scheduleAtlasClear((m.data || '').length);   // volume-gated; see its definition
   // pty-grade theater: tail the latest meaningful output line into the ticker
   // (throttled — TUI spinners redraw constantly; the ticker breathes, not thrashes)
@@ -7063,6 +7063,13 @@ const CS_TICK_MS = 750;
 const CS_ANIM_AFTER_MS = 1500;   // rows that arrive sooner than this after a reset are history being loaded, not news: they do not animate
 const chatReducedMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 const CS_STATUS_MS = 20000;
+/* How the screen is sampled for the dialog detector and the streaming preview: a snapshot is taken once the pty has been
+   quiet for CS_SCREEN_QUIET_MS (a TUI repaints in a burst of chunks, and a snapshot taken in the middle of one shows a
+   half-drawn line — seen against the real screen), but never later than CS_SCREEN_MAX_MS after the first unsent byte, so a
+   stream that never goes quiet (a spinner is a repaint every ~100 ms) still gets its snapshot as often as before. */
+const CS_SCREEN_QUIET_MS = 40;
+const CS_SCREEN_MAX_MS = 150;
+const CS_FRAME_WAIT_MS = 250;   // how much longer a snapshot may wait for a half-painted frame to be finished before it is taken anyway
 /* One preference pair for every chat view: changing the font in one conversation changing it in
    the others is what "my chat font" means. Seeded from shellConfig on each entry. */
 const chatPrefs = { family: '', size: CHAT_DEFAULT_SIZE };
@@ -7573,6 +7580,8 @@ function chatSkinBuild(id, p) {
     errorCode: '',
     turnOpen: false, lastEventAt: 0, lastSubmitAt: 0, stick: true, resetAt: Date.now(), autoUntil: 0,
     promptKind: null, promptHint: '', stalled: false, idCheckedAt: 0, idChecks: 0, watchedAt: 0,
+    stream: null,                // the provisional bubble of the reply being written: { rec, anchor, text, live } — see chatSkinStream
+    screenTimer: 0, screenSince: 0, framing: false,
   };
   p.chatSkin = cs;
   chatStyleSkin(cs);
@@ -7895,14 +7904,33 @@ function chatSkinScreenText(p) {
   for (let i = Math.max(0, b.length - 60); i < b.length; i++) { const l = b.getLine(i); if (l) rows.push(l.translateToString(true)); }
   return rows.join('\n');
 }
+/* The CLI paints each screen update between "hide cursor" and "show cursor" (`ESC[?25l` … `ESC[?25h`), and a long update
+   reaches us in pieces of at most ~1 KB, the pieces up to ~100 ms apart (measured on a real session). A snapshot taken
+   between two pieces shows a TORN screen — a line half-erased, the next one already written — and a torn screen read as the
+   reply would put garbage in the preview. So the state after each parsed chunk says whether a frame is still open, and a
+   snapshot waits (a little, and never forever: a menu may leave the cursor hidden for as long as it is up). */
+function chatSkinFrameState(cs, data) {
+  const hidden = data.lastIndexOf('\x1b[?25l');
+  const shown = data.lastIndexOf('\x1b[?25h');
+  if (hidden > shown) cs.framing = true; else if (shown > hidden) cs.framing = false;
+}
 function chatSkinScreenSoon(id, p) {
   const cs = p.chatSkin;
-  if (!cs || cs.watched === null || p.view !== 'chat' || cs.screenTimer) return;
-  cs.screenTimer = setTimeout(() => {
-    cs.screenTimer = 0;
+  if (!cs || cs.watched === null || p.view !== 'chat') return;
+  /* Trailing edge with a ceiling: every chunk pushes the snapshot back by CS_SCREEN_QUIET_MS (so it is taken once a repaint
+     has finished, not halfway through one), and CS_SCREEN_MAX_MS after the first unsent byte it goes regardless — except
+     that it keeps waiting, up to CS_FRAME_WAIT_MS more, while a frame is open. Measured in the smoke gate: this costs
+     ~0.07 ms of snapshot per send and about 1% CPU while a long answer streams. */
+  const now = performance.now();
+  if (!cs.screenSince) cs.screenSince = now;
+  clearTimeout(cs.screenTimer);
+  const fire = () => {
+    if (cs.framing && performance.now() - cs.screenSince < CS_SCREEN_MAX_MS + CS_FRAME_WAIT_MS) { cs.screenTimer = setTimeout(fire, 15); return; }
+    cs.screenTimer = 0; cs.screenSince = 0;
     if (p.view !== 'chat' || cs.watched === null || p.exited || !panes.has(id)) return;
     if (typeof window.glassShell.chatSkinScreen === 'function') window.glassShell.chatSkinScreen(id, chatSkinScreenText(p));
-  }, 150);
+  };
+  cs.screenTimer = setTimeout(fire, Math.max(0, Math.min(CS_SCREEN_QUIET_MS, cs.screenSince + CS_SCREEN_MAX_MS - now)));
 }
 /* Called wherever app.js learns, changes or forgets a pane's session. */
 function chatSkinSessionChanged(id, p) {
@@ -8249,7 +8277,7 @@ function chatSkinUpsert(cs, item, animate) {
   if (!rec) {
     rec = chatSkinMakeItem(item.role, cs);
     cs.items.set(item.uuid, rec);
-    cs.log.insertBefore(rec.node, cs.workEl);   // the working indicator stays the last child of the column
+    cs.log.insertBefore(rec.node, (cs.stream && cs.stream.rec.node) || cs.workEl);   // the working indicator stays the last child of the column, and what is still being written or asked stays under everything that has landed
     if (animate) {   // a few px of rise and a fade; only for news, never for history being loaded
       rec.node.classList.add('cs-in');
       rec.node.addEventListener('animationend', (e) => { if (e.target === rec.node) rec.node.classList.remove('cs-in'); });
@@ -8269,6 +8297,67 @@ function chatSkinUpsert(cs, item, animate) {
     rec.node.hidden = !text.trim();
   }
 }
+/* ── the reply being written ─────────────────────────────────────────────────────────────────────────────────
+   The transcript only records a message when it is complete, so a long answer would appear all at once at the end. Main
+   reads the reply as it is painted on the terminal screen (core/screenStream) and sends `stream` events; this draws them
+   as ONE provisional bubble that grows. It is a preview, never a second source of truth:
+     · when the finished message lands, main says which transcript line it is (`adopt`) just before the `items` event, and
+       the provisional's NODE becomes that item's node — same place in the column, no second bubble, no scroll jump, no
+       flicker (the real markdown is painted into the node already on screen);
+     · `text: null` without `adopt` means nothing is being written right now: the bubble stays where it is (frozen) because
+       the real message is about to arrive;
+     · a turn that ends, a reset or a different block drops a preview that was never adopted.
+   It has no accent colour (the send button owns it): a dimmer ink and a small caret in the busy hue; both go away on
+   adoption. Hidden from assistive tech while it is a preview, so a screen reader hears the finished message once. */
+function chatSkinStreamDrop(cs) {
+  if (!cs.stream) return;
+  cs.stream.rec.node.remove();
+  cs.stream = null;
+  chatSkinRegroup(cs);
+}
+/* The terminal paints list bullets as •/◦ and markdown drops them as text; give markdown the bullet it understands. */
+const chatSkinStreamMd = (text) => text.replace(/^(\s*)[•◦▪▸]\s+/gm, '$1- ');
+function chatSkinStream(cs, ev) {
+  if (typeof ev.adopt === 'string' && ev.adopt) { chatSkinStreamAdopt(cs, ev.adopt); return; }
+  if (typeof ev.text !== 'string') {   // nothing is being written now: freeze, do not remove
+    if (cs.stream) { cs.stream.live = false; cs.stream.rec.node.classList.remove('live'); }
+    return;
+  }
+  const text = ev.text.slice(0, 60000);
+  if (!text.trim()) return;
+  const anchor = typeof ev.anchor === 'string' ? ev.anchor : '';
+  let st = cs.stream;
+  // the anchor is the first words of the block and only grows to a fixed length: two anchors where neither starts the other are two different blocks
+  if (st && anchor && st.anchor && !anchor.startsWith(st.anchor) && !st.anchor.startsWith(anchor)) { chatSkinStreamDrop(cs); st = null; }
+  if (!st) {
+    const rec = chatSkinMakeItem('assistant', cs);
+    rec.node.classList.add('cs-prov');
+    rec.node.setAttribute('aria-hidden', 'true');
+    cs.log.insertBefore(rec.node, cs.workEl);
+    st = cs.stream = { rec, anchor: '', text: '', live: true };
+    if (Date.now() - cs.resetAt > CS_ANIM_AFTER_MS && !chatReducedMotion()) {   // the same rule as any new row: rises in for news, never while history is loading
+      rec.node.classList.add('cs-in');
+      rec.node.addEventListener('animationend', (e) => { if (e.target === rec.node) rec.node.classList.remove('cs-in'); });
+    }
+  }
+  if (anchor.length > st.anchor.length) st.anchor = anchor;
+  st.live = true;
+  st.rec.node.classList.add('live');
+  if (st.text !== text) { chatRender(st.rec.body, chatSkinStreamMd(text)); st.text = text; }
+  cs.lastEventAt = Date.now(); cs.stalled = false;   // text is appearing: the session is not stuck
+  chatSkinScroll(cs, false);
+  chatSkinPaintJump(cs);
+}
+function chatSkinStreamAdopt(cs, uuid) {
+  const st = cs.stream;
+  if (!st) return;
+  if (cs.items.has(uuid)) { chatSkinStreamDrop(cs); return; }   // that message is already on screen: the preview has nothing to take the place of
+  cs.items.set(uuid, st.rec);
+  st.rec.text = null;                                           // the `items` event that follows paints the real markdown into this very node
+  st.rec.node.classList.remove('cs-prov', 'live');
+  st.rec.node.removeAttribute('aria-hidden');
+  cs.stream = null;
+}
 function chatSkinHandleEvent(ev) {
   if (!ev || ev.paneId === undefined || ev.paneId === null) return;
   const id = ev.paneId;
@@ -8278,6 +8367,7 @@ function chatSkinHandleEvent(ev) {
   switch (ev.type) {
     case 'reset':
       cs.items.clear();
+      cs.stream = null;   // replaceChildren below removes its node
       cs.log.replaceChildren(cs.stateEl, cs.workEl);
       cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true; cs.resetAt = Date.now();
       break;
@@ -8293,7 +8383,10 @@ function chatSkinHandleEvent(ev) {
       break;
     case 'turn':
       cs.turnOpen = !!ev.open; cs.lastEventAt = Date.now(); cs.stalled = false;
-      if (!ev.open) cs.lastSubmitAt = 0;
+      if (!ev.open) { cs.lastSubmitAt = 0; chatSkinStreamDrop(cs); }   // a preview still hanging when the turn ends was never the message that finished
+      break;
+    case 'stream':
+      chatSkinStream(cs, ev);
       break;
     case 'usage':
       if (Number.isFinite(ev.contextTokens)) cs.ctxTokens = ev.contextTokens;

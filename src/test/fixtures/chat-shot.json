@@ -253,6 +253,79 @@
         "type": "turn",
         "open": true
       }
+    ],
+    "streaming-base": [
+      {
+        "type": "status",
+        "fiveHourPct": 42,
+        "sevenDayPct": 71,
+        "contextPct": 38,
+        "model": "claude-sonnet-5-5",
+        "effort": "high",
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+8280",
+        "sevenDayResetsAt": "+190000"
+      },
+      {
+        "type": "usage",
+        "contextTokens": 84000,
+        "model": "claude-sonnet-5-5"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "s-u1",
+            "role": "user",
+            "text": "Add a regression test for the delay cap, then explain how the cap works."
+          },
+          {
+            "uuid": "s-a1",
+            "role": "assistant",
+            "text": "I'll read the backoff module first, then write the test."
+          },
+          {
+            "uuid": "t-s1",
+            "role": "tool",
+            "tool": {
+              "id": "tool-s1",
+              "name": "Read",
+              "summary": "src/sync/backoff.ts",
+              "status": "ok",
+              "output": "1  export function delay(attempt: number) {\n2    return 500 * 2 ** attempt + Math.random() * 100;\n3  }\n4  \n5  export function nextDelay(attempt: number, base = 500, cap = 30_000): number {\n6    const ceiling = Math.min(cap, base * 2 ** attempt);\n7    return Math.floor(Math.random() * ceiling);\n8  }"
+            }
+          }
+        ]
+      },
+      {
+        "type": "turn",
+        "open": true
+      }
+    ],
+    "streaming-half": [
+      {
+        "type": "stream",
+        "anchor": "the cap is enforced in nextdelay",
+        "headCut": false,
+        "text": "The cap is enforced in nextDelay: it takes the smaller of the exponential value and the ceiling, so a delay can never grow past thirty seconds.\n\nThe test I added checks three things:\n\n1. at attempt 1 the delay stays under the base\n2. at attempt 10 the delay never exceeds the cap\n3. with a seeded random source the sequence is repeat"
+      }
+    ],
+    "streaming-final": [
+      {
+        "type": "stream",
+        "text": null,
+        "adopt": "s-a2"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "s-a2",
+            "role": "assistant",
+            "text": "The cap is enforced in `nextDelay`: it takes the smaller of the exponential value and the ceiling, so a delay can never grow past thirty seconds.\n\nThe test I added checks three things:\n\n1. at attempt 1 the delay stays under the base\n2. at attempt 10 the delay never exceeds the cap\n3. with a seeded random source the sequence is repeatable\n\nRun it with `npm test -- --grep nextDelay`."
+          }
+        ]
+      }
     ]
   },
   "shots": [
@@ -760,6 +833,56 @@
         "ctx.cs.input.setSelectionRange(ctx.cs.input.value.length, ctx.cs.input.value.length);",
         "chatSkinInsertPaths(ctx.cs, ['/work/app/screens/Home before.png', '/work/app/screens/Home after.png']);"
       ]
+    },
+    {
+      "name": "stream-half-dark",
+      "theme": "dark",
+      "events": [
+        "streaming-base",
+        "streaming-half"
+      ],
+      "clip": "pane",
+      "working": true
+    },
+    {
+      "name": "stream-final-dark",
+      "theme": "dark",
+      "events": [
+        "streaming-base",
+        "streaming-half",
+        "streaming-final",
+        {
+          "type": "turn",
+          "open": false
+        }
+      ],
+      "clip": "pane",
+      "working": false
+    },
+    {
+      "name": "stream-half-light",
+      "theme": "light",
+      "events": [
+        "streaming-base",
+        "streaming-half"
+      ],
+      "clip": "pane",
+      "working": true
+    },
+    {
+      "name": "stream-final-light",
+      "theme": "light",
+      "events": [
+        "streaming-base",
+        "streaming-half",
+        "streaming-final",
+        {
+          "type": "turn",
+          "open": false
+        }
+      ],
+      "clip": "pane",
+      "working": false
     }
   ]
 }
