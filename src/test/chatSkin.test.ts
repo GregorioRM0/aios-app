@@ -344,7 +344,7 @@ test('every colour the skin uses is a token (none minted in the skin\'s own rule
     '--chat-code-head', '--chat-out-bg', '--chat-row-hover', '--chat-table-head', '--chat-table-zebra', '--chat-quote-line', '--chat-composer-bg',
     '--chat-composer-line', '--chat-meter-track', '--chat-meter-fill', '--chat-focus', '--chat-float', '--chat-pop', '--chat-on-accent',
     // the status bar's own
-    '--chat-meter-warn', '--chat-meter-hot', '--chat-warn-ink', '--chat-hot-ink', '--chat-bar-bg', '--chat-bar-line', '--chat-bar-sep', '--chat-warn-bg', '--chat-warn-line', '--chat-hot-bg', '--chat-hot-line'];
+    '--chat-meter-warn', '--chat-meter-hot', '--chat-warn-ink', '--chat-hot-ink', '--chat-bar-bg', '--chat-bar-line', '--chat-bar-sep'];
   const light = css.slice(css.indexOf('body.light {'));
   for (const tk of tokens) {
     assert.match(css, new RegExp(`:root \\{[^}]*${tk}:`), `${tk} must be minted in :root`);
@@ -1065,28 +1065,37 @@ guarded('the model in the bar sends /model through the same chokepoint as a type
   },
   (src) => src.replace("chatSkinSubmit(id, p, '/model');", "window.glassShell.ptyWrite(id, '/model\\r');"));
 
-test('the bar has three looks, one setting switches them, and the choice is remembered', () => {
-  assert.match(skin, /const CHAT_BAR_STYLES = \['minimal', 'pills', 'strip'\];/);
-  const def = /const CHAT_BAR_DEFAULT = '(\w+)';/.exec(skin)?.[1] ?? '';
-  assert.ok(['minimal', 'pills', 'strip'].includes(def), `the default is one of the three (${def})`);
-  const set = fnBody(skin, 'chatSkinSetBarStyle');
-  assert.match(set, /CHAT_BAR_STYLES\.includes\(style\)/, 'an unknown style is refused, not stored');
-  assert.match(set, /localStorage\.setItem\('chatStatusBarStyle', style\)/);
-  assert.match(set, /persist !== false/, 'a fixture can switch without persisting');
-  assert.match(set, /for \(const p of panes\.values\(\)\) if \(p\.chatSkin\) chatSkinApplyBarStyle\(p\.chatSkin\)/, 'every open chat view follows at once');
-  assert.match(fnBody(skin, 'chatSkinApplyBarStyle'), /cs\.compose\.classList\.toggle\('bar-' \+ s, s === chatStatusBarStyle\)/);
-  assert.match(fnBody(skin, 'chatSkinBuild'), /chatSkinApplyBarStyle\(cs\);/, 'a view built later wears the current look from its first paint');
-  assert.match(skin, /localStorage\.getItem\('chatStatusBarStyle'\)/);
-  const rules = skinRules(css).map(([s]) => s).join('\n');
-  for (const s of ['minimal', 'pills', 'strip']) assert.match(rules, new RegExp(`\\.bar-${s}\\b`), `${s} has CSS of its own`);
+test('the bar has ONE look, the strip: no switch, no stored preference, no other variant left behind', () => {
+  // The operator compared three looks and chose the strip; the other two and everything that switched between them are gone.
+  // A check on the CSS and the source together: a stray selector or a leftover switch would revive a look nobody can reach.
+  const gone = (src: string): string[] => [
+    ...(/CHAT_BAR_STYLES|CHAT_BAR_DEFAULT|chatStatusBarStyle|chatSkinSetBarStyle|chatSkinApplyBarStyle/.exec(src) ?? []),
+    ...(/\bbar-(minimal|pills|strip)\b/.exec(src) ?? []),
+    ...(/csRing|\bcu-ring\b|\.r-track\b|\.r-val\b|'r-track'|'r-val'/.exec(src) ?? []),
+  ];
+  assert.deepEqual(gone(app), [], 'no switch, no look class and no ring in the renderer script');
+  assert.deepEqual(gone(css), [], 'no look class and no ring in the stylesheet');
+  assert.doesNotMatch(read('src/test/fixtures/chat-shot.json'), /BarStyle|barShot\(ctx, '/, 'the shot fixture does not switch looks');
+  // the strip is the bar's own rules, not a class someone has to remember to set
+  const rules = skinRules(css);
+  const rule = (sel: string): string => rules.find(([x]) => x === sel)?.[1] ?? '';
+  assert.match(rule('.chat-bar'), /border-radius: 0 0 22px 22px/, 'the bar is the strip, always');
+  assert.match(rule('.chat-bar'), /clip-path: inset\(0 -48px -48px -48px\)/);
+  assert.match(rule('.cc-meta'), /margin-top: 0/, 'flush under the card');
+  assert.match(rule('.cc-box'), /border-radius: 22px 22px 0 0/, 'the card gives its bottom corners to the strip');
+  assert.match(rule('.cb-m:hover'), /background-color:/, 'a segment hover keeps its divider (the colour alone, never the shorthand)');
+  assert.match(rule('.cb-meter'), /display: block/, 'the bar is always shown: it is the meter');
+  // no markup left over from another look: the meter is a bar and nothing else
+  assert.doesNotMatch(fnBody(skin, 'chatSkinBuild'), /createElementNS|csRing/);
+  // negative control: a leftover of any removed look trips the same check
+  assert.ok(gone(app + '\nconst CHAT_BAR_STYLES = [];').length > 0);
+  assert.ok(gone(css + '\n.bar-pills .cb-m { }').length > 0);
+  assert.ok(gone(css + '\n.cu-ring { }').length > 0);
 });
 
 test('the bar\'s CSS: thresholds through --chat-* tokens, the detail card on the bar\'s own line, hint only with focus, hidden under a dialog strip', () => {
   const rules = skinRules(css);
   const rule = (sel: string): string => rules.find(([s]) => s === sel)?.[1] ?? '';
-  assert.match(rule('.cu-ring .r-val'), /stroke-dasharray: var\(--p, 0\) 100/);
-  assert.match(rule('.cb-m.warn .r-val'), /var\(--chat-meter-warn\)/);
-  assert.match(rule('.cb-m.hot .r-val'), /var\(--chat-meter-hot\)/);
   assert.match(rule('.cb-m.warn .cb-meter i'), /var\(--chat-meter-warn\)/);
   assert.match(rule('.cb-m.hot .cb-meter i'), /var\(--chat-meter-hot\)/);
   assert.match(rule('.cb-meter i'), /width: calc\(var\(--p, 0\) \* 1%\)/);
@@ -1110,22 +1119,21 @@ test('the bar\'s CSS: thresholds through --chat-* tokens, the detail card on the
   assert.ok(strip && /\.cc-meta/.test(strip[0]) && /\.chat-compose/.test(strip[0]) && /display: none/.test(strip[1]), 'the strip rule hides the bar (and the whole compose block) for a live dialog');
   assert.match(rule('.cb-hint'), /opacity: 0/, 'the keys hint is invisible until the box has focus');
   assert.match(rule('.cc-wrap:focus-within + .cc-meta .cb-hint'), /opacity: 1/);
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.cb-m, \.cu-ring \.r-val, \.cb-meter i, \.cb-tip, \.cb-hint, \.chat-bar \{ transition: none; \}/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.cb-m, \.cb-meter i, \.cb-tip, \.cb-hint, \.chat-bar \{ transition: none; \}/);
   // control: the old floating card (up and away from its meter) would trip the same check
   assert.match(rule('.cb-tip').replace('inset: 0;', 'bottom: calc(100% + 8px);'), /calc\(100%/);
 });
 
-test('a narrow pane gives up the labels first, then the "of 200k", then the effort, and only then the numbers — rings and bars never', () => {
+test('a narrow pane gives up the labels first, then the "of 200k", then the effort, and only then the numbers — the bars never', () => {
   const widths = (sel: RegExp): number[] => [...css.matchAll(/@container \(max-width: (\d+)px\) \{([^@\n]*)\}/g)].filter((m) => sel.test(m[2])).map((m) => Number(m[1]));
   const labels = Math.max(...widths(/\.cb-k \{ display: none/));
   const of = Math.max(...widths(/\.cb-of \{ display: none/));
   const effort = Math.max(...widths(/\.cb-effort \{ display: none/));
-  const valuesCapsule = Math.max(...widths(/\.bar-pills \.cb-m \.cb-v/));
-  const valuesAll = Math.max(...widths(/^\s*\.cb-m \.cb-v \{ display: none/));
-  assert.ok(labels > 0 && of > 0 && effort > 0 && valuesCapsule > 0 && valuesAll > 0, `all the steps exist (${[labels, of, effort, valuesCapsule, valuesAll]})`);
-  assert.ok(labels > of && of >= effort - 20 && effort > valuesCapsule && valuesCapsule > valuesAll, `order of loss by width: labels ${labels} > of ${of} > effort ${effort} > capsule numbers ${valuesCapsule} > ring numbers ${valuesAll}`);
-  // nothing ever hides the ring or the bar itself
-  assert.doesNotMatch(css, /@container[^{]*\{[^}]*(\.cu-ring|\.cb-meter)(?! i)[^}]*display: none/);
+  const values = Math.max(...widths(/\.cb-m \.cb-v \{ display: none/));
+  assert.ok(labels > 0 && of > 0 && effort > 0 && values > 0, `all the steps exist (${[labels, of, effort, values]})`);
+  assert.ok(labels > of && of >= effort - 20 && effort > values, `order of loss by width: labels ${labels} > of ${of} > effort ${effort} > numbers ${values}`);
+  // nothing ever hides the bar itself
+  assert.doesNotMatch(css, /@container[^{]*\{[^}]*\.cb-meter(?! i)[^}]*display: none/);
   // the bar is its own size container, so the steps follow the bar and not the window
   assert.match(skinRules(css).find(([s]) => s === '.cc-meta')?.[1] ?? '', /container-type: inline-size/);
 });
@@ -1150,25 +1158,27 @@ test('the status bar\'s sentences exist in every locale (the ones built at run t
   assert.equal(typeof loc.en['chat.usage.contextTokens'], 'undefined');
 });
 
-test('chat-shot fixture: the three bars × light/dark × wide/narrow/card open/hot values, plus a payload that is not this tab\'s', () => {
+test('chat-shot fixture: the strip × light/dark × wide/narrow/card open/hot values, plus a payload that is not this tab\'s', () => {
   const byName = (n: string): FxShot | undefined => fixture.shots.find((s) => s.name === n);
   const js = (n: string): string => String([byName(n)?.js].flat().join('\n'));
-  for (const v of ['minimal', 'pills', 'strip']) for (const th of ['light', 'dark']) {
+  for (const th of ['light', 'dark']) {
     for (const suffix of ['', '-narrow', '-tip', '-hot', '-hot-tip']) {
-      const n = `bar-${v}-${th}${suffix}`;
+      const n = `bar-strip-${th}${suffix}`;
       assert.ok(byName(n), `missing shot ${n}`);
       assert.equal(byName(n)?.theme, th);
-      assert.match(js(n), new RegExp(`barShot\\(ctx, '${v}'`), `${n} wears the ${v} look`);
+      assert.match(js(n), /barShot\(ctx[,)]/, `${n} goes through the shared helper, which takes no look`);
     }
-    for (const suffix of ['-tip', '-hot-tip']) assert.match(js(`bar-${v}-${th}${suffix}`), /tip: '(fiveHourPct|contextPct)'/, 'the card is forced open');
-    assert.match(js(`bar-${v}-${th}-narrow`), /pane: \d+/, 'a narrow pane (the window width alone would only shrink the layout around it)');
-    assert.deepEqual(byName(`bar-${v}-${th}-hot`)?.events, ['conversation', 'bar-hot']);
+    for (const suffix of ['-tip', '-hot-tip']) assert.match(js(`bar-strip-${th}${suffix}`), /tip: '(fiveHourPct|contextPct)'/, 'the card is forced open');
+    assert.match(js(`bar-strip-${th}-narrow`), /pane: \d+/, 'a narrow pane (the window width alone would only shrink the layout around it)');
+    assert.deepEqual(byName(`bar-strip-${th}-hot`)?.events, ['conversation', 'bar-hot']);
   }
+  // only the strip is shot: a look that does not exist has no pictures
+  assert.deepEqual(fixture.shots.map((x) => x.name).filter((n) => /^bar-(minimal|pills)-/.test(n)), []);
   // the helper fails the run when the card reaches into the composer or leaves the bar
   const setup = [fixture.setup].flat().join('\n');
   assert.match(setup, /tip\.top < box\.bottom/);
   assert.match(setup, /tip\.top < bar\.top[\s\S]*tip\.right > bar\.right/);
-  assert.match(setup, /chatSkinSetBarStyle\(style, false\)/);
+  assert.doesNotMatch(setup, /BarStyle/, 'the helper has no look to pick');
   // hot values: amber on the 5 h, red on the context (tokens of the window)
   const hot = fixture.streams['bar-hot'];
   const st = hot.find((e) => e.type === 'status') as FxEvent;

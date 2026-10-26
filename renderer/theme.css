@@ -81,8 +81,8 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --chat-tip-bg: color-mix(in srgb, var(--ink) 11%, var(--surface));     /* a tooltip floating over the composer card: one step above it, so the two never blend */
   --chat-link: var(--st-input-ink);   /* links in the conversation: the app's one cool hue. The house has no link token (the markdown viewer links in coral), and coral is spoken for here */
   --chat-on-accent: #fff;   /* the glyph on a coral button; white, as the house .vbtn.primary does */
-  --chat-meter-fill: color-mix(in srgb, var(--ink) 66%, var(--surface));   /* a usage ring in its normal range: neutral, so only 60+ and 85+ ever draw the eye */
-  /* the status bar under the composer (see .chat-bar): the thresholds' colours, one step of tone for a capsule or strip, and the hairlines */
+  --chat-meter-fill: color-mix(in srgb, var(--ink) 66%, var(--surface));   /* a usage meter in its normal range: neutral, so only 60+ and 85+ ever draw the eye */
+  /* the status bar under the composer (see .chat-bar): the thresholds' colours, one step of tone for the strip, and the hairlines */
   --chat-meter-warn: var(--st-warn);     /* 60-84 %: amber */
   --chat-meter-hot: var(--st-error);     /* 85 % and up: red (a real red, never coral) */
   --chat-warn-ink: var(--st-warn-ink);   /* the same two as TEXT: the fills above are too bright to read as type on the light paper */
@@ -90,10 +90,6 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --chat-bar-bg: color-mix(in srgb, var(--ink) 4%, var(--surface));
   --chat-bar-line: color-mix(in srgb, var(--ink) 15%, var(--surface));
   --chat-bar-sep: color-mix(in srgb, var(--ink) 20%, transparent);
-  --chat-warn-bg: color-mix(in srgb, var(--st-warn) 11%, var(--surface));
-  --chat-warn-line: color-mix(in srgb, var(--st-warn) 46%, var(--surface));
-  --chat-hot-bg: color-mix(in srgb, var(--st-error) 11%, var(--surface));
-  --chat-hot-line: color-mix(in srgb, var(--st-error) 50%, var(--surface));
   --chat-float: 0 18px 44px -20px rgba(0,0,0,.75), 0 3px 10px -4px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
   --chat-pop: 0 14px 36px -12px rgba(0,0,0,.7), 0 2px 8px -2px rgba(0,0,0,.4);   /* a menu floating over the conversation */
   --chat-lift: 0 1px 3px -1px rgba(0,0,0,.34);   /* the chosen segment of a switch: raised a hair, no second outline */
@@ -667,10 +663,6 @@ body.light {
   --chat-bar-bg: color-mix(in srgb, var(--ink) 3.5%, var(--surface));
   --chat-bar-line: color-mix(in srgb, var(--ink) 15%, var(--surface));
   --chat-bar-sep: color-mix(in srgb, var(--ink) 18%, transparent);
-  --chat-warn-bg: color-mix(in srgb, var(--st-warn) 13%, var(--surface));
-  --chat-warn-line: color-mix(in srgb, var(--st-warn) 55%, var(--surface));
-  --chat-hot-bg: color-mix(in srgb, var(--st-error) 8%, var(--surface));
-  --chat-hot-line: color-mix(in srgb, var(--st-error) 42%, var(--surface));
   --chat-float: 0 16px 36px -22px rgba(30,30,40,.38), 0 2px 8px -3px rgba(30,30,40,.16);
   --chat-pop: 0 14px 34px -14px rgba(30,30,40,.34), 0 2px 8px -2px rgba(30,30,40,.14);
   --chat-lift: 0 1px 3px -1px rgba(30,30,40,.22);
@@ -1761,29 +1753,35 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
               color: var(--ink); font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px); line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) { .cs-gear { transition: none; } }
 /* ── the status bar, under the composer: model · effort · 5 h · week · context ─────────────────────────────────
-   One markup, three looks, picked by a class on .chat-compose (bar-minimal | bar-pills | bar-strip; see
-   chatSkinSetBarStyle). Colour follows the percentage: neutral below 60, amber (.warn) from 60, red (.hot) from 85,
+   One look: a rounded strip glued under the card, segments with dividers, so card and strip read as one object.
+   Colour follows the percentage: neutral below 60, amber (.warn) from 60, red (.hot) from 85,
    through the --chat-meter-* tokens, so the same rule serves both themes. A reading we do not have is a dash and an
-   empty ring/bar, never 0. The fill is --p (0-100), set on the segment by chatPaintUsage.
+   empty bar, never 0. The fill is --p (0-100), set on the segment by chatPaintUsage.
    THE DETAIL CARD (.cb-tip) DOES NOT FLOAT ABOVE THE BAR. The bar is the last thing in the pane, so there is no room
    below it, and above it is the text being typed; a card there would cover exactly what the operator is writing. It
    takes the bar's own line instead (inset: 0 of the bar, which is a fixed height, so nothing moves) and gives it back
    when the pointer or the focus leaves. */
-.cc-meta { position: relative; container-type: inline-size; margin-top: 6px; --cb-h: 36px; }
-.chat-bar { position: relative; display: flex; align-items: center; gap: 10px; height: var(--cb-h); box-sizing: border-box; color: var(--subtle);
-            font-size: 11.5px; line-height: 1; white-space: nowrap; }
-.cb-id { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; }
-.cb-meters { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; margin-left: auto; }
-.cb-model, .cb-effort, .cb-m { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; height: 26px; padding: 0 8px; border: 0; border-radius: 8px;
-                               background: none; color: inherit; font: inherit; line-height: 1; min-width: 0; }
-.cb-model { cursor: pointer; color: var(--ink); font-weight: 600; }
+.cc-meta { position: relative; container-type: inline-size; margin-top: 0; --cb-h: 36px; }   /* flush: the card's own bottom border is the seam, so no row of pixels is painted twice */
+.chat-bar { position: relative; display: flex; align-items: center; gap: 0; height: var(--cb-h); box-sizing: border-box; color: var(--subtle);
+            font-size: 11.5px; line-height: 1; white-space: nowrap;
+            padding: 0 4px; overflow: hidden; border: 1px solid var(--chat-composer-line); border-top: 0; border-radius: 0 0 22px 22px;
+            background: var(--chat-bar-bg); box-shadow: var(--chat-float); transition: border-color .15s ease, box-shadow .15s ease;
+            clip-path: inset(0 -48px -48px -48px); }   /* the strip's shadow and halo must not climb over the card above it: only the top is clipped */
+/* the strip is part of the card: it takes the caret's halo with it */
+.cc-wrap:focus-within + .cc-meta .chat-bar { border-color: var(--chat-focus-line); box-shadow: var(--chat-float), 0 0 0 3px var(--chat-focus-soft); }
+.cb-id { display: flex; align-items: center; gap: 0; align-self: stretch; min-width: 0; flex: 0 1 auto; }
+.cb-meters { display: flex; align-items: center; gap: 0; align-self: stretch; flex: 0 0 auto; margin-left: auto; }
+.cb-model, .cb-effort, .cb-m { display: inline-flex; align-items: center; gap: 6px; box-sizing: border-box; height: auto; align-self: stretch; padding: 0 13px; border: 0; border-radius: 0;
+                               background: linear-gradient(var(--chat-bar-sep), var(--chat-bar-sep)) left center / 1px 16px no-repeat;   /* the divider is a short hairline, not a full-height border */
+                               color: inherit; font: inherit; line-height: 1; min-width: 0; }
+.cb-model { background: none; padding-left: 14px; cursor: pointer; color: var(--ink); font-weight: 600; }
 .cb-model .cs-ico { color: var(--faint); }
-.cb-model:hover:not(:disabled), .cb-m:hover { background: var(--chat-row-hover); }
+.cb-model:hover:not(:disabled) { background: var(--chat-row-hover); }
+.cb-m:hover { background-color: var(--chat-row-hover); }   /* the colour alone: the shorthand would wipe the divider */
 .cb-model:disabled { cursor: default; }
-.cb-model:focus-visible, .cb-m:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 0; }
+.cb-model:focus-visible, .cb-m:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: -3px; }
 .cb-m { flex: 0 0 auto; cursor: default; }
 .cb-effort { color: var(--subtle); }
-.cb-effort::before { content: ''; flex: 0 0 auto; width: 3px; height: 3px; margin-right: 3px; border-radius: 50%; background: var(--faint); }   /* a dot between the model and the effort; it goes with the effort when there is none */
 .cb-effort .cb-v { color: var(--subtle); font-weight: 500; }
 .cb-k { color: var(--faint); font-weight: 500; }
 .cb-v { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
@@ -1792,23 +1790,15 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cb-of:empty { display: none; }
 .cb-m.warn .cb-v { color: var(--chat-warn-ink); }
 .cb-m.hot .cb-v { color: var(--chat-hot-ink); }
-.cu-ring { width: 14px; height: 14px; flex: 0 0 auto; transform: rotate(-90deg); }
-.cu-ring circle { fill: none; stroke-width: 2.8; }
-.cu-ring .r-track { stroke: var(--chat-meter-track); }
-.cu-ring .r-val { stroke: var(--chat-meter-fill); stroke-linecap: round; stroke-dasharray: var(--p, 0) 100; transition: stroke-dasharray .4s cubic-bezier(.2, .7, .2, 1), stroke .2s ease; }
-.cb-m.none .r-val { opacity: 0; }   /* no reading: the track alone, not the dot a round cap would draw at zero length */
-.cb-m.warn .r-val { stroke: var(--chat-meter-warn); }
-.cb-m.hot .r-val { stroke: var(--chat-meter-hot); }
-.cb-meter { display: none; flex: 0 0 auto; width: 34px; height: 4px; border-radius: 2px; background: var(--chat-meter-track); overflow: hidden; }
+.cb-meter { display: block; flex: 0 0 auto; width: 30px; height: 4px; border-radius: 2px; background: var(--chat-meter-track); overflow: hidden; }
 .cb-meter i { display: block; width: calc(var(--p, 0) * 1%); height: 100%; border-radius: inherit; background: var(--chat-meter-fill); transition: width .4s cubic-bezier(.2, .7, .2, 1), background-color .2s ease; }
 .cb-m.warn .cb-meter i { background: var(--chat-meter-warn); }
 .cb-m.hot .cb-meter i { background: var(--chat-meter-hot); }
 /* stale comes after the thresholds so a reading from the previous window never keeps a colour it no longer earns (drawn in the quiet text colour, never dimmed by opacity: the contrast guard forbids that) */
-.cb-m.stale .r-val { stroke: var(--faint); }
 .cb-m.stale .cb-meter i { background: var(--faint); }
 .cb-m.stale .cb-v { color: var(--faint); }
 /* the keys hint: the middle of the bar, only while the caret is in the box and there is room */
-.cb-hint { flex: 1 1 0; min-width: 0; container-type: inline-size; padding-left: 6px; color: var(--faint); font-size: 10.5px; letter-spacing: .01em; opacity: 0; transition: opacity .2s ease; }
+.cb-hint { flex: 1 1 0; min-width: 0; container-type: inline-size; padding: 0 8px 0 14px; color: var(--faint); font-size: 10.5px; letter-spacing: .01em; opacity: 0; transition: opacity .2s ease; }
 .cb-hint-t, .cb-hint-s { display: none; }
 /* whatever room the bar leaves it: the whole sentence, or the short form, or nothing — never a clipped half of one */
 @container (min-width: 56px) { .cb-hint-s { display: block; } }
@@ -1816,7 +1806,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cc-wrap:focus-within + .cc-meta .cb-hint { opacity: 1; }
 /* the detail card: two lines on the bar's own line */
 .cb-tip { position: absolute; inset: 0; z-index: 6; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 0 14px 0 20px;
-          border-radius: inherit; background: var(--surface); text-align: left; overflow: hidden; opacity: 0; pointer-events: none; transition: opacity .14s ease; }
+          border-radius: 0; background: var(--chat-bar-bg); text-align: left; overflow: hidden; opacity: 0; pointer-events: none; transition: opacity .14s ease; }
 .cb-tip::before { content: ''; position: absolute; left: 9px; top: 50%; width: 3px; height: 20px; margin-top: -10px; border-radius: 2px; background: var(--chat-meter-fill); }
 .cb-m.warn .cb-tip::before { background: var(--chat-meter-warn); }
 .cb-m.hot .cb-tip::before { background: var(--chat-meter-hot); }
@@ -1831,48 +1821,13 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cut-d { display: flex; flex-direction: column; min-width: 0; color: var(--subtle); font-size: 11px; }
 .cut-d:empty { display: none; }
 .cut-line { overflow: hidden; text-overflow: ellipsis; }
-/* ① minimal: a thin line. The ring is the meter. */
-.bar-minimal .cb-meter { display: none; }
-/* ② pills: a capsule per piece, the meter a slim bar inside it */
-.bar-pills .chat-bar { gap: 8px; }
-.bar-pills .cb-id, .bar-pills .cb-meters { gap: 6px; }
-.bar-pills .cb-model, .bar-pills .cb-effort, .bar-pills .cb-m { height: 26px; padding: 0 11px; border-radius: 999px; background: var(--chat-bar-bg); box-shadow: inset 0 0 0 1px var(--chat-bar-line); }
-.bar-pills .cb-model:hover:not(:disabled), .bar-pills .cb-m:hover { background: var(--chat-row-hover); }
-.bar-pills .cb-effort::before { display: none; }
-.bar-pills .cu-ring { display: none; }
-.bar-pills .cb-meter { display: block; }
-.bar-pills .cb-m.warn { background: var(--chat-warn-bg); box-shadow: inset 0 0 0 1px var(--chat-warn-line); }
-.bar-pills .cb-m.hot { background: var(--chat-hot-bg); box-shadow: inset 0 0 0 1px var(--chat-hot-line); }
-.bar-pills .cb-tip { border-radius: 16px; background: var(--chat-bar-bg); box-shadow: inset 0 0 0 1px var(--chat-bar-line); }
-/* ③ strip: a rounded strip glued under the card, so card and strip read as one object */
-.bar-strip .cc-meta { margin-top: 0; }   /* flush: the card's own bottom border is the seam, so no row of pixels is painted twice */
-.bar-strip .cc-box { border-bottom-color: var(--chat-bar-line); border-bottom-left-radius: 0; border-bottom-right-radius: 0; clip-path: inset(-60px -60px 0 -60px); }   /* the card's shadow and halo stop at its bottom edge; the strip carries them from there, so the two never double up at the seam */
-.bar-strip .chat-bar { gap: 0; padding: 0 4px; overflow: hidden; border: 1px solid var(--chat-composer-line); border-top: 0; border-radius: 0 0 22px 22px;
-                       background: var(--chat-bar-bg); box-shadow: var(--chat-float); transition: border-color .15s ease, box-shadow .15s ease;
-                       clip-path: inset(0 -48px -48px -48px); }   /* the strip's shadow and halo must not climb over the card above it: only the top is clipped */
-/* the strip is part of the card: it takes the caret's halo with it */
-.bar-strip .cc-wrap:focus-within + .cc-meta .chat-bar { border-color: var(--chat-focus-line); box-shadow: var(--chat-float), 0 0 0 3px var(--chat-focus-soft); }
-.bar-strip .cb-id, .bar-strip .cb-meters { gap: 0; align-self: stretch; }
-.bar-strip .cb-model, .bar-strip .cb-effort, .bar-strip .cb-m { height: auto; align-self: stretch; padding: 0 13px; border-radius: 0;
-  background: linear-gradient(var(--chat-bar-sep), var(--chat-bar-sep)) left center / 1px 16px no-repeat; }   /* the divider is a short hairline, not a full-height border */
-.bar-strip .cb-model { background: none; padding-left: 14px; }
-.bar-strip .cb-model:hover:not(:disabled) { background: var(--chat-row-hover); }
-.bar-strip .cb-effort::before { display: none; }
-.bar-strip .cb-m:hover { background-color: var(--chat-row-hover); }
-.bar-strip .cu-ring { display: none; }
-.bar-strip .cb-meter { display: block; width: 30px; }
-.bar-strip .cb-hint { padding: 0 8px 0 14px; }
-.bar-strip .cb-model:focus-visible, .bar-strip .cb-m:focus-visible { outline-offset: -3px; }
-.bar-strip .cb-tip { border-radius: 0; background: var(--chat-bar-bg); }
-@media (prefers-reduced-motion: reduce) { .cb-m, .cu-ring .r-val, .cb-meter i, .cb-tip, .cb-hint, .chat-bar { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .cb-m, .cb-meter i, .cb-tip, .cb-hint, .chat-bar { transition: none; } }
 /* A narrow pane gives up the words first (the labels, then the "of 200k"), then the effort, and only then the numbers; the
-   rings and bars never go. The widths are the bar's own (it is the size container), calibrated on the widest variant (pills). */
+   bars never go. The widths are the bar's own (it is the size container). */
 @container (max-width: 520px) { .cb-k { display: none; } .cb-m { gap: 5px; } }
-@container (max-width: 480px) { .bar-pills .cb-of, .bar-strip .cb-of { display: none; } .bar-pills .cb-meter, .bar-strip .cb-meter { width: 26px; } .bar-pills .cb-model, .bar-pills .cb-effort, .bar-pills .cb-m { padding: 0 9px; } .bar-strip .cb-model, .bar-strip .cb-effort, .bar-strip .cb-m { padding: 0 10px; } }
-@container (max-width: 400px) { .cb-of { display: none; } }
+@container (max-width: 480px) { .cb-of { display: none; } .cb-meter { width: 26px; } .cb-model, .cb-effort, .cb-m { padding: 0 10px; } }
 @container (max-width: 410px) { .cb-effort { display: none; } }
-@container (max-width: 372px) { .bar-pills .cb-m .cb-v, .bar-strip .cb-m .cb-v { display: none; } }   /* a capsule or a strip segment is wider than a ring: its number is the first to go */
-@container (max-width: 330px) { .cb-m .cb-v { display: none; } }
+@container (max-width: 372px) { .cb-m .cb-v { display: none; } }   /* a strip segment is wider than a bare bar: its number is the first to go */
 
 /* The conversation is ONE centred reading column. The log itself spans the pane (so its scrollbar
    sits at the pane's edge, where a hand looks for it) and the column is made with side padding:
@@ -1970,9 +1925,10 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .chat-compose { position: relative; flex: 0 0 auto; padding: 0 max(16px, calc((100% - var(--cs-col)) / 2)) 6px; }
 .chat-compose::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 30px; pointer-events: none;
                         background: linear-gradient(to bottom, transparent, var(--surface)); }   /* the text fades out under the card instead of being cut by it */
-.cc-box { display: flex; align-items: flex-end; gap: 10px; padding: 9px 9px 9px 18px; border-radius: 22px;
-          background: var(--chat-composer-bg); border: 1px solid var(--chat-composer-line); box-shadow: var(--chat-float);
-          transition: border-color .15s ease, box-shadow .15s ease; }
+.cc-box { display: flex; align-items: flex-end; gap: 10px; padding: 9px 9px 9px 18px; border-radius: 22px 22px 0 0;
+          background: var(--chat-composer-bg); border: 1px solid var(--chat-composer-line); border-bottom-color: var(--chat-bar-line); box-shadow: var(--chat-float);
+          transition: border-color .15s ease, box-shadow .15s ease;
+          clip-path: inset(-60px -60px 0 -60px); }   /* the card's shadow and halo stop at its bottom edge; the strip carries them from there, so the two never double up at the seam */
 .cc-box:focus-within { border-color: var(--chat-focus-line); box-shadow: var(--chat-float), 0 0 0 3px var(--chat-focus-soft); }
 /* A file is being dragged over the card: a veil with a dashed neutral edge and one line of text. Neutral like the focus ring
    (the accent is for the send button alone). It never takes the pointer, so the drop lands on the card itself. */

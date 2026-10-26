@@ -7103,23 +7103,6 @@ function csIcon(name, size = 14) {
   holder.innerHTML = icon(name, size);
   return holder;
 }
-/* The usage ring: a track and an arc, both circles with pathLength=100 so the arc is `--p` of the way round with
-   no arithmetic. Built node by node (createElementNS) rather than as markup. */
-function csRing() {
-  const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 16 16');
-  svg.setAttribute('class', 'cu-ring');
-  svg.setAttribute('aria-hidden', 'true');
-  for (const cls of ['r-track', 'r-val']) {
-    const c = document.createElementNS(NS, 'circle');
-    c.setAttribute('class', cls);
-    c.setAttribute('cx', '8'); c.setAttribute('cy', '8'); c.setAttribute('r', '6');
-    c.setAttribute('pathLength', '100');
-    svg.appendChild(c);
-  }
-  return svg;
-}
 
 /* ── markdown, without ever injecting the model's raw HTML ───────────────────
    Model output is untrusted text: a reply that quotes a web page, an email or a file can carry
@@ -7270,9 +7253,8 @@ function chatReadPrefs(c) {
 
 /* ── status bar: model · effort · 5 h · week · context, in ONE bar under the composer ───────────────────────
    The card above holds only the text and send/stop; everything the operator wants to know about what answers
-   and what it costs lives here. THREE looks share one markup and one painter (the class on the compose block
-   picks the look, see chatSkinSetBarStyle): minimal (a thin line with rings), pills (a capsule per metric with a
-   slim bar) and strip (a rounded strip glued under the card, segments with dividers). */
+   and what it costs lives here. It is a rounded strip glued under the card, segments with dividers (chosen over a
+   thin line with rings and a capsule per metric; docs/rfcs/chat-view.md has the comparison). */
 const CHAT_METERS = [
   ['fiveHourPct', 'chat.usage.fiveHour', 'chat.usage.tip.fiveHour'],
   ['sevenDayPct', 'chat.usage.sevenDay', 'chat.usage.tip.sevenDay'],
@@ -7357,7 +7339,7 @@ function chatPaintUsage(cs) {
     seg.classList.toggle('none', !has && shown === '—');
     seg.classList.toggle('warn', has && pct >= CHAT_WARN_PCT && pct < CHAT_HOT_PCT);
     seg.classList.toggle('hot', has && pct >= CHAT_HOT_PCT);
-    seg.style.setProperty('--p', has ? String(Math.max(0, Math.min(100, Math.round(pct)))) : '0');   // the ring's arc and the bar's fill, 0-100; empty without a reading
+    seg.style.setProperty('--p', has ? String(Math.max(0, Math.min(100, Math.round(pct)))) : '0');   // the bar's fill, 0-100; empty without a reading
     part.v.textContent = shown;
     part.v.classList.toggle('none', shown === '—');
     part.of.textContent = of;
@@ -7410,28 +7392,6 @@ function chatSkinRefreshStatus(cs) {
   cs.statusAt = Date.now();
   // the session id lets main say whether the payload is THIS tab's (sessionMatch) before any per-session field is trusted
   Promise.resolve(gs.chatStatus(cs.pane.sessionId)).then((s) => { chatApplyStatus(cs, s); }).catch(() => { /* the bar keeps its dashes */ });
-}
-/* Which of the three looks the bar wears. A viewing preference of this window, not a setting of the shell, so it lives
-   in localStorage like the other layout choices; a fixture or a later settings row switches it with chatSkinSetBarStyle.
-   DEFAULT: see CHAT_BAR_DEFAULT. */
-const CHAT_BAR_STYLES = ['minimal', 'pills', 'strip'];
-/* DEFAULT = pills. Of the three it is the one whose state survives a glance at the corner of the eye (an amber or red capsule and
-   a bar that is visibly full, where minimal's small ring asks to be read), it carries the most information in the least width
-   (the bar IS the number, so a narrow pane drops the digits and keeps the meaning), and it continues the capsule grammar the
-   model and effort chips already had in the card. Minimal is the quietest and strip the most "part of the card"; both stay one setting away. */
-const CHAT_BAR_DEFAULT = 'pills';
-let chatStatusBarStyle = (() => {
-  try { const v = localStorage.getItem('chatStatusBarStyle'); return CHAT_BAR_STYLES.includes(v) ? v : CHAT_BAR_DEFAULT; } catch { return CHAT_BAR_DEFAULT; }
-})();
-function chatSkinApplyBarStyle(cs) {
-  for (const s of CHAT_BAR_STYLES) cs.compose.classList.toggle('bar-' + s, s === chatStatusBarStyle);
-}
-function chatSkinSetBarStyle(style, persist) {
-  if (!CHAT_BAR_STYLES.includes(style)) return false;
-  chatStatusBarStyle = style;
-  if (persist !== false) { try { localStorage.setItem('chatStatusBarStyle', style); } catch { /* private mode: the choice lasts until the window closes */ } }
-  for (const p of panes.values()) if (p.chatSkin) chatSkinApplyBarStyle(p.chatSkin);
-  return true;
 }
 
 /* ── eligibility ──────────────────────────────────────────────────────────── */
@@ -7504,8 +7464,7 @@ function chatSkinBuild(id, p) {
   idBox.append(modelSeg, effortSeg);
   barParts.model = { seg: modelSeg, v: modelSeg.querySelector('.cb-v') };
   barParts.effort = { seg: effortSeg, v: effortSeg.querySelector('.cb-v') };
-  /* Right: the three meters. Each is a ring (minimal) AND a slim bar (pills, strip): both are in the markup and the
-     class on the compose block shows one. A reading we do not have is a dash and an empty ring/bar, never 0. It is
+  /* Right: the three meters. Each is a slim bar with its number. A reading we do not have is a dash and an empty bar, never 0. It is
      focusable and answers hover AND focus with the same detail card (resets, tokens). Painted by chatPaintUsage;
      the fill is the --p custom property (0-100). */
   const metersBox = el('div', 'cb-meters');
@@ -7523,7 +7482,7 @@ function chatSkinBuild(id, p) {
     const meter = el('span', 'cb-meter');
     meter.setAttribute('aria-hidden', 'true');
     meter.appendChild(el('i'));
-    seg.append(csRing(), el('span', 'cb-k', t(label)), meter, v, of, tip);
+    seg.append(el('span', 'cb-k', t(label)), meter, v, of, tip);
     seg.addEventListener('pointerenter', () => chatSkinTip(seg, true));
     seg.addEventListener('pointerleave', () => { if (document.activeElement !== seg) chatSkinTip(seg, false); });
     seg.addEventListener('focus', () => chatSkinTip(seg, true));
@@ -7672,7 +7631,6 @@ function chatSkinBuild(id, p) {
   };
   p.chatSkin = cs;
   chatStyleSkin(cs);
-  chatSkinApplyBarStyle(cs);
   chatPaintUsage(cs);
 
   // follow the tail unless the operator scrolled up to read — and resume once they return to it
