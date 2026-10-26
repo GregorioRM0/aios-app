@@ -73,38 +73,57 @@ that has ended) do not.
 - **Activity indicator.** Three dots in `--st-busy` and "Claude is working…" **inside the column, under the
   last message**, while a turn is open and the pty has produced output recently, or a message was just sent.
 - **The composer.** One large rounded card floating over the end of the conversation (a soft shadow, the
-  text fading out under it): a textarea that grows to a ceiling and then scrolls, a bottom row with a **model
-  chip** and an **effort chip** (read from the same usage data, § 6) and a **round send button** that
-  becomes a round **stop button** while Claude works (`chatSkinControls` is unchanged: stop when working,
-  send disabled without text). Enter sends; Shift+Enter inserts a newline; IME composition never sends. Esc
-  cuts the running turn (only while something is running — see § 3). Slash commands are sent like any other
-  message, with no filter and no special path. The box is neutral: its border does not change colour on
-  focus (a slightly stronger neutral edge and a faint halo), keyboard focus on the small controls is a neutral
-  outline, and **the accent colour is used for the send button and nothing else** in the chat — markdown
-  links take a cool `--chat-link` token (the house has no link token, and the markdown viewer's coral links
-  are spoken for here). The chips stay **inside the card** and the meters go **under it**: model and effort
-  say what will answer *this message* (they are part of the act of writing it), whereas the meters are the
-  ambient cost of the session, read at a glance and never while typing. Putting all five in one row made the
-  row a toolbar; split, the card stays a calm box and the row below stays quiet.
-- **The usage row under the card.** The 5-hour, weekly and context meters are not in the header any more
-  (the header carries the `Terminal | Chat` switch and the Aa button). They are a thin row under the card:
-  each meter is a small ring (the glance), the label and the value (the fact), neutral up to 70, `--st-warn`
-  from 70 and `--st-error` from 90 (thresholds on the percentage, whatever number is on show). A reading we
-  do not have is `—` with an empty ring, never `0`. Every meter is focusable (`role="img"`, an
-  `aria-label` with the value and the detail) and answers hover **and** keyboard focus with a tooltip of its
-  own (not a `title`): the window's usage, **when it resets** (clock time today, weekday and time
-  otherwise, plus the two largest units left) and, for context, **tokens used over the window**. The reset
-  lines appear only when the statusline payload carried `rate_limits.*.resets_at` (read by
-  `parseStatuslinePayload`, § 6); a reset already behind us says the reading is from the previous window and
-  dims it. The grey "Enter sends · Shift+Enter…" line became a short hint at the right end of the same row
-  that shows **only while the caret is in the box**; the full sentence is the textarea's tooltip and its
-  accessible description. While a dialog docks the live terminal strip (`.pane.cs-strip`), the whole compose
-  block (card, row and hint) is hidden, since nothing can be typed.
+  text fading out under it): a textarea that grows to a ceiling and then scrolls and a **round send button**
+  that becomes a round **stop button** while Claude works (`chatSkinControls` is unchanged: stop when working,
+  send disabled without text). The card holds the text and those buttons and nothing else; the chips and the
+  meters that used to share it are in the status bar under it (next bullet). Enter sends; Shift+Enter inserts
+  a newline; IME composition never sends. Esc cuts the running turn (only while something is running — see
+  § 3). Slash commands are sent like any other message, with no filter and no special path. The box is
+  neutral: its border does not change colour on focus (a slightly stronger neutral edge and a faint halo),
+  keyboard focus on the small controls is a neutral outline, and **the accent colour is used for the send
+  button and nothing else** in the chat — markdown links take a cool `--chat-link` token (the house has no
+  link token, and the markdown viewer's coral links are spoken for here).
+- **The status bar under the card.** One bar, the last thing in the pane, with everything the operator wants
+  to know about *what answers* and *what it costs*: model · effort · 5 h · week · context, and at the right
+  end the keys hint (which shows only while the caret is in the box; the full sentence is the textarea's
+  tooltip and its accessible description). The earlier design split these in two (model and effort chips
+  inside the card, the meters in a row of their own), which made the card busy and the row a toolbar; one bar
+  under a quiet card reads as one answer to "what am I talking to, and how much is left". It has **three
+  looks that share one markup and one painter** (the class `bar-minimal | bar-pills | bar-strip` on the
+  compose block picks the look, so a look is CSS and nothing else):
+  - **minimal** — a thin line: labels and values with a small ring per meter. The quietest.
+  - **pills** — a capsule per metric, with a slim bar inside it. A capsule turns amber or red as a whole.
+  - **strip** — a rounded strip glued under the card, segments separated by short hairlines; the card's
+    bottom edge and the strip share one outline and one shadow, so the two read as one object.
+  The **default is `pills`**, chosen by what survives a glance at the corner of the eye: an amber or red
+  capsule and a visibly full bar say "look" without being read, where minimal's small ring asks to be read; it
+  carries the most information in the least width (the bar *is* the number, so a narrow pane drops the digits
+  and keeps the meaning); and it continues the capsule grammar the model and effort chips already had. The
+  choice is a viewing preference of the window, kept in `localStorage` as `chatStatusBarStyle` and switched
+  with `chatSkinSetBarStyle(style, persist)`; there is no row in Settings for it yet (§ 10). The model is a
+  button: it types `/model` through the same door as any other message (`chatSkinSubmit`, the only caller of
+  `submitToPty`), and is disabled while a turn runs or a dialog is open.
+  **Thresholds.** A meter is neutral below 60 %, `--st-warn` (amber) from 60 % and `--st-error` (a real red,
+  never coral) from 85 %: the amber has to leave room to act before the red says "now". The thresholds are on
+  the *percentage*, whatever number is shown (the context meter shows tokens). A reading we do not have is `—`
+  with an empty ring or bar, never `0`; the effort is *absent* rather than dashed, because a dash would read
+  as a failure.
+  **The detail card.** Every meter answers hover and keyboard focus (not a `title`) with a card: the window,
+  the percentage used, **when it resets** (a clock time today, weekday and time otherwise, plus the two
+  largest units left) and, for context, **tokens over the window**. The reset lines appear only when the
+  payload carried them; a reset already behind us says the reading predates it and dims the meter. The card
+  does not open upward (that is where the text being typed is) or downward (the bar is the last thing in the
+  pane): it **covers the bar's own line**, at its fixed two-line height, so nothing moves when it opens.
+  The screenshot fixture throws if the card ever reaches into the composer or past the bar.
+  **Responsive.** The bar is its own size container and gives up words before meaning: under 520 px the
+  labels go, under 480 the "of 200k", the narrower pill and smaller bars, under 410 the effort, under 372
+  the number inside a pill or strip segment (the bar and the colour remain), under 330 every number.
+  Checked at panes of 400, 340 and 300 px.
 - **Slash commands.** Typing `/` at the very start of the box opens a popup above the card listing what the
   operator can run: Claude Code's built-in commands, the AIOS plugin's `/aios:*`, the operator's own
   (`<config dir>/commands`), the project's (`.claude/commands` of the pane's folder) and the installed
   plugins'. Each row shows the name, its usage hint (`argument-hint`) and what it does (`description`), plus a
-  small tag when it is the operator's or the project's own. It filters as they type (name, then alias, then
+  quiet origin word when it is the operator's or the project's own (§ 2.1). It filters as they type (name, then alias, then
   the part after a `plugin:` prefix, then any word). ↑/↓ move (and wrap), **Enter or Tab complete** the
   highlighted command into the box as `/name ` and **never send** — the operator still reads the line and sends
   it with a second Enter; a click completes too; **Esc closes the popup and does not cut the turn** (its
@@ -124,7 +143,7 @@ that has ended) do not.
   stays selectable. It closes with Esc or a press outside, and **that Esc must not cut the turn**: its
   listener runs before the interrupt one and stops the event (§ 9: a test pins the order).
 - **Cards for the states.** *Connecting*, *waiting*, *empty* and *error* are one centred card (icon, a short
-  title, a sentence; the error one adds a button back to the terminal). *Quiet for a while* (a stalled turn) is a
+  title, a sentence; the error one adds a button back to the terminal; the empty one adds its three keys, § 2.1). *Quiet for a while* (a stalled turn) is a
   status card in the column in `--st-warn`, with the button back to the terminal.
 - **Dialogs as cards with buttons.** When the TUI asks something (a permission, the folder-trust question, `/model`'s
   picker, an `AskUserQuestion`, a yes/no offer) and its rows could be read, the column gets a card in `--st-input`:
@@ -138,6 +157,43 @@ that has ended) do not.
   wheel-up takes the control back at once) and a round *latest* button appears when the operator has scrolled
   away. Every animation has a `prefers-reduced-motion` fallback.
 - **Always a way out.** The header switch, the tab icon and the notice button all return to the terminal.
+
+### 2.1 The polish pass: the popup, the bubble, the scale, the empty card
+
+A pass over what looked rough in the screenshots, with no change to streaming or to dialogs. Every colour is a
+`--chat-*` token (none minted outside `theme.css`), both themes, and every new sentence goes through `t()`.
+
+- **The `/` popup is a list you can scan.** It showed every match (about ten rows, a quarter of the pane) in a card as
+  wide as the composer. Now: **at most seven rows**, then a scroll (`.csl-list` has `max-height: 7 × --csl-row`; the
+  list is content-box, so its padding comes on top). Where there are more rows beyond an edge a soft fade says so
+  (`mask-image`, driven by `.more-t` / `.more-b`, because an overlay scrollbar is invisible until it moves), and
+  the list's `scroll-padding` equals the fade's height so an arrow key never parks the chosen row under it. The
+  columns are one grid shared by every row (a subgrid): **name | usage | what it does | origin**. A usage hint
+  wider than its column is shortened **at a word** with its brackets closed (`<optional custom summarization
+  instructions>` → `<optional custom…>`, never a dangling "or"), the whole text stays in its `title`, and the CSS
+  ellipsis is only the net for one very long word. The card is at most 640 px wide. The origin ("project",
+  "yours") lost its capsule: 10 px of `--faint` text at the edge. The highlighted row is one step *above* the
+  popup's own tone (`--chat-pick-bg`, set as the popup's `--chat-row-hover`), where it used to be a step below
+  and read as a hole. A narrow pane (≤ 480 px) stacks name and usage over the description and shows five rows.
+- **The operator's bubble is lighter.** Padding 10 × 15 → 7 × 13, radius 16 → 14 (the tail corner 5 → 4), type
+  one notch under the answer's (.96 em), fill 9 % → 6.5 % ink (5 % in the light theme), a hairline border
+  instead of the strong one and no edge-light: a prompt is a line you said, not a card, and it should not
+  compete with the answer, and it now sits just under the code surface (7 %) instead of above it.
+- **One vertical scale.** Four unrelated sets of margins (22/8 px for rows, 6 px for tools, 10 px for notes, .9 em
+  against 1 em inside markdown) became five variables on `.chatskin`: `--cs-m` 7 px, `--cs-turn` 19 px,
+  `--cs-blk` .85 em, `--cs-sec` 1.4 em, `--cs-li` .25 em. Rows are flex children, so neighbouring margins **add**:
+  `--cs-m` on both sides is the 14 px between any two blocks (messages, tool cards, notes, the working line);
+  an operator message adds `--cs-turn`, so a **new turn opens at ~26 px**; inside a message paragraphs, lists,
+  quotes, code blocks and tables are all `--cs-blk` apart (they used to be .9 and 1 em), a heading takes
+  `--cs-sec` above and a tight .45 em below. The em units follow the reading size the operator picked.
+- **The empty card is intentional.** It was an icon over "No messages yet", with the title **invisible in the
+  dark theme** (a card has no message around it to inherit `--ink` from, so it fell back to the browser's
+  black; the title now sets its own ink). Now: the tile, **"Start a conversation with {name}"** (the session's
+  name, through `chatSkinWho`), a sentence, and three quiet keys — `/` commands, `↵` send, `⇧↵` new line — as
+  hairline chips with mono glyphs, shown only for the empty state and optically centred. It teaches the three
+  things that matter before the first message and says nothing the bar below does not already say.
+- **The Terminal | Chat switch** lost a double outline: the chosen segment is raised by a soft shadow
+  (`--chat-lift`) inside the switch's own border instead of drawing a second ring against it.
 
 ## 3. Architecture
 
@@ -451,28 +507,55 @@ on the wire, main starts only the dialog monitor, and the view reads "connecting
 work exactly as for any dialog. When the id is adopted the watch is replaced by one that also follows the
 transcript, keeping the monitor.
 
-## 6. The usage bar: what is the pane's and what is the account's
+## 6. The status bar's data: what is the pane's and what is the account's
 
 `~/.claude/statusline-payload.json` is the last payload written by **any** Claude Code session on the
-machine. It is global, not per tab. Therefore:
+machine. It is global, not per tab. A bar that drew it as it came would show tab A's model and context
+under tab B's box, and, worse, nothing would look wrong. So the payload is **scoped to the tab by session
+id before anything per-session is believed** (the filter lives in main, with a second lock in the renderer):
 
-- **5-hour and weekly percentages are the account's** numbers (the most recent session's reading of them),
-  which is what they are in Claude Code too; they do not belong to this pane. Effort is also read from the
-  payload and is likewise not guaranteed to be this pane's.
+- **What belongs to the session, and what to the account.** The payload carries `session_id`. These fields
+  describe *one session* and are kept only when it is this tab's: **model, effort, context percentage and
+  context window**. These describe the *account* and are the same whichever session wrote them: the
+  **5-hour and weekly percentages and their resets**. The 5 h and week meters are therefore always drawn, and
+  the other four only from a payload that is this tab's own.
+- **`scopeStatusToSession(file, tabSessionId)`** (`src/core/chatEvents.ts`) returns the parsed payload plus
+  `sessionMatch`, which is `true` only when both ids are non-empty strings and equal. Without a match it
+  **deletes** the four per-session fields and keeps the account's; the payload's own `sessionId` never leaves
+  the parser. A missing id on either side (a payload from an older CLI, a tab that has not adopted its session
+  yet, an empty string) is "no match", never "assume it is mine". The `chat:status(sessionId)` IPC validates
+  the id with the same `isSessionId` the transcript watch uses (anything else becomes `null`) and answers
+  `mergeStatus(undefined, scopeStatusToSession(parseStatuslinePayload(…), tabId))`; on a read error it answers
+  `sessionMatch: false`. The renderer's `chatApplyStatus` repeats the rule: it writes those four fields only
+  when `s.sessionMatch === true`, so an older `main` that does not send the flag also writes none of them.
+- **Why the effort is hidden instead of showing another session's.** With no match there are two honest
+  answers for each per-session field: this tab's own value, or nothing. The model and the context have a
+  source of their own (below); the **effort has none**, since the transcript does not record it, so the bar
+  *leaves the segment out* until a matching payload says it. A wrong effort is worse than a missing one: it is
+  a confident statement about *this* message ("high") that is true of somebody else's, and the operator would
+  act on it. A dash was rejected for the same reason as a `0 %`: it reads as a failure rather than as "not
+  known yet".
 - **Context and model of the pane come from this session's own transcript** (the `usage` event) whenever
   it has them: the context shows as tokens (for example `84k`), the model overrides the payload's. The
-  payload only fills what the transcript cannot say, field by field.
-- **Resets and the context window.** The payload also carries `rate_limits.five_hour.resets_at` and
-  `rate_limits.seven_day.resets_at` (Unix seconds) and `context_window.context_window_size`.
-  `parseStatuslinePayload` returns them as `fiveHourResetsAt`, `sevenDayResetsAt` and `contextWindow` only
-  when they are usable numbers (a reset written in milliseconds is scaled; anything else is dropped);
-  `mergeStatus` carries them with the same field-by-field rule. Nothing is inferred: with no reset in the
-  payload the tooltip simply has no reset line. The context meter's percentage is this pane's own tokens over
-  the window size **only when they agree** (tokens above the window mean the payload describes another
-  session's model), and the tooltip then reads `used / total`.
+  payload only fills what the transcript cannot say, field by field, and only from a matching payload.
+- **Resets and the context window.** `parseStatuslinePayload` returns `fiveHourResetsAt`, `sevenDayResetsAt`
+  and `contextWindow` only when they are usable numbers (a reset written in milliseconds is scaled; anything
+  else is dropped); `mergeStatus` carries them with the same field-by-field rule and propagates
+  `sessionMatch` (the SDK side's first, then the file's) without counting it as a source of data. Nothing is
+  inferred: with no reset in the payload the detail card simply has no reset line. The context meter's
+  percentage is this pane's own tokens over the window size **only when they agree** (tokens above the window
+  mean the payload describes another session's model), and the card then reads `used / total`.
 - An absent field is shown as `—`, never `0%`: a bar that shows `0%` for a missing number is a fabricated
-  reading. `chat:status` returns the merge of nothing with the parsed payload (`parseStatuslinePayload`,
-  `mergeStatus`) and is refreshed about every 20 s while a chat view is up.
+  reading. `chat:status` is refreshed about every 20 s while a chat view is up.
+- **The test that pins it, with a negative control** (`src/test/usageReader.test.ts`): the same payload is fed
+  to two tabs. The tab whose id equals the payload's keeps model, effort and context and gets
+  `sessionMatch: true`; **the other tab gets none of the four and keeps the account's numbers**. A missing id on
+  either side is "no match" in every combination (no `session_id`, a `null` / `undefined` / empty tab id, both
+  absent). The control is that the assertion was run against a build with the line that deletes the
+  per-session fields broken on purpose: two tests failed, and passed again when the line was restored. A guard
+  that has never been seen to fail is only a hope. The screenshot fixture adds `bar-nomatch-dark` (a payload
+  that is another tab's), which **fails the run** if the effort segment is on screen or the model is not the
+  transcript's.
 - Open item: the exported type still carries the label `source: 'sdk' | 'file' | 'mixed'` from the SDK era;
   only `file` is produced now.
 
@@ -559,9 +642,9 @@ against the operator's settings. That is the price of there being one session, a
   passes); the meters are no longer in the header; the popup's Esc listener is registered before the
   interrupt one and stops the event (the two listeners are replayed in registration order with a fake event);
   Enter with the popup open completes and is consumed, so it cannot send; the drop inserts the double-quoted
-  path and stops the event before its early return. The usage row, the popup and the drop/paste code are
+  path and stops the event before its early return. The status bar, the popup and the drop/paste code are
   **run for real** from the real source against a stand-in DOM (dash and empty ring for a missing reading,
-  70/90 colours, resets present or absent, a stale reset, a stale popup answer ignored, caret and spacing of
+  60/85 colours, resets present or absent, a stale reset, a stale popup answer ignored, caret and spacing of
   an inserted path). `src/test/slashCommands.test.ts` covers the pure module (merge precedence, ranking,
   what the box is asking for) and `src/test/usageReader.test.ts` covers the statusline parser, the new reset
   and window-size fields included (absent, unusable and millisecond values).
@@ -586,8 +669,11 @@ against the operator's settings. That is the price of there being one session, a
   cards. On main's side: the question and options are forwarded bounded and untouched, a moved cursor is a
   `refresh`, the adoption is sent before the item, and no transcript means no preview.
 - **Shots.** `npm run chat:shot` (hidden window) renders hand-written cases in dark and light and in narrow
-  and wide panes: the usage row at rest, each tooltip forced open by the fixture, high and empty readings,
-  dense tool rows, the slash popup (all sources, filtered, narrow, and through the real IPC), the drop
+  and wide panes: the status bar in each of its three looks (at rest, narrow, each detail card forced open, hot
+  values, no readings, and a payload that is another tab's: `bar-<look>-<theme>[-narrow|-tip|-hot|-hot-tip]`,
+  `bar-none-dark`, `bar-nomatch-dark`), dense tool rows, the slash popup (sixteen commands from every source
+  at the top and scrolled, filtered, narrow, and through the real IPC), the operator's bubbles over the spacing
+  scale (`bubble-*`), the empty card (`empty-*`), the drop
   veil and inserted paths, the reply half-written and the same reply after the finished message has taken its
   place (`stream-half-*`, `stream-final-*`), a permission card, a `/model` menu card, a question card with a typing
   option, a used (disabled) card and a dialog shown on the live strip with the way back to the buttons
@@ -669,6 +755,13 @@ against the operator's settings. That is the price of there being one session, a
     button; usage meters (and a high-usage variant that turns them gold and red); the settings popover open; the
     attention card over a live dialog; the empty state; a narrow window; the stock workbench layout; all of them
     in dark and light where it matters.
+  - Some shots are **assertions as well as pictures**: a helper in the fixture's `setup` makes the run fail
+    when a bar's detail card reaches into the composer or past the bar, when the effort shows for a payload
+    that is not the tab's, when the `/` popup shows more than seven whole rows, or when the active row is out
+    of view. A look that regresses breaks the run, not only a picture nobody opens.
+  - The run has a single 150 s ceiling in `main.ts` for the **whole** fixture. The fixture is near it (79
+    shots; its `settleMs` went 700 → 450 to make room, which is enough for the 340 ms entry animation), so the
+    next batch of shots needs that timer to become per-shot or to scale with the number of shots (§ 10).
   - How it is used: after every visual change, look at **every** PNG (dark and light) before calling it done —
     spacing, hierarchy, contrast in the light theme, truncation, shadows. It does not replace the gates; it is
     the one place a redesign is actually seen. It never answers a dialog and never writes to a pty.
@@ -691,6 +784,12 @@ against the operator's settings. That is the price of there being one session, a
 - **`@` mentions** in the box (files and images arrive as quoted paths, § 2, not as attachment chips).
 - **A permission-mode picker.** The chat follows what the session already runs under.
 - **Accessibility pass** beyond the log region, the alert notice and `aria-pressed` on the switch.
+- **A row in Settings for the status-bar look.** `chatStatusBarStyle` is stored in `localStorage` and switched by
+  `chatSkinSetBarStyle`; the shell's settings page is in `src/main`, so the row is a separate change. Until it
+  exists the three looks are reachable by the fixture and the console only, and `pills` is what everyone gets.
+- **The `/` popup does not tag plugin commands.** A plugin's name is already the prefix (`weekly:plan`), so only
+  the project's and the operator's own commands carry an origin word. An `aios` tag for the bundled plugin would
+  be one more locale key and a `source` value; it was left out until someone misses it.
 - **Cloud mode.** The tail reads a local file; moving sessions behind a host is the cloud-mode RFC's
   concern, and the tail's injected projects folder and callback are the seam.
 
