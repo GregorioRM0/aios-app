@@ -63,8 +63,8 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --chat-tool-ink: var(--faint);
   /* Conversation-column tokens (the "boxes" redesign). Same rule as above: derived from --ink and
      --surface so one declaration reads right in both themes, re-declared in body.light so they
-     resolve against ITS ink/surface. No coral anywhere in here: coral is the send action and the
-     caret, nothing else. */
+     resolve against ITS ink/surface. No coral anywhere in here: coral is the send button and
+     nothing else (focus is a neutral outline, links take the cool --chat-link, the caret is ink). */
   --chat-code-head: color-mix(in srgb, var(--ink) 10%, var(--surface));   /* the strip above a code block: language + copy */
   --chat-out-bg: color-mix(in srgb, var(--ink) 4%, var(--surface));       /* a tool's output, one step under the surface it opens on */
   --chat-row-hover: color-mix(in srgb, var(--ink) 5%, var(--surface));
@@ -74,7 +74,10 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --chat-composer-bg: color-mix(in srgb, var(--ink) 5%, var(--surface));
   --chat-composer-line: var(--line-strong);
   --chat-meter-track: color-mix(in srgb, var(--ink) 13%, var(--surface));
-  --chat-focus: color-mix(in srgb, var(--accent) 20%, transparent);       /* the composer's focus ring: the one place typing happens */
+  --chat-focus: color-mix(in srgb, var(--ink) 52%, transparent);          /* keyboard focus on a small control: a neutral outline, strong enough to see (coral is the send button only) */
+  --chat-focus-line: color-mix(in srgb, var(--ink) 34%, var(--chat-composer-line));   /* the composer card's border while it holds the caret */
+  --chat-focus-soft: color-mix(in srgb, var(--ink) 7%, transparent);      /* …and the faint halo around it: focus is felt, not announced */
+  --chat-link: var(--st-input-ink);   /* links in the conversation: the app's one cool hue. The house has no link token (the markdown viewer links in coral), and coral is spoken for here */
   --chat-on-accent: #fff;   /* the glyph on a coral button; white, as the house .vbtn.primary does */
   --chat-meter-fill: color-mix(in srgb, var(--ink) 52%, var(--surface));   /* a usage bar in its normal range: neutral, so only 70+ and 90+ ever draw the eye */
   --chat-float: 0 18px 44px -20px rgba(0,0,0,.75), 0 3px 10px -4px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
@@ -634,7 +637,10 @@ body.light {
   --chat-composer-bg: var(--surface);   /* a white card on the paper: border and shadow carry the lift, a tint would look dirty */
   --chat-composer-line: color-mix(in srgb, var(--ink) 18%, var(--surface));
   --chat-meter-track: color-mix(in srgb, var(--ink) 11%, var(--surface));
-  --chat-focus: color-mix(in srgb, var(--accent) 17%, transparent);
+  --chat-focus: color-mix(in srgb, var(--ink) 50%, transparent);
+  --chat-focus-line: color-mix(in srgb, var(--ink) 32%, var(--chat-composer-line));
+  --chat-focus-soft: color-mix(in srgb, var(--ink) 6%, transparent);
+  --chat-link: var(--st-input-ink);
   --chat-on-accent: #fff;
   --chat-meter-fill: color-mix(in srgb, var(--ink) 50%, var(--surface));
   --chat-float: 0 16px 36px -22px rgba(30,30,40,.38), 0 2px 8px -3px rgba(30,30,40,.16);
@@ -1618,23 +1624,23 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 @container (max-width: 520px) { .cs-alert { flex-wrap: wrap; } .csa-btn { margin-left: 47px; } }
 .cs-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* ── tool rows: one compact line per call, joined into a card when they come in a run ── */
-.chat-tool { --tr: 11px; flex: 0 0 auto; min-width: 0; font-size: 12.5px; line-height: 1.4; color: var(--ink);
+.chat-tool { --tr: 9px; flex: 0 0 auto; min-width: 0; font-size: 12px; line-height: 1.35; color: var(--ink);
              background: var(--chat-claude-bg); border: 1px solid var(--chat-claude-line); }
-.chat-tool.tg-solo, .chat-tool.tg-first { margin-top: 8px; border-radius: var(--tr) var(--tr) 0 0; }
+.chat-tool.tg-solo, .chat-tool.tg-first { margin-top: 6px; border-radius: var(--tr) var(--tr) 0 0; }
 .chat-tool.tg-solo { border-radius: var(--tr); }
 .chat-tool.tg-mid, .chat-tool.tg-last { margin-top: -1px; border-radius: 0; }
 .chat-tool.tg-last { border-radius: 0 0 var(--tr) var(--tr); }
-.chat-tool.tg-solo, .chat-tool.tg-last { margin-bottom: 8px; }
+.chat-tool.tg-solo, .chat-tool.tg-last { margin-bottom: 6px; }
 .chat-tool.tg-first, .chat-tool.tg-mid { margin-bottom: 0; }
-.ct-head { display: flex; align-items: center; gap: 9px; width: 100%; box-sizing: border-box; min-height: 36px; padding: 6px 12px 6px 9px;
+.ct-head { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; min-height: 28px; padding: 3px 10px 3px 6px;
            background: none; border: 0; border-radius: inherit; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .ct-head:hover { background: var(--chat-row-hover); }
 .ct-head:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: -2px; }
-.ct-kind { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 24px; height: 24px; border-radius: 7px;
+.ct-kind { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 20px; height: 20px; border-radius: 6px;
            background: var(--chat-out-bg); border: 1px solid var(--chat-claude-line); color: var(--subtle); }
 .chat-tool.error .ct-kind { color: var(--st-error-ink); background: color-mix(in srgb, var(--st-error) 11%, var(--surface)); border-color: color-mix(in srgb, var(--st-error) 34%, transparent); }
-.ct-name { flex: 0 0 auto; font-weight: 620; letter-spacing: .005em; }
-.ct-arg { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtle); font-family: var(--mono); font-size: .94em; }
+.ct-name { flex: 0 0 auto; font-size: 12px; font-weight: 620; letter-spacing: .005em; }
+.ct-arg { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtle); font-family: var(--mono); font-size: 11px; }
 .ct-state { display: inline-flex; align-items: center; flex: 0 0 auto; }
 .chat-tool.ok .ct-state { color: var(--st-ok-ink); }
 .chat-tool.error .ct-state { color: var(--st-error-ink); }
@@ -1642,7 +1648,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
            border-top-color: var(--st-busy); animation: cs-spin .8s linear infinite; }
 .ct-chev { color: var(--faint); transition: transform .16s ease; }
 .chat-tool.open .ct-chev { transform: rotate(90deg); }
-.ct-body { padding: 0 10px 10px; }
+.ct-body { padding: 0 8px 8px; }
 .ct-out { margin: 0; max-height: 240px; overflow: auto; padding: 10px 12px; border: 1px solid var(--chat-claude-line); border-radius: 8px; background: var(--chat-out-bg);
           color: var(--ink); font-family: var(--mono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .chat-tool.error .ct-out { border-color: color-mix(in srgb, var(--st-error) 38%, transparent); }
@@ -1724,7 +1730,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .chat-md h3 { font-size: 1.09em; }
 .chat-md h4, .chat-md h5, .chat-md h6 { font-size: 1em; color: var(--subtle); }
 .chat-md strong { font-weight: 650; }
-.chat-md a { color: var(--accent-ink); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent);
+.chat-md a { color: var(--chat-link); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--chat-link) 42%, transparent);
              text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
 .chat-md a:hover { text-decoration-color: currentColor; }
 .chat-md blockquote { border-left: 3px solid var(--chat-quote-line); padding: .1em 0 .1em 1em; color: var(--subtle); }
@@ -1780,7 +1786,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cc-box { display: flex; flex-direction: column; gap: 6px; padding: 13px 12px 10px 17px; border-radius: 20px;
           background: var(--chat-composer-bg); border: 1px solid var(--chat-composer-line); box-shadow: var(--chat-float);
           transition: border-color .15s ease, box-shadow .15s ease; }
-.cc-box:focus-within { border-color: color-mix(in srgb, var(--accent) 34%, var(--chat-composer-line)); box-shadow: var(--chat-float), 0 0 0 2px var(--chat-focus); }
+.cc-box:focus-within { border-color: var(--chat-focus-line); box-shadow: var(--chat-float), 0 0 0 3px var(--chat-focus-soft); }
 .chat-input { display: block; width: 100%; box-sizing: border-box; resize: none; min-height: 25px; max-height: 220px; padding: 0; margin: 0;
               background: none; color: var(--ink); border: 0; outline: none; font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px);
               line-height: 1.55; user-select: text; }

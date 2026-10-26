@@ -767,3 +767,47 @@ test('the chat view names the session that is talking, never a hardcoded "Claude
   assert.match(src, /t\('chat\.placeholder', \{ name: (chatSkinWho\(p\)|who) \}\)/, 'the composer placeholder carries the name');
   assert.match(src, /t\('chat\.skin\.prompt\.' \+ cs\.promptKind, \{ name \}\)/, 'the attention card carries the name');
 });
+
+// ── fewer colours, denser rows: coral is the send button and nothing else in the chat ─────────
+
+/** The chat skin's rules with comments removed, as [selector, declarations] pairs (@media / @container wrappers flattened). */
+function skinRules(sheet: string): Array<[string, string]> {
+  const sk = sheet.slice(sheet.indexOf('/* ═══ Chat skin')).replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...sk.matchAll(/([^{}@;]+?)\s*\{([^{}]*)\}/g)].map((m) => [m[1].trim().replace(/\s+/g, ' '), m[2]] as [string, string]);
+}
+/** Selectors in the skin block whose declarations reach for the coral (--accent*, but not --chat-on-accent, the white glyph on it). */
+const coralUsers = (sheet: string): string[] => skinRules(sheet)
+  .filter(([, decl]) => /var\(--accent[a-z-]*\)/.test(decl.replace(/--chat-on-accent/g, '')))
+  .map(([sel]) => sel);
+/** The chat tokens minted in :root / body.light must not be coral either. */
+const coralTokens = (sheet: string): string[] => [...sheet.matchAll(/^\s*(--chat-[a-z-]+):([^;]*);/gm)]
+  .filter(([, name, value]) => name !== '--chat-on-accent' && /--accent/.test(value)).map((m) => m[1]);
+
+test('coral is the send button and nothing else in the chat: focus, links, rings and tokens are neutral or cool', () => {
+  // the tab's Terminal/Chat icon lives on the TAB (app chrome, "identity"), not in the conversation
+  const inView = (sheet: string): string[] => coralUsers(sheet).filter((s) => !s.startsWith('.tab .tview'));
+  assert.deepEqual([...new Set(inView(css))].sort(), ['.cc-send', '.cc-send:hover:not(:disabled)'], 'only the send button may use the accent');
+  assert.deepEqual(coralTokens(css), [], 'no chat token is built from the accent');
+  // the composer card keeps a neutral focus (a border and a faint halo), and links use their own cool token
+  const rule = (sel: string): string => skinRules(css).find(([s]) => s === sel)?.[1] ?? '';
+  assert.match(rule('.cc-box:focus-within'), /var\(--chat-focus-line\)[\s\S]*var\(--chat-focus-soft\)/);
+  assert.match(rule('.chat-md a'), /color: var\(--chat-link\)/);
+  assert.match(css, /:root \{[^}]*--chat-link: var\(--st-input-ink\)/);
+  // controls: a focus ring or a link painted coral again is caught by the same check
+  assert.equal(inView(css.replace('.cc-box:focus-within { border-color: var(--chat-focus-line);', '.cc-box:focus-within { border-color: var(--accent);')).includes('.cc-box:focus-within'), true);
+  assert.equal(inView(css.replace('.chat-md a { color: var(--chat-link);', '.chat-md a { color: var(--accent-ink);')).includes('.chat-md a'), true);
+  assert.deepEqual(coralTokens(css.replace('--chat-focus-soft: color-mix(in srgb, var(--ink) 7%', '--chat-focus-soft: color-mix(in srgb, var(--accent) 7%')), ['--chat-focus-soft']);
+});
+
+test('tool rows are dense: a short row, small type for the name and the argument, still a comfortable hit target', () => {
+  const head = skinRules(css).find(([s]) => s === '.ct-head')?.[1] ?? '';
+  const minH = Number(/min-height:\s*(\d+)px/.exec(head)?.[1]);
+  const padY = Number(/padding:\s*(\d+)px/.exec(head)?.[1]);
+  assert.ok(minH >= 26 && minH <= 30, `a row is 26-30 px tall (got ${minH})`);
+  assert.ok(padY <= 4, `vertical padding is at most 4 px (got ${padY})`);
+  const px = (sel: string): number => Number(/font-size:\s*([\d.]+)px/.exec(skinRules(css).find(([s]) => s === sel)?.[1] ?? '')?.[1]);
+  assert.ok(px('.ct-name') >= 11.5 && px('.ct-name') <= 12.5, 'the tool name is 12 px');
+  assert.ok(px('.ct-arg') >= 10.5 && px('.ct-arg') <= 11.5, 'the argument is 11 px (mono) — smaller than the name, never below 10.5');
+  // control: the pre-density row (36 px, 6 px padding) fails the same bounds
+  assert.equal(36 >= 26 && 36 <= 30, false);
+});

@@ -7848,7 +7848,7 @@ function chatSkinMakeTool(cs) {
   const name = el('span', 'ct-name');
   const arg = el('span', 'ct-arg');
   const state = el('span', 'ct-state');
-  const chev = csIcon('chevR', 12);
+  const chev = csIcon('chevR', 11);
   chev.classList.add('ct-chev');
   head.append(kind, name, arg, state, chev);
   const panel = el('div', 'ct-body');
@@ -7880,14 +7880,14 @@ function chatSkinPaintTool(rec, item) {
   rec.node.classList.remove('running', 'ok', 'error');
   rec.node.classList.add(status);
   rec.node.dataset.kind = k.kind;
-  if (x.kindName !== k.ico) { x.kind.replaceChildren(csIcon(k.ico, 13)); x.kindName = k.ico; }
+  if (x.kindName !== k.ico) { x.kind.replaceChildren(csIcon(k.ico, 12)); x.kindName = k.ico; }
   x.name.textContent = name;
   x.arg.textContent = summary;
   const label = t('chat.skin.tool.' + status);
   x.head.title = (name + (summary ? ' · ' + summary : '')) + ' — ' + label;
   if (x.status !== status) {
     x.status = status;
-    const mark = status === 'running' ? el('span', 'ct-spin') : csIcon(status === 'ok' ? 'check' : 'x', 13);
+    const mark = status === 'running' ? el('span', 'ct-spin') : csIcon(status === 'ok' ? 'check' : 'x', 12);
     mark.setAttribute('aria-hidden', 'true');
     const sr = el('span', 'cs-sr', label);   // the mark is a picture; this is what a screen reader hears
     x.state.replaceChildren(mark, sr);
