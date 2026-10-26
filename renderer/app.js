@@ -7070,6 +7070,14 @@ const CS_STATUS_MS = 20000;
 const CS_SCREEN_QUIET_MS = 40;
 const CS_SCREEN_MAX_MS = 150;
 const CS_FRAME_WAIT_MS = 250;   // how much longer a snapshot may wait for a half-painted frame to be finished before it is taken anyway
+/* A dialog's answer is a key or two (a digit, or arrows then Enter). Several keys in ONE write can be swallowed by the TUI's
+   input parser as a single chunk, so they go one by one with a short gap, as submitToPty separates a message from its CR. */
+const CS_KEY_GAP_MS = 60;
+const CS_RETRY_MS = 6000;    // a used card whose dialog is STILL up after this long means the key never landed: let the operator answer again
+/* The only keys a dialog card may ever write: a digit, an arrow up/down, Enter. The parser decided which of them picks which
+   option; this is the renderer's own check that nothing else (text, other escapes) can come out of that path. */
+const CHAT_KEY_OK = /^(?:\x1b\[[AB]|\r|[0-9])+$/;
+const CHAT_KEY_CHUNK = /\x1b\[[0-9;]*[A-Za-z]|\r|[^\x1b\r]/g;
 /* One preference pair for every chat view: changing the font in one conversation changing it in
    the others is what "my chat font" means. Seeded from shellConfig on each entry. */
 const chatPrefs = { family: '', size: CHAT_DEFAULT_SIZE };
@@ -7493,7 +7501,11 @@ function chatSkinBuild(id, p) {
   alertBtn.type = 'button';
   const alertPoint = csIcon('arrowDown', 16);   // under a dialog: "answer down there"
   alertPoint.classList.add('csa-point');
-  alertEl.append(alertIco, alertBody, alertBtn, alertPoint);
+  /* When the operator chose "View in the terminal" on a dialog card, this brings the buttons back. */
+  const alertBack = el('button', 'csa-btn', t('chat.skin.dlg.showButtons'));
+  alertBack.type = 'button';
+  alertBack.hidden = true;
+  alertEl.append(alertIco, alertBody, alertBtn, alertBack, alertPoint);
 
   /* The composer: one big rounded card floating over the end of the conversation. The text grows
      with what is typed; under it a row carries the model and effort chips (read from the same usage
@@ -7568,7 +7580,7 @@ function chatSkinBuild(id, p) {
   p.el.appendChild(root);
 
   const cs = {
-    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, compose, box, wrap, meta, usageEl, usageVals,
+    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, alertBack, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, compose, box, wrap, meta, usageEl, usageVals,
     menuOpen: false, menuOff: null,
     slash: { open: false, items: [], index: 0, seq: 0, pop: slashPop, list: slashList },   // the slash popup: see chatSkinSlashRefresh
     swTerm, swChat,
@@ -7580,6 +7592,7 @@ function chatSkinBuild(id, p) {
     errorCode: '',
     turnOpen: false, lastEventAt: 0, lastSubmitAt: 0, stick: true, resetAt: Date.now(), autoUntil: 0,
     promptKind: null, promptHint: '', stalled: false, idCheckedAt: 0, idChecks: 0, watchedAt: 0,
+    promptQ: '', promptOpts: null, promptUsed: false, promptTerm: false, promptGen: 0, dlg: null, dlgSig: '',   // a dialog drawn as a card: see chatSkinPrompt
     stream: null,                // the provisional bubble of the reply being written: { rec, anchor, text, live } — see chatSkinStream
     screenTimer: 0, screenSince: 0, framing: false,
   };
@@ -7641,6 +7654,7 @@ function chatSkinBuild(id, p) {
   stopBtn.addEventListener('click', () => chatSkinInterrupt(id, p));
   swTerm.addEventListener('click', () => chatSkinSetView(id, 'term'));
   alertBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
+  alertBack.addEventListener('click', () => { cs.promptTerm = false; chatSkinLayout(p); try { p.term.blur(); } catch { /* disposed */ } chatSkinCardFocus(cs); });
   stateBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
   gear.addEventListener('click', () => chatSkinMenu(cs, !cs.menuOpen));
   fontList.addEventListener('click', (e) => {
@@ -7704,6 +7718,7 @@ function chatSkinSetView(id, view) {
   if (view === 'chat') {
     const cs = chatSkinBuild(id, p);
     cs.promptKind = null; cs.promptHint = ''; cs.stalled = false;
+    cs.promptOpts = null; cs.promptQ = ''; cs.promptUsed = false; cs.promptTerm = false;
     cs.lastEventAt = Date.now();
     try { p.term.blur(); } catch { /* disposed */ }
     void Promise.resolve(window.glassShell.shellConfig()).then((c) => { chatReadPrefs(c); chatApplyPrefs(); }).catch(() => {});
@@ -7756,11 +7771,12 @@ function chatSkinLayout(p) {
   if (!cs) return;
   const on = p.view === 'chat';
   p.el.classList.toggle('view-chat', on);
-  p.el.classList.toggle('cs-strip', on && !!cs.promptKind);
+  p.el.classList.toggle('cs-strip', on && chatSkinStrip(cs));
   cs.root.hidden = !on;
   if (!on) chatSkinMenu(cs, false);   // a popover left open would keep a document listener alive behind a hidden view
   cs.input.disabled = !!cs.promptKind || !!p.exited;
   if (!on || cs.promptKind) chatSkinSlashClose(cs);   // a popup left open over a hidden or blocked composer would be a ghost
+  chatSkinCardPaint(p);
   chatSkinControls(p);
   chatSkinPaintAlert(p);
   chatSkinPaintState(p);
@@ -7777,24 +7793,31 @@ function chatSkinControls(p) {
   const who = chatSkinWho(p);
   if (cs.who !== who) {
     cs.who = who;
-    cs.input.placeholder = t('chat.placeholder', { name: who });
-    cs.input.setAttribute('aria-label', cs.input.placeholder);
+    chatSkinPlaceholder(p);
     const wt = cs.workEl.querySelector('.cw-t');
     if (wt) wt.textContent = t('chat.skin.working', { name: who });
   }
   if (cs.workEl.hidden === showWork) { cs.workEl.hidden = !showWork; if (showWork) chatSkinScroll(cs); }   // appearing pushes the end of the log down: follow it if the view is following the tail
 }
+function chatSkinPlaceholder(p) {
+  const cs = p.chatSkin;
+  const ph = t(chatSkinCardOn(cs) ? 'chat.skin.dlg.placeholder' : 'chat.placeholder', { name: chatSkinWho(p) });   // under a card the box says where the answer goes
+  if (cs.input.placeholder === ph) return;
+  cs.input.placeholder = ph;
+  cs.input.setAttribute('aria-label', ph);
+}
 function chatSkinPaintAlert(p) {
   const cs = p.chatSkin;
   let text = '';
   const name = chatSkinWho(p);
-  if (cs.promptKind) text = t('chat.skin.prompt.' + cs.promptKind, { name });
+  if (cs.promptKind) text = chatSkinCardOn(cs) ? '' : t('chat.skin.prompt.' + cs.promptKind, { name });   // a card IS the notice; the strip needs the words that point at it
   else if (cs.stalled) text = t('chat.skin.stalled', { name });
   cs.alertEl.hidden = !text;
   cs.alertText.textContent = text;
   cs.alertEl.classList.toggle('prompt', !!cs.promptKind);
   cs.alertEl.title = cs.promptHint || '';
   cs.alertBtn.hidden = !!cs.promptKind;   // under a dialog the terminal is already in front; the header switch is still there
+  cs.alertBack.hidden = !(cs.promptKind && cs.promptOpts && cs.promptTerm);   // the strip was chosen over a card that could be drawn: offer the way back to it
   const kind = cs.promptKind ? 'prompt' : 'stalled';
   if (text && cs.alertKind !== kind) {
     cs.alertKind = kind;
@@ -8277,7 +8300,7 @@ function chatSkinUpsert(cs, item, animate) {
   if (!rec) {
     rec = chatSkinMakeItem(item.role, cs);
     cs.items.set(item.uuid, rec);
-    cs.log.insertBefore(rec.node, (cs.stream && cs.stream.rec.node) || cs.workEl);   // the working indicator stays the last child of the column, and what is still being written or asked stays under everything that has landed
+    cs.log.insertBefore(rec.node, (cs.stream && cs.stream.rec.node) || cs.dlg || cs.workEl);   // the working indicator stays the last child of the column, and what is still being written or asked stays under everything that has landed
     if (animate) {   // a few px of rise and a fade; only for news, never for history being loaded
       rec.node.classList.add('cs-in');
       rec.node.addEventListener('animationend', (e) => { if (e.target === rec.node) rec.node.classList.remove('cs-in'); });
@@ -8333,7 +8356,7 @@ function chatSkinStream(cs, ev) {
     const rec = chatSkinMakeItem('assistant', cs);
     rec.node.classList.add('cs-prov');
     rec.node.setAttribute('aria-hidden', 'true');
-    cs.log.insertBefore(rec.node, cs.workEl);
+    cs.log.insertBefore(rec.node, cs.dlg || cs.workEl);
     st = cs.stream = { rec, anchor: '', text: '', live: true };
     if (Date.now() - cs.resetAt > CS_ANIM_AFTER_MS && !chatReducedMotion()) {   // the same rule as any new row: rises in for news, never while history is loading
       rec.node.classList.add('cs-in');
@@ -8367,9 +8390,10 @@ function chatSkinHandleEvent(ev) {
   switch (ev.type) {
     case 'reset':
       cs.items.clear();
-      cs.stream = null;   // replaceChildren below removes its node
+      cs.stream = null; cs.dlg = null; cs.dlgSig = '';   // replaceChildren below removes their nodes; a dialog still open is drawn again at the end of this case
       cs.log.replaceChildren(cs.stateEl, cs.workEl);
       cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true; cs.resetAt = Date.now();
+      chatSkinCardPaint(p);
       break;
     case 'items':
       {
@@ -8410,32 +8434,210 @@ function chatSkinHandleEvent(ev) {
 }
 if (window.glassShell && typeof window.glassShell.onChatSkinEvent === 'function') window.glassShell.onChatSkinEvent(chatSkinHandleEvent);
 
-/* ── dialogs the chat cannot draw ────────────────────────────────────────── */
-/* A `prompt` event with a kind means the TUI is showing something only it can render. The real
-   xterm comes forward in a strip under the bubbles and takes the keys, with an announced notice;
-   a null kind puts the bubbles back and returns the caret to the composer. If the pane is not the
-   one in front, the operator is told the ordinary ways too (an unseen mark on the tab, a toast) —
-   a dialog that blocks the session must never wait unnoticed. */
+/* ── dialogs: a card with a button per option, or the live terminal strip ─────────────────────────────────────
+   A `prompt` event with a kind means the TUI is asking something only it can render. Two ways to show it:
+     · CARD — when main could read the options (the event carries `options`, each with the key that picks it): the question
+       and one button per option, in the column, with "View in the terminal" for the operator who wants the real thing;
+     · STRIP — when it could not (no `options`): the real xterm comes forward under the bubbles and takes the keys, as before.
+   Either way a dialog that blocks the session is never left unnoticed: a notice or the card itself, a mark on the tab and a
+   toast if the pane is not in front. A null kind removes the card or closes the strip and returns the caret to the box.
+
+   THE RULE THAT DOES NOT BEND: the skin never answers a dialog by itself. The only thing that ever writes an answer is
+   chatSkinPick, and it runs from the operator's click or key on a button. Drawing a card, a refresh of its keys, a
+   timer, an event from main: none of them touch the pty. */
+const chatSkinCardOn = (cs) => !!(cs.promptKind && cs.promptOpts && cs.promptOpts.length && !cs.promptTerm);
+const chatSkinStrip = (cs) => !!cs.promptKind && !chatSkinCardOn(cs);
+const chatSkinOptsSig = (o) => (o ? JSON.stringify(o.map((x) => [x.n, x.label])) : '');
+/* Options as main sent them, checked once more here: one unreadable row (a key that is not a digit, an arrow or Enter, a
+   label that is not text) and the whole list is refused, so the dialog falls back to the strip instead of a card that
+   might write something it should not. */
+function chatSkinPromptOptions(raw) {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const out = [];
+  for (const o of raw.slice(0, 12)) {
+    if (!o || typeof o.label !== 'string' || !o.label.trim() || typeof o.key !== 'string' || !CHAT_KEY_OK.test(o.key)) return null;
+    out.push({ n: Number.isInteger(o.n) ? o.n : null, label: o.label.slice(0, 200), selected: !!o.selected, key: o.key, freeText: o.freeText === true });
+  }
+  return out;
+}
 function chatSkinPrompt(id, p, ev) {
   const cs = p.chatSkin;
   const kind = ev.kind ? (CHAT_PROMPT_KINDS.includes(ev.kind) ? ev.kind : 'other') : null;
+  const opts = kind ? chatSkinPromptOptions(ev.options) : null;
+  const question = kind && typeof ev.question === 'string' ? ev.question.slice(0, 300) : '';
   cs.promptHint = kind && typeof ev.hint === 'string' ? ev.hint.slice(0, 200) : '';
-  if (kind === cs.promptKind) { chatSkinPaintAlert(p); return; }
-  cs.promptKind = kind;
+  if (kind && ev.refresh === true && kind === cs.promptKind) {
+    /* The SAME dialog with its cursor moved: the keys of an unnumbered menu are relative to the cursor, so adopt the new
+       ones and the new default mark. It is not a new dialog, so a card the operator has already used stays used. */
+    if (opts && cs.promptOpts) { cs.promptOpts = opts; chatSkinCardPaint(p); }
+    chatSkinPaintAlert(p);
+    return;
+  }
+  if (kind === cs.promptKind && question === cs.promptQ && chatSkinOptsSig(opts) === chatSkinOptsSig(cs.promptOpts)) { chatSkinPaintAlert(p); return; }   // announced already
+  cs.promptKind = kind; cs.promptQ = question; cs.promptOpts = opts;
+  cs.promptUsed = false; cs.promptTerm = false; cs.promptGen++;   // a new dialog is a new, enabled card, buttons first
   cs.stalled = false;
   chatSkinLayout(p);
+  const card = chatSkinCardOn(cs);
   if (kind) {
     const inFront = paneShown(p) && active[zoneOf(p)] === id && !document.hidden;
-    requestAnimationFrame(() => {
-      if (p.view !== 'chat' || !cs.promptKind) return;
-      repaintTerm(p);
-      if (paneShown(p) && active[zoneOf(p)] === id) { try { p.term.focus(); } catch { /* disposed */ } }
-    });
-    if (!inFront) { markActivity(id); toast(t('chat.skin.needsYou', { name: p.name })); }
+    if (card) {
+      cs.stick = true;
+      chatSkinScroll(cs, false);
+      requestAnimationFrame(() => { if (p.view === 'chat' && chatSkinCardOn(cs) && inFront) chatSkinCardFocus(cs); });
+    } else {
+      requestAnimationFrame(() => {
+        if (p.view !== 'chat' || !chatSkinStrip(cs)) return;
+        repaintTerm(p);
+        if (paneShown(p) && active[zoneOf(p)] === id) { try { p.term.focus(); } catch { /* disposed */ } }
+      });
+    }
+    if (!inFront) { markActivity(id); toast(t(card ? 'chat.skin.needsYouHere' : 'chat.skin.needsYou', { name: chatSkinWho(p) })); }
   } else {
     try { p.term.blur(); } catch { /* disposed */ }
     chatSkinFocus(p);
   }
+}
+/* Draw, update or remove the card to match the pane's dialog state. Idempotent. */
+function chatSkinCardPaint(p) {
+  const cs = p.chatSkin;
+  if (!cs) return;
+  chatSkinPlaceholder(p);
+  if (!chatSkinCardOn(cs)) {
+    if (cs.dlg) { cs.dlg.remove(); cs.dlg = null; cs.dlgSig = ''; }
+    return;
+  }
+  const sig = JSON.stringify([cs.promptGen, chatSkinWho(p)]);   // a new dialog (or a renamed session) is a new card; a refresh only updates it
+  if (!cs.dlg || cs.dlgSig !== sig) {
+    if (cs.dlg) cs.dlg.remove();
+    cs.dlg = chatSkinCardBuild(p);
+    cs.dlgSig = sig;
+    cs.log.insertBefore(cs.dlg, cs.workEl);
+    chatSkinRegroup(cs);
+    cs.stick = true; chatSkinScroll(cs, false);
+  }
+  chatSkinCardSync(cs);
+}
+function chatSkinCardBuild(p) {
+  const cs = p.chatSkin;
+  const who = chatSkinWho(p);
+  const card = el('div', 'cs-dlg');
+  card.setAttribute('role', 'group');
+  card.setAttribute('aria-label', t('chat.skin.dlg.label', { name: who }));
+  card.dataset.kind = cs.promptKind;
+  const head = el('div', 'csd-head');
+  head.append(csIcon('term', 15), el('span', 'csd-kind', t('chat.skin.dlg.kind.' + cs.promptKind, { name: who })));
+  const q = el('div', 'csd-q', cs.promptQ || cs.promptHint || t('chat.skin.dlg.noQuestion'));   // the question is the CLI's own words, shown as text and never parsed
+  q.id = 'cs-dlg-q-' + cs.id + '-' + cs.promptGen;
+  card.setAttribute('aria-describedby', q.id);
+  const list = el('div', 'csd-opts');
+  cs.promptOpts.forEach((o, i) => {
+    const b = el('button', 'csd-opt');
+    b.type = 'button';
+    b.dataset.i = String(i);
+    const num = o.n !== null ? o.n : i + 1;   // an unnumbered menu still gets 1, 2, 3…: the badge is where the operator's finger goes
+    b.dataset.num = String(num);
+    if (num >= 1 && num <= 9) b.setAttribute('aria-keyshortcuts', String(num));
+    const def = el('span', 'csd-def', '↵');
+    def.setAttribute('aria-hidden', 'true');
+    b.append(el('span', 'csd-n', String(num)), el('span', 'csd-l', o.label), def, el('span', 'cs-sr', t('chat.skin.dlg.default')));
+    list.appendChild(b);
+  });
+  list.addEventListener('click', (e) => {
+    const b = e.target instanceof Element ? e.target.closest('.csd-opt') : null;
+    if (b && !b.disabled) chatSkinPick(cs.id, p, Number(b.dataset.i));
+  });
+  const foot = el('div', 'csd-foot');
+  const link = el('button', 'csd-link', t('chat.skin.dlg.viewTerminal'));
+  link.type = 'button';
+  link.addEventListener('click', () => {   // the real thing: the strip with the live terminal, exactly as for a dialog we could not read
+    cs.promptTerm = true;
+    chatSkinLayout(p);
+    requestAnimationFrame(() => {
+      if (p.view !== 'chat' || !chatSkinStrip(cs)) return;
+      repaintTerm(p);
+      if (paneShown(p) && active[zoneOf(p)] === cs.id) { try { p.term.focus(); } catch { /* disposed */ } }
+    });
+  });
+  const keys = el('span', 'csd-keys', t('chat.skin.dlg.keys'));
+  keys.setAttribute('aria-hidden', 'true');
+  const sent = el('span', 'csd-sent', t('chat.skin.dlg.sent'));
+  sent.setAttribute('role', 'status');
+  sent.hidden = true;
+  foot.append(link, keys, sent);
+  card.append(head, q, list, foot);
+  card.addEventListener('keydown', (e) => chatSkinCardKey(cs, p, e));
+  return card;
+}
+/* Everything about the card that can change while it stays the same card: which option is the default (the cursor), the
+   keys behind them, and whether it has been used. */
+function chatSkinCardSync(cs) {
+  if (!cs.dlg) return;
+  cs.dlg.querySelectorAll('.csd-opt').forEach((b, i) => {
+    const o = cs.promptOpts[i];
+    if (!o) return;
+    b.classList.toggle('def', !!o.selected);
+    b.disabled = cs.promptUsed;
+    b.querySelector('.csd-def').hidden = !o.selected;
+    b.querySelector('.cs-sr').hidden = !o.selected;
+  });
+  cs.dlg.classList.toggle('used', cs.promptUsed);
+  cs.dlg.setAttribute('aria-busy', String(cs.promptUsed));
+  const sent = cs.dlg.querySelector('.csd-sent');
+  sent.hidden = !cs.promptUsed;
+  cs.dlg.querySelector('.csd-keys').hidden = cs.promptUsed;
+}
+function chatSkinCardFocus(cs) {
+  if (!cs.dlg) return;
+  const b = cs.dlg.querySelector('.csd-opt.def:not(:disabled)') || cs.dlg.querySelector('.csd-opt:not(:disabled)');
+  if (b) try { b.focus({ preventScroll: true }); } catch { /* detached */ }
+}
+/* Arrows move between the buttons, a digit picks that option, Enter/Space press the focused button (the browser does that). */
+function chatSkinCardKey(cs, p, e) {
+  if (e.isComposing || e.altKey || e.metaKey || e.ctrlKey || cs.promptUsed) return;
+  const btns = [...cs.dlg.querySelectorAll('.csd-opt')].filter((b) => !b.disabled);
+  if (!btns.length) return;
+  const at = btns.indexOf(document.activeElement);
+  const move = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[e.key];
+  if (move || e.key === 'Home' || e.key === 'End') {
+    e.preventDefault();
+    const to = e.key === 'Home' ? 0 : e.key === 'End' ? btns.length - 1 : (at + (at < 0 ? (move > 0 ? 1 : 0) : move) + btns.length) % btns.length;
+    btns[to].focus({ preventScroll: true });
+    return;
+  }
+  if (/^[0-9]$/.test(e.key)) {
+    const b = btns.find((x) => x.dataset.num === e.key);
+    if (!b) return;
+    e.preventDefault();
+    chatSkinPick(cs.id, p, Number(b.dataset.i));
+  }
+}
+/* THE answer to a dialog: called from a click or a key on a button, never from anything else. It sends exactly the key the
+   parser attached to that option, once (the card is disabled until the next dialog), and nothing else. An option that asks
+   for free text ("Type something") only gets its key; typing is the operator's, so the live terminal comes forward. */
+function chatSkinPick(id, p, i) {
+  const cs = p.chatSkin;
+  if (!cs || !chatSkinCardOn(cs) || cs.promptUsed || p.exited) return;
+  const o = cs.promptOpts[i];
+  if (!o) return;
+  cs.promptUsed = true;
+  const gen = cs.promptGen;
+  chatSkinCardSync(cs);
+  chatSkinSendKey(id, p, o.key);
+  /* If the dialog is STILL up after a while the key never landed (the TUI was busy, the cursor was elsewhere): re-arm the
+     card so the operator is not stuck behind disabled buttons. A dialog that did get answered sends `null` long before this. */
+  setTimeout(() => { if (cs.promptGen === gen && cs.promptKind && cs.promptUsed && panes.get(id) === p) { cs.promptUsed = false; chatSkinCardSync(cs); } }, CS_RETRY_MS);
+  if (o.freeText) { cs.promptTerm = true; chatSkinLayout(p); requestAnimationFrame(() => { if (p.view === 'chat' && chatSkinStrip(cs)) { repaintTerm(p); try { p.term.focus(); } catch { /* disposed */ } } }); }
+}
+/* THE chokepoint for a single dialog key (submitToPty is the one for messages; it appends a CR, which a digit must never
+   get). Only a digit, an arrow up/down or Enter can pass; the chunks go one by one with a short gap. */
+function chatSkinSendKey(id, p, key) {
+  if (typeof key !== 'string' || !CHAT_KEY_OK.test(key)) return false;
+  (key.match(CHAT_KEY_CHUNK) || []).forEach((chunk, n) => {
+    const send = () => { if (panes.get(id) === p && !p.exited) window.glassShell.ptyWrite(id, chunk); };
+    if (n === 0) send(); else setTimeout(send, n * CS_KEY_GAP_MS);
+  });
+  return true;
 }
 
 /* ── actions ──────────────────────────────────────────────────────────────── */

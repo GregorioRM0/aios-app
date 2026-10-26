@@ -3,7 +3,7 @@ import { markQuitting, isQuitting, closeShouldHide } from './quitState';
 import { installWebPermissionPolicy } from './webPermissions';
 import { withDefaultLocale } from './termLocale';
 import { createTranscriptTail, isSessionId } from './transcriptTail';
-import { createPromptMonitor, type PromptMonitor } from '../core/tuiPrompt';
+import { createPromptMonitor, type PromptMonitor, type TuiPrompt } from '../core/tuiPrompt';
 import { createStreamTracker, sameMessage, normalizeForMatch, type StreamTracker } from '../core/screenStream';
 import { mergeStatus, parseStatuslinePayload } from '../core/chatEvents';
 import { builtinCommands, slashSuggestions, type SlashCommand } from '../core/slashCommands';
@@ -376,6 +376,15 @@ const tail = createTranscriptTail();
    of the pipeline. Null in a normal run, and it only ever READS. `screen` entries are internal timings. */
 let skinTap = null as ((paneId: number, ev: Record<string, unknown>) => void) | null;
 
+/* What a dialog's rows look like on the wire: bounded, and only the fields the card needs. The parser
+   (core/tuiPrompt) decided what each key is; nothing here adds or edits a key. */
+function promptWire(prompt: TuiPrompt | undefined): Record<string, unknown> {
+  if (!prompt) return {};
+  const options = (prompt.options ?? []).slice(0, 12).map((o) => ({
+    n: o.n, label: String(o.label).slice(0, 200), selected: !!o.selected, key: o.key, ...(o.freeText ? { freeText: true } : {}),
+  }));
+  return { ...(prompt.question ? { question: prompt.question.slice(0, 300) } : {}), ...(options.length ? { options } : {}) };
+}
 
 async function endSkin(paneId: number, flush: boolean): Promise<void> {
   const k = skins.get(paneId);
@@ -407,7 +416,10 @@ ipcMain.handle('chatSkin:watch', async (e, paneId: number, sessionId: string | n
       if (!sender.isDestroyed()) sender.send('chatSkin:event', ev);
     };
     const monitor = createPromptMonitor({
-      onChange: (kind, hint) => send({ type: 'prompt', kind, ...(hint ? { hint } : {}) }),
+      onChange: (kind, hint, prompt) => send({ type: 'prompt', kind, ...(hint ? { hint } : {}), ...promptWire(prompt) }),
+      /* the SAME dialog with its cursor moved: the keys of an unnumbered menu are relative to the cursor, so the card
+         must adopt these. `refresh` tells the renderer this is not a new dialog (it must not re-enable a used card). */
+      onRefresh: (prompt) => send({ type: 'prompt', kind: prompt.kind, ...(prompt.hint ? { hint: prompt.hint } : {}), ...promptWire(prompt), refresh: true }),
     });
     const onGone = (): void => { void endSkin(id, false); };
     sender.once('destroyed', onGone);             // a closed or reloaded window must not leave a watcher behind
@@ -605,7 +617,7 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
     const flags = JSON.stringify({ disableAllHooks: true, remoteControlAtStartup: false, statusLine: { type: 'command', command: 'true' } });
     const opened = await js<number | null>(`(async () => {
       const cmd = 'cd ' + shq(${JSON.stringify(dir)}) + ' && env ${inherited} ' + CLAUDE + ' --model haiku --name ' + shq(${JSON.stringify(name)})
-        + ' --strict-mcp-config --settings ' + shq(${JSON.stringify(flags)});
+        + ' --permission-mode default --strict-mcp-config --settings ' + shq(${JSON.stringify(flags)});
       return await createPane({ name: ${JSON.stringify(name)}, cmd, bypassReady: true });
     })()`);
     if (typeof opened !== 'number') return fail('createPane returned no pane');
@@ -620,7 +632,12 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
     say('chat view on (via the tab toggle)');
 
     // 3. answer the trust dialog if there is one, and wait for the pane to adopt its session id
-    let trustSeen = false; let trustAnswered = false; let nagAnswered = false; let lastTry = 0;
+    let trustSeen = false; let trustAnswered = false; let nagAnswered = false; let lastTry = 0; let byCard = 0; let direct = 0;
+    /* The dialog card is the operator's own door to these questions, so the gate presses ITS button (the same click handler
+       a hand reaches) and only falls back to writing the keys itself when no card is there or it did not answer. */
+    const pressCard = (re: string): Promise<string | null> => js(`(() => { const cs = panes.get(${paneId}).chatSkin; if (!cs || !cs.dlg) return null;
+      const b = [...cs.dlg.querySelectorAll('.csd-opt')].find((x) => new RegExp(${JSON.stringify(re)}, 'i').test(x.querySelector('.csd-l').textContent));
+      if (!b || b.disabled) return null; b.click(); return b.querySelector('.csd-l').textContent; })()`);
     const adoptDeadline = Date.now() + 75000;
     let st = await probe();
     for (; Date.now() < adoptDeadline; await sleep(400), st = await probe()) {
@@ -628,25 +645,31 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
       if (st.exited) return fail('the pty exited before the session came up', st);
       if (st.prompt === 'trust' && !trustSeen) { trustSeen = true; say(`detector emitted prompt kind 'trust' after ${since()}`); }
       /* Dialogs this gate answers itself. The folder-trust one is the point (the detector must have
-         seen it); the "make auto mode your default" offer is a first-run nag of this CLI that the
-         detector does not recognise (no footer to anchor on) and that must be answered "No": the
-         "Yes" would rewrite the operator's permission default. Both start with the cursor on the
-         WRONG row, so read the screen and move it before confirming. */
+         seen it); the "make auto mode your default" offer is a first-run nag of this CLI that must be
+         answered "No": the "Yes" would rewrite the operator's permission default. Both start with the
+         cursor on the WRONG row. The card's own buttons are tried first (they carry the keys that
+         account for that); only when there is no card does this write the keys itself, reading the
+         screen and moving the cursor before confirming. */
       const screenText = st.screen.join('\n');
       const nag = /Make auto mode your default/i.test(screenText);
       if ((st.prompt === 'trust' || nag) && Date.now() - lastTry > 1500) {
         lastTry = Date.now();
         const want = nag ? /No, keep/i : /Yes, I trust/i;
-        const cur = [...st.screen].reverse().find((l) => l.includes('❯')) ?? '';   // the LAST cursor on screen: the composer's own ❯ sits above a dialog
-        if (want.test(cur)) { ptys.get(paneId)?.write('\r'); if (nag) nagAnswered = true; else trustAnswered = true; }
-        else ptys.get(paneId)?.write('\x1b[B');
+        const pressed = await pressCard(nag ? '^No, keep' : '^Yes, I trust');
+        if (pressed) { byCard++; if (nag) nagAnswered = true; else trustAnswered = true; say(`the dialog card's "${pressed.slice(0, 40)}" button pressed (${nag ? 'auto-mode offer' : 'folder trust'}), ${since()} in`); }
+        else {
+          direct++;
+          const cur = [...st.screen].reverse().find((l) => l.includes('❯')) ?? '';   // the LAST cursor on screen: the composer's own ❯ sits above a dialog
+          if (want.test(cur)) { ptys.get(paneId)?.write('\r'); if (nag) nagAnswered = true; else trustAnswered = true; }
+          else ptys.get(paneId)?.write('\x1b[B');
+        }
       }
       if (st.sessionId && st.watched === st.sessionId) break;
     }
     if (!st || !st.sessionId) return fail(`no session id after ${since()}${trustSeen ? '' : " (and the detector never reported the trust dialog)"}`, st);
     if (st.watched !== st.sessionId) return fail(`the chat view is not following the session (watched=${st.watched}, hidden window: document.hidden=${st.hidden})`, st);
     sessionId = st.sessionId;
-    say(`session ${sessionId.slice(0, 8)}… adopted after ${since()}; trust dialog ${trustSeen ? (trustAnswered ? 'detected and answered' : 'detected') : 'not shown'}${nagAnswered ? '; auto-mode offer declined' : ''}; document.hidden=${st.hidden}`);
+    say(`session ${sessionId.slice(0, 8)}… adopted after ${since()}; trust dialog ${trustSeen ? (trustAnswered ? 'detected and answered' : 'detected') : 'not shown'}${nagAnswered ? '; auto-mode offer declined' : ''}; ${byCard} answer(s) by the card's buttons, ${direct} by writing keys directly; document.hidden=${st.hidden}`);
     if (shellPid) for (const k of await descendants(shellPid)) kids.add(k);
 
     // 4. wait for the TUI to settle at its prompt, then type into the composer and press Enter there
@@ -747,7 +770,59 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
     if (before.length > 0 && !seen.marked) return fail('the finished message did not take the preview\'s node over (no same-position replacement)');
     if (process.env.AIOS_SMOKE_CHAT_DEBUG) { for (const x of before.slice(0, 3).concat(before.slice(-2))) say(`debug stream ${JSON.stringify(String(x.ev.text).slice(0, 160))}`); say(`debug final ${JSON.stringify(fin.text.slice(0, 160))}`); }
 
-    result = { status: 'ok', detail: 'real session, chat view, composer, bubbles, streaming' };
+    // 7. A REAL PERMISSION DIALOG, drawn as a card and answered by pressing its "No" button. The session runs with
+    //    --permission-mode default, so a shell command that writes a file stops on "Do you want to proceed?". The gate
+    //    only ever presses the button that REFUSES (and falls back to Esc, which also refuses): nothing is accepted, so
+    //    nothing can run, in the temp folder or anywhere else.
+    for (let i = 0; i < 80 && st && (st.ptyAge < 1500 || st.prompt || st.turnOpen); i++) { await sleep(300); st = await probe(); }   // the long answer's turn is over and the TUI is quiet
+    const permFile = `smoke-perm-${crypto.randomBytes(3).toString('hex')}.txt`;
+    const askPerm = `Use the Bash tool to run exactly this command and nothing else: touch ${permFile}`;
+    const sentPerm = await js<boolean>(`(() => {
+      const cs = panes.get(${paneId}).chatSkin;
+      cs.input.value = ${JSON.stringify(askPerm)};
+      cs.input.dispatchEvent(new Event('input', { bubbles: true }));
+      cs.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return cs.input.value === '';
+    })()`);
+    if (!sentPerm) return fail('Enter in the composer did not send the permission request');
+    const dlgProbe = (): Promise<{ kind: string | null; q: string; opts: Array<{ n: number | null; label: string; selected: boolean; key: string; freeText: boolean }> | null;
+      card: boolean; strip: boolean; buttons: string[]; disabled: boolean[]; used: boolean; label: string | null; link: string | null } | null> => js(`(() => {
+        const p = panes.get(${paneId}); if (!p) return null; const cs = p.chatSkin;
+        const d = cs.dlg;
+        return { kind: cs.promptKind, q: cs.promptQ, opts: cs.promptOpts, card: !!(d && d.isConnected), strip: p.el.classList.contains('cs-strip'),
+          buttons: d ? [...d.querySelectorAll('.csd-opt')].map((b) => b.textContent) : [], disabled: d ? [...d.querySelectorAll('.csd-opt')].map((b) => b.disabled) : [],
+          used: !!cs.promptUsed, label: d ? d.getAttribute('aria-label') : null, link: d && d.querySelector('.csd-link') ? d.querySelector('.csd-link').textContent : null };
+      })()`);
+    let dlg = await dlgProbe();
+    for (const deadline = Date.now() + 60000; Date.now() < deadline && dlg && !dlg.kind; await sleep(300)) dlg = await dlgProbe();
+    if (!dlg || !dlg.kind) return fail('the permission request never raised a dialog (the command may have run unasked)', await probe());
+    await sleep(600);   // let the card settle on its final options (the screen is read twice)
+    dlg = await dlgProbe();
+    if (!dlg) return fail('the pane disappeared');
+    say(`dialog — kind '${dlg.kind}', question ${JSON.stringify(dlg.q)}, ${dlg.opts ? dlg.opts.length : 0} options: ${(dlg.opts ?? []).map((o) => `${o.n ?? '·'}${o.selected ? '*' : ''} ${JSON.stringify(o.label.slice(0, 48))} key=${JSON.stringify(o.key)}${o.freeText ? ' freeText' : ''}`).join(' | ')}`);
+    say(`dialog — card drawn: ${dlg.card}, terminal strip: ${dlg.strip}, buttons: ${dlg.buttons.length}, aria-label ${JSON.stringify(dlg.label)}, link ${JSON.stringify(dlg.link)}`);
+    if (!dlg.opts || !dlg.opts.length || !dlg.card || dlg.strip) return fail(`the real dialog did not become a card (options=${dlg.opts ? dlg.opts.length : 'none'}, card=${dlg.card}, strip=${dlg.strip})`);
+    const noIdx = dlg.opts.findIndex((o) => /^No\b/i.test(o.label));
+    if (noIdx < 0) return fail(`no option that refuses among: ${dlg.opts.map((o) => o.label).join(' / ')}`);
+    const clicked = await js<boolean>(`(() => { const b = panes.get(${paneId}).chatSkin.dlg.querySelectorAll('.csd-opt')[${noIdx}]; if (!b || b.disabled) return false; b.click(); return true; })()`);
+    if (!clicked) return fail('the "No" button could not be pressed');
+    const afterClick = await dlgProbe();
+    say(`dialog — pressed "${dlg.opts[noIdx].label.slice(0, 40)}" (key ${JSON.stringify(dlg.opts[noIdx].key)}); right after: used=${afterClick?.used}, buttons disabled=${afterClick?.disabled.every(Boolean)}`);
+    if (!afterClick || !afterClick.used || !afterClick.disabled.every(Boolean)) return fail('the card did not disable itself after the click');
+    let closed = false;
+    for (const deadline = Date.now() + 15000; Date.now() < deadline && !closed; await sleep(300)) { const d = await dlgProbe(); closed = !!d && !d.kind && !d.card; }
+    let viaEsc = false;
+    if (!closed) {   // the button's key did not refuse by itself: say so, and refuse the way the TUI documents (Esc) so the run still ends clean
+      viaEsc = true;
+      ptys.get(paneId)?.write('\x1b');
+      for (const deadline = Date.now() + 10000; Date.now() < deadline && !closed; await sleep(300)) { const d = await dlgProbe(); closed = !!d && !d.kind && !d.card; }
+    }
+    const ran = fs.existsSync(path.join(dir, permFile));
+    say(`dialog — after the click the dialog ${closed ? 'closed' : 'is STILL open'}${viaEsc ? ' (only after Esc: the button key alone did not refuse)' : ' by itself'}; the command ${ran ? 'RAN' : 'did not run'}`);
+    if (ran) return fail('the refused command ran anyway');
+    if (!closed) return fail('the dialog did not close after pressing No');
+    if (viaEsc) return fail('pressing the "No" button did not close the dialog by itself');
+    result = { status: 'ok', detail: 'real session, chat view, composer, bubbles, streaming, permission dialog card' };
   } catch (e) {
     result = { status: 'failed', detail: String((e as Error)?.message ?? e) };
   } finally {

@@ -326,6 +326,207 @@
           }
         ]
       }
+    ],
+    "permission-card": [
+      {
+        "type": "status",
+        "fiveHourPct": 42,
+        "sevenDayPct": 71,
+        "contextPct": 38,
+        "model": "claude-sonnet-5-5",
+        "effort": "high",
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+8280",
+        "sevenDayResetsAt": "+190000"
+      },
+      {
+        "type": "usage",
+        "contextTokens": 84000,
+        "model": "claude-sonnet-5-5"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "p-u1",
+            "role": "user",
+            "text": "Run the tests for the delay cap and tell me if they pass."
+          },
+          {
+            "uuid": "p-a1",
+            "role": "assistant",
+            "text": "I'll run only the tests that touch `nextDelay`."
+          },
+          {
+            "uuid": "t-p1",
+            "role": "tool",
+            "tool": {
+              "id": "tool-p1",
+              "name": "Bash",
+              "summary": "npm test -- --grep nextDelay",
+              "status": "running"
+            }
+          }
+        ]
+      },
+      {
+        "type": "turn",
+        "open": true
+      },
+      {
+        "type": "prompt",
+        "kind": "permission",
+        "hint": "Do you want to proceed?",
+        "question": "Do you want to proceed?",
+        "options": [
+          {
+            "n": 1,
+            "label": "Yes",
+            "selected": true,
+            "key": "1"
+          },
+          {
+            "n": 2,
+            "label": "Yes, and don't ask again for npm test commands in this project",
+            "selected": false,
+            "key": "2"
+          },
+          {
+            "n": 3,
+            "label": "No, and tell the assistant what to do differently",
+            "selected": false,
+            "key": "3"
+          }
+        ]
+      }
+    ],
+    "menu-card": [
+      {
+        "type": "status",
+        "fiveHourPct": 42,
+        "sevenDayPct": 71,
+        "contextPct": 38,
+        "model": "claude-sonnet-5-5",
+        "effort": "high",
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+8280",
+        "sevenDayResetsAt": "+190000"
+      },
+      {
+        "type": "usage",
+        "contextTokens": 84000,
+        "model": "claude-sonnet-5-5"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "m-u1",
+            "role": "user",
+            "text": "/model"
+          }
+        ]
+      },
+      {
+        "type": "turn",
+        "open": true
+      },
+      {
+        "type": "prompt",
+        "kind": "model",
+        "hint": "Select model",
+        "question": "Select model",
+        "options": [
+          {
+            "n": 1,
+            "label": "Default (recommended)",
+            "selected": true,
+            "key": "1"
+          },
+          {
+            "n": 2,
+            "label": "Sonnet 5.5 · balanced for everyday work",
+            "selected": false,
+            "key": "2"
+          },
+          {
+            "n": 3,
+            "label": "Opus 5.5 · deepest reasoning, slower",
+            "selected": false,
+            "key": "3"
+          },
+          {
+            "n": 4,
+            "label": "Haiku 5.5 · fastest, for small tasks",
+            "selected": false,
+            "key": "4"
+          }
+        ]
+      }
+    ],
+    "question-card": [
+      {
+        "type": "status",
+        "fiveHourPct": 42,
+        "sevenDayPct": 71,
+        "contextPct": 38,
+        "model": "claude-sonnet-5-5",
+        "effort": "high",
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+8280",
+        "sevenDayResetsAt": "+190000"
+      },
+      {
+        "type": "usage",
+        "contextTokens": 84000,
+        "model": "claude-sonnet-5-5"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "q-u1",
+            "role": "user",
+            "text": "Merge the two config loaders into one."
+          },
+          {
+            "uuid": "q-a1",
+            "role": "assistant",
+            "text": "Both loaders read `settings.json`, but they disagree on what an empty value means."
+          }
+        ]
+      },
+      {
+        "type": "turn",
+        "open": true
+      },
+      {
+        "type": "prompt",
+        "kind": "question",
+        "hint": "Which behaviour should an empty value keep?",
+        "question": "Which behaviour should an empty value keep?",
+        "options": [
+          {
+            "n": null,
+            "label": "Treat it as unset and use the default",
+            "selected": true,
+            "key": "\r"
+          },
+          {
+            "n": null,
+            "label": "Treat it as an explicit empty string",
+            "selected": false,
+            "key": "\u001b[B\r"
+          },
+          {
+            "n": null,
+            "label": "Type something.",
+            "selected": false,
+            "key": "\u001b[B\u001b[B",
+            "freeText": true
+          }
+        ]
+      }
     ]
   },
   "shots": [
@@ -860,6 +1061,30 @@
       "working": false
     },
     {
+      "name": "dialog-permission-dark",
+      "theme": "dark",
+      "events": [
+        "permission-card"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "dialog-menu-dark",
+      "theme": "dark",
+      "events": [
+        "menu-card"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "dialog-question-dark",
+      "theme": "dark",
+      "events": [
+        "question-card"
+      ],
+      "clip": "pane"
+    },
+    {
       "name": "stream-half-light",
       "theme": "light",
       "events": [
@@ -883,6 +1108,78 @@
       ],
       "clip": "pane",
       "working": false
+    },
+    {
+      "name": "dialog-permission-light",
+      "theme": "light",
+      "events": [
+        "permission-card"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "dialog-menu-light",
+      "theme": "light",
+      "events": [
+        "menu-card"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "dialog-question-light",
+      "theme": "light",
+      "events": [
+        "question-card"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "dialog-permission-used-dark",
+      "theme": "dark",
+      "events": [
+        "permission-card"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.cs.promptUsed = true;",
+        "chatSkinCardSync(ctx.cs);"
+      ]
+    },
+    {
+      "name": "dialog-terminal-dark",
+      "theme": "dark",
+      "events": [
+        "permission-card"
+      ],
+      "clip": "pane",
+      "terminal": "\u001b[2m╭──────────────────────────────────────────────────────────────╮\u001b[0m\n\u001b[2m│\u001b[0m \u001b[1mBash command\u001b[0m                                                 \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   npm test                                                   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   \u001b[2mRun the unit tests of the sync client\u001b[0m                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m                                                              \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m Do you want to proceed?                                      \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m \u001b[36m❯ 1. Yes\u001b[0m                                                     \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   2. Yes, and don't ask again for npm test in this project   \u001b[2m│\u001b[0m\n\u001b[2m│\u001b[0m   3. No, and tell Claude what to do differently \u001b[2m(esc)\u001b[0m         \u001b[2m│\u001b[0m\n\u001b[2m╰──────────────────────────────────────────────────────────────╯\u001b[0m",
+      "js": [
+        "ctx.$('.csd-link').click();"
+      ]
+    },
+    {
+      "name": "dialog-narrow-dark",
+      "theme": "dark",
+      "events": [
+        "permission-card"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = '420px'; ctx.p.el.style.alignSelf = 'flex-start';",
+        "await ctx.sleep(300);"
+      ]
+    },
+    {
+      "name": "dialog-narrow-light",
+      "theme": "light",
+      "events": [
+        "permission-card"
+      ],
+      "clip": "pane",
+      "js": [
+        "ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = '420px'; ctx.p.el.style.alignSelf = 'flex-start';",
+        "await ctx.sleep(300);"
+      ]
     }
   ]
 }

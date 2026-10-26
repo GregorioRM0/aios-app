@@ -1624,6 +1624,40 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 /* With a dialog up the card is the last thing above the live terminal strip, so it docks onto it: squared bottom, no gap. */
 .pane.cs-strip > .chatskin .cs-alert { margin-top: 6px; margin-bottom: 0; border-bottom: 0; border-radius: 14px 14px 0 0; }
 @container (max-width: 520px) { .cs-alert { flex-wrap: wrap; } .csa-btn { margin-left: 47px; } }
+/* ── a dialog as a card: the question and one button per option ──
+   --sc is --st-input (blue, "waiting on the operator"), like the strip's notice: never coral — a choice is not the brand, and the
+   send button is the only coral in the chat. The option that holds the TUI's cursor is the default: a neutral lift and a return
+   mark, so Enter does what it shows. Buttons stack (a label can be a whole sentence) and every number is where a finger goes. */
+.cs-dlg { --sc: var(--st-input); flex: 0 0 auto; box-sizing: border-box; margin: 16px 0 10px; padding: 14px 14px 12px; border-radius: 18px;
+          background: color-mix(in srgb, var(--sc) 5%, var(--surface)); border: 1px solid color-mix(in srgb, var(--sc) 32%, var(--line));
+          box-shadow: var(--edge), 0 10px 28px -18px color-mix(in srgb, var(--sc) 45%, transparent); color: var(--ink); font-size: .93em; line-height: 1.45; }
+.csd-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; color: color-mix(in srgb, var(--sc) 78%, var(--ink)); font-size: .86em; font-weight: 640; letter-spacing: .012em; }
+.csd-head .cs-ico { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 9px;
+                    background: color-mix(in srgb, var(--sc) 15%, var(--surface)); }
+.csd-q { margin: 0 2px 12px; color: var(--ink); font-size: 1.07em; font-weight: 620; letter-spacing: -.004em; line-height: 1.45; overflow-wrap: anywhere; user-select: text; }
+.csd-opts { display: flex; flex-direction: column; gap: 6px; }
+.csd-opt { display: flex; align-items: center; gap: 12px; width: 100%; box-sizing: border-box; min-height: 44px; padding: 7px 12px 7px 8px; text-align: left; cursor: pointer;
+           font: inherit; color: var(--ink); background: var(--chat-composer-bg); border: 1px solid var(--chat-composer-line); border-radius: 12px;
+           transition: background .14s ease, border-color .14s ease, opacity .14s ease; }
+.csd-opt:hover:not(:disabled) { background: var(--chat-row-hover); border-color: color-mix(in srgb, var(--ink) 30%, var(--chat-composer-line)); }
+.csd-opt:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 1px; }
+.csd-opt.def { background: var(--chat-row-hover); border-color: color-mix(in srgb, var(--ink) 38%, var(--chat-composer-line)); }
+.csd-opt:disabled { cursor: default; color: var(--faint); background: var(--chat-out-bg); border-color: var(--chat-claude-line); }
+.csd-opt:disabled .csd-n { color: var(--faint); }
+.csd-n { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 28px; height: 28px; box-sizing: border-box; padding: 0 6px; border-radius: 9px;
+         background: var(--chat-out-bg); border: 1px solid var(--chat-claude-line); color: var(--subtle); font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.csd-opt.def .csd-n { background: var(--surface); border-color: var(--line-strong); color: var(--ink); }
+.csd-l { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.csd-def { flex: 0 0 auto; color: var(--faint); font-size: 14px; line-height: 1; }
+.csd-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; margin: 11px 2px 0; color: var(--faint); font-size: .86em; }
+.csd-link { padding: 3px 0; border: 0; background: none; font: inherit; font-weight: 600; color: var(--chat-link); cursor: pointer;
+            text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--chat-link) 40%, transparent); text-underline-offset: 3px; }
+.csd-link:hover { text-decoration-color: currentColor; }
+.csd-link:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 3px; border-radius: 4px; }
+.csd-keys, .csd-sent { margin-left: auto; }
+.csd-sent { color: var(--subtle); }
+@container (max-width: 520px) { .csd-keys { display: none; } .csd-sent { margin-left: 0; } }
+@media (prefers-reduced-motion: reduce) { .csd-opt { transition: none; } }
 /* ── the reply being written (a preview of the message the transcript has not recorded yet) ──
    Not a second kind of message: the same bubble, a step quieter, with a small caret in the busy hue at the end of the last
    line. When the real message lands this very node takes it over, the class goes and the ink comes up to full. */

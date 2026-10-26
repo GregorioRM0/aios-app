@@ -94,8 +94,8 @@ guarded('the composer submits through submitToPty, never by writing a CR itself'
   (src) => {
     const s = slice(src);
     const send = fnBody(s, 'chatSkinSendNow');
-    // every direct pty write in the skin is the lone ESC; nothing writes text or a CR
-    const writes = [...s.matchAll(/ptyWrite\(([^)]*)\)/g)].map((m) => m[1].replace(/\s+/g, ' ').trim());
+    // every direct pty write in the skin is the lone ESC, or one chunk of a dialog key inside the key chokepoint; nothing writes text or a CR
+    const writes = [...s.replace(fnBody(s, 'chatSkinSendKey'), '').matchAll(/ptyWrite\(([^)]*)\)/g)].map((m) => m[1].replace(/\s+/g, ' ').trim());
     return /submitToPty\(id, text\)/.test(send) && writes.length >= 1 && writes.every((w) => w === "id, '\\x1b'");
   },
   (src) => src.replace('submitToPty(id, text);   // the one chokepoint', "window.glassShell.ptyWrite(id, text + '\\r');   // the one chokepoint"));
@@ -235,7 +235,7 @@ guarded('a prompt event brings the REAL xterm forward with focus and a visible, 
   (src) => {
     const s = slice(src);
     const pr = fnBody(s, 'chatSkinPrompt');
-    return /p\.term\.focus\(\)/.test(pr) && /toast\(t\('chat\.skin\.needsYou'/.test(pr) && /markActivity\(id\)/.test(pr)
+    return /p\.term\.focus\(\)/.test(pr) && /toast\(t\(card \? 'chat\.skin\.needsYouHere' : 'chat\.skin\.needsYou', \{ name: chatSkinWho\(p\) \}\)\)/.test(pr) && /markActivity\(id\)/.test(pr)
       && /chatSkinFocus\(p\)/.test(pr)
       && /el\('div', 'cs-alert'\)/.test(s) && /alertEl\.setAttribute\('role', 'alert'\)/.test(s)
       && /classList\.toggle\('cs-strip'/.test(fnBody(s, 'chatSkinLayout'))
@@ -1657,3 +1657,318 @@ test('chat-shot fixture: the reply half-written and the same reply after the fin
   // the harness only feeds the skin: no shot answers anything
   for (const s of fixture.shots) assert.doesNotMatch([s.js].flat().join('\n'), /chatSkinPick\(|ptyWrite/, `${s.name} must not write to the pty`);
 });
+
+// ── dialogs as cards: a button per option, one chokepoint for the key, nothing sent without the operator ───────
+
+interface DialogHarness {
+  cs: Record<string, any>; p: Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+  prompt: (ev: Record<string, unknown>) => void; pick: (i: number) => void; key: (e: Record<string, unknown>) => void; sendKey: (key: string) => boolean;
+  /** Everything the skin wrote to the pty, with the delay it was scheduled at (0 = at once). */
+  writes: Array<{ id: number; data: string; at: number }>; flush: (upToMs?: number) => void; calls: string[];
+}
+/** The card code (prompt events, the card, its keys, the answer) from the real source, wired to stand-ins. */
+function dialogHarness(src: string = app): DialogHarness {
+  const from = src.indexOf('const chatSkinCardOn');
+  const to = src.indexOf('/* ── actions');
+  assert.ok(from > 0 && to > from, 'the dialog block was found');
+  const pull = (re: RegExp): string => { const m = re.exec(src); assert.ok(m, `source line ${re} found`); return m[0]; };
+  const consts = [pull(/const CS_KEY_GAP_MS = [^\n]+/), pull(/const CS_RETRY_MS = [^\n]+/), pull(/const CHAT_KEY_OK = [^\n]+/), pull(/const CHAT_KEY_CHUNK = [^\n]+/), pull(/const CHAT_PROMPT_KINDS = [^\n]+/)].join('\n');
+  const writes: DialogHarness['writes'] = [];
+  const calls: string[] = [];
+  const timers: Array<{ fn: () => void; ms: number }> = [];
+  let clock = 0;
+  const log = new Dn('div', 'chat-log'); const workEl = new Dn('div', 'cs-working'); log.append(workEl);
+  const input = new Dn('textarea');
+  const p: Record<string, any> = { name: 'chat-qa', view: 'chat', exited: false, term: { focus: () => calls.push('term.focus'), blur: () => undefined } }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const cs: Record<string, any> = { id: 7, pane: p, log, workEl, input, promptKind: null, promptHint: '', promptQ: '', promptOpts: null, promptUsed: false, promptTerm: false, promptGen: 0, dlg: null, dlgSig: '', stick: true, stalled: false }; // eslint-disable-line @typescript-eslint/no-explicit-any
+  p.chatSkin = cs;
+  const panes = new Map([[7, p]]);
+  const body = `${consts}
+function chatSkinLayout(p) { chatSkinCardPaint(p); calls.push('layout'); }
+function chatSkinPlaceholder(p) { p.chatSkin.input.placeholder = p.chatSkin.promptOpts ? 'waiting' : 'message'; }
+${src.slice(from, to)}
+return { prompt: chatSkinPrompt, pick: chatSkinPick, key: chatSkinCardKey, sendKey: chatSkinSendKey, strip: chatSkinStrip, on: chatSkinCardOn };`;
+  const make = new Function('el', 't', 'csIcon', 'panes', 'window', 'document', 'calls', 'setTimeout', 'requestAnimationFrame', 'paneShown', 'active', 'zoneOf', 'markActivity', 'toast', 'repaintTerm',
+    'chatSkinWho', 'chatSkinScroll', 'chatSkinRegroup', 'chatSkinPaintAlert', 'chatSkinFocus', 'submitToPty', body) as (...a: unknown[]) => { prompt: (id: number, p: unknown, ev: unknown) => void; pick: (id: number, p: unknown, i: number) => void; key: (cs: unknown, p: unknown, e: unknown) => void; sendKey: (id: number, p: unknown, k: string) => boolean };
+  const api = make((tag: string, cls?: string, text?: string) => new Dn(tag, cls, text), (k: string, a?: { name?: string }) => (a && a.name ? `${k}|${a.name}` : k), () => new Dn('span', 'cs-ico'),
+    panes, { glassShell: { ptyWrite: (id: number, data: string): void => { writes.push({ id, data, at: clock }); } } }, { hidden: false, get activeElement() { return Dn.active; } }, calls,
+    (fn: () => void, ms: number) => { timers.push({ fn, ms: clock + ms }); return timers.length; }, (fn: () => void) => { fn(); return 0; },
+    () => true, { term: 7 }, () => 'term', () => undefined, () => undefined, () => undefined,
+    (pp: { name?: string }) => pp.name ?? 'Claude', () => undefined, () => undefined, () => undefined, () => undefined,
+    (id: number, text: string) => { writes.push({ id, data: text + '\r', at: -1 }); });   // submitToPty: text THEN a CR — what a digit must never get
+  return {
+    cs, p, writes, calls,
+    prompt: (ev) => api.prompt(7, p, { type: 'prompt', ...ev }), pick: (i) => api.pick(7, p, i), key: (e) => api.key(cs, p, { isComposing: false, altKey: false, metaKey: false, ctrlKey: false, preventDefault: () => undefined, ...e }),
+    sendKey: (k) => api.sendKey(7, p, k),
+    flush: (upToMs = Infinity) => { timers.sort((a, b) => a.ms - b.ms); while (timers.length && timers[0].ms <= upToMs) { const t0 = timers.shift()!; clock = t0.ms; t0.fn(); } },
+  };
+}
+const PERMISSION = { kind: 'permission', hint: 'Do you want to proceed?', question: 'Do you want to proceed?', options: [
+  { n: 1, label: 'Yes', selected: true, key: '1' },
+  { n: 2, label: "Yes, and don't ask again for npm test commands", selected: false, key: '2' },
+  { n: 3, label: 'No, and tell the assistant what to do differently', selected: false, key: '3' }] };
+const MENU = { kind: 'select', hint: 'Pick one', question: 'Pick one', options: [
+  { n: null, label: 'Keep the current value', selected: true, key: '\r' },
+  { n: null, label: 'Use the new value', selected: false, key: '\x1b[B\r' }] };
+
+guarded('a dialog with readable options is a card: a group named for the session, the question as text, one button per option, the cursor\'s option marked, a way to the real terminal',
+  (src) => {
+    const h = dialogHarness(src);
+    h.prompt(PERMISSION);
+    const card = h.cs.dlg as Dn | null;
+    if (!card) return false;
+    const btns = card.querySelectorAll('.csd-opt');
+    return card.getAttribute('role') === 'group' && card.getAttribute('aria-label') === 'chat.skin.dlg.label|chat-qa' && btns.length === 3
+      && btns.map((b) => b.querySelector('.csd-n')!.textContent).join(',') === '1,2,3' && btns[0].classList.contains('def') && !btns[1].classList.contains('def')
+      && card.querySelector('.csd-q')!.textContent === 'Do you want to proceed?' && card.querySelector('.csd-kind')!.textContent === 'chat.skin.dlg.kind.permission|chat-qa'
+      && card.querySelector('.csd-link')!.textContent === 'chat.skin.dlg.viewTerminal' && h.writes.length === 0;
+  },
+  (src) => src.replace("card.setAttribute('role', 'group');", ''));
+
+guarded('a dialog whose options were not read — absent, empty, or with one key that is not a digit, an arrow or Enter — keeps the terminal strip, exactly as before',
+  (src) => {
+    const cases: Array<Record<string, unknown>> = [
+      { kind: 'permission', hint: 'Do you want to proceed?' },
+      { kind: 'permission', hint: 'Do you want to proceed?', options: [] },
+      { kind: 'permission', hint: 'Do you want to proceed?', options: [{ n: 1, label: 'Yes', selected: true, key: '1' }, { n: 2, label: 'No', selected: false, key: 'rm -rf ~\r' }] },
+      { kind: 'permission', hint: 'Do you want to proceed?', options: [{ n: 1, label: 'Yes', selected: true, key: '1' }, { n: 2, label: 42, selected: false, key: '2' }] },
+    ];
+    return cases.every((c) => {
+      const h = dialogHarness(src);
+      h.prompt(c);
+      return h.cs.dlg === null && h.cs.promptOpts === null && h.cs.promptKind === 'permission' && h.writes.length === 0
+        && (h.cs.log as Dn).children.every((n) => !n.classList.contains('cs-dlg'));
+    });
+  },
+  (src) => src.replace("typeof o.key !== 'string' || !CHAT_KEY_OK.test(o.key)) return null;", "typeof o.key !== 'string') return null;"));
+
+test('the layout decides strip or card from ONE rule: a card is drawn, the strip is not, and the other way round', () => {
+  const h = dialogHarness();
+  h.prompt(PERMISSION);
+  assert.equal(h.cs.promptOpts.length, 3);
+  assert.ok(h.cs.dlg, 'a card');
+  const strip = (): boolean => new Function('cs', `${/const chatSkinCardOn = [^\n]+\nconst chatSkinStrip = [^\n]+/.exec(app)![0]}\nreturn chatSkinStrip(cs);`)(h.cs) as boolean;
+  assert.equal(strip(), false, 'a card: the xterm stays hidden');
+  h.cs.promptTerm = true;
+  assert.equal(strip(), true, '"View in the terminal" brings the real strip');
+  h.cs.promptOpts = null; h.cs.promptTerm = false;
+  assert.equal(strip(), true, 'no options: the strip');
+  h.cs.promptKind = null;
+  assert.equal(strip(), false, 'no dialog: neither');
+  assert.match(fnBody(skin, 'chatSkinLayout'), /classList\.toggle\('cs-strip', on && chatSkinStrip\(cs\)\)/);
+  assert.match(fnBody(skin, 'chatSkinPaintAlert'), /chatSkinCardOn\(cs\) \? '' :/, 'a card is its own notice');
+});
+
+guarded('a click sends exactly the option\'s key — one write for a digit, one write per piece for arrows and Enter — through the key chokepoint, never as text followed by a CR',
+  (src) => {
+    const h = dialogHarness(src);
+    h.prompt(PERMISSION);
+    h.pick(2);                                   // "No, and tell…": key '3'
+    h.flush();
+    const digit = h.writes.length === 1 && h.writes[0].data === '3' && h.writes[0].id === 7;
+    const h2 = dialogHarness(src);
+    h2.prompt(MENU);
+    h2.pick(1);                                  // an unnumbered menu: arrow down, then Enter, as two writes a moment apart
+    h2.flush();
+    const arrows = h2.writes.length === 2 && h2.writes[0].data === '\x1b[B' && h2.writes[1].data === '\r' && h2.writes[1].at > h2.writes[0].at;
+    return digit && arrows && [...h.writes, ...h2.writes].every((w) => /^(?:\x1b\[[AB]|\r|[0-9])$/.test(w.data));
+  },
+  (src) => src.replace('  chatSkinSendKey(id, p, o.key);', '  submitToPty(id, o.key);'));
+
+guarded('nothing but a digit, an arrow or Enter can ever come out of the key path, whatever a parser or a hostile screen put in an option',
+  (src) => {
+    const h = dialogHarness(src);
+    const bad = ['rm -rf ~', '1\rrm', '\x1b', '\x1b[2J', 'y', '', '1 ', '\x03'];
+    const refused = bad.every((k) => h.sendKey(k) === false);
+    const ok = h.sendKey('2') === true && h.sendKey('\x1b[A\r') === true;
+    h.flush();
+    return refused && ok && h.writes.map((w) => w.data).join('|') === '2|\x1b[A|\r';
+  },
+  (src) => src.replace("if (typeof key !== 'string' || !CHAT_KEY_OK.test(key)) return false;", "if (typeof key !== 'string') return false;"));
+
+guarded('a double click answers once: the card is used and disabled until the next dialog event; a moved cursor keeps it used but adopts the new keys; a new dialog is a fresh card',
+  (src) => {
+    const h = dialogHarness(src);
+    h.prompt(MENU);
+    h.pick(0); h.pick(0); h.pick(1);
+    h.flush(1000);
+    const once = h.writes.length === 1 && h.writes[0].data === '\r';
+    const used = h.cs.promptUsed === true && (h.cs.dlg as Dn).querySelectorAll('.csd-opt').every((b) => b.disabled);
+    // the cursor moved in the terminal: the SAME dialog, new keys and a new default — still used, nothing re-enabled, nothing sent
+    h.prompt({ ...MENU, refresh: true, options: [{ ...MENU.options[0], selected: false, key: '\x1b[A\r' }, { ...MENU.options[1], selected: true, key: '\r' }] });
+    const refreshed = h.cs.promptUsed === true && h.cs.promptOpts[1].key === '\r' && (h.cs.dlg as Dn).querySelectorAll('.csd-opt')[1].classList.contains('def') && h.writes.length === 1;
+    // the NEXT dialog (a different question) is a new, enabled card
+    h.prompt({ ...PERMISSION });
+    const fresh = h.cs.promptUsed === false && (h.cs.dlg as Dn).querySelectorAll('.csd-opt').every((b) => !b.disabled) && (h.cs.dlg as Dn).querySelectorAll('.csd-opt').length === 3;
+    return once && used && refreshed && fresh;
+  },
+  (src) => src.replace('  cs.promptUsed = true;\n  const gen', '  const gen'));
+
+test('a used card whose dialog is still up after a while is re-armed, and one that was answered is not', () => {
+  const h = dialogHarness();
+  h.prompt(PERMISSION);
+  h.pick(0);
+  h.flush(2000);
+  assert.equal(h.cs.promptUsed, true, 'still used a moment later');
+  h.flush(7000);
+  assert.equal(h.cs.promptUsed, false, 'the key never landed: the operator can answer again');
+  const g = dialogHarness();
+  g.prompt(PERMISSION);
+  g.pick(0);
+  g.prompt({ kind: null });                      // the dialog went away: answered
+  g.flush(7000);
+  assert.equal(g.cs.dlg, null);
+  assert.equal(g.cs.promptUsed, false);
+  assert.equal(g.writes.length, 1, 'and nothing was sent a second time');
+});
+
+guarded('the card writes NOTHING on its own: drawing it, refreshing its keys, focusing it, a quiet period and the dialog going away send no key',
+  (src) => {
+    const h = dialogHarness(src);
+    h.prompt(PERMISSION);
+    h.prompt({ ...PERMISSION, refresh: true });
+    h.prompt({ ...MENU });
+    h.prompt({ ...MENU, refresh: true });
+    h.key({ key: 'ArrowDown' });
+    h.key({ key: 'Tab' });
+    h.flush();
+    h.prompt({ kind: null });
+    h.flush();
+    return h.writes.length === 0;
+  },
+  (src) => src.replace("  chatSkinCardSync(cs);\n}\nfunction chatSkinCardBuild", "  chatSkinCardSync(cs);\n  if (cs.promptOpts.some((o) => o.selected) && !cs.promptUsed) chatSkinPick(cs.id, p, cs.promptOpts.findIndex((o) => o.selected));\n}\nfunction chatSkinCardBuild"));
+
+guarded('the keyboard: a digit presses that option (an unnumbered menu counts 1, 2, 3 from the top), arrows move focus, and a chord is left alone',
+  (src) => {
+    const h = dialogHarness(src);
+    h.prompt(PERMISSION);
+    h.key({ key: '2' });
+    h.flush();
+    const digit = h.writes.length === 1 && h.writes[0].data === '2';
+    const m = dialogHarness(src);
+    m.prompt(MENU);
+    m.key({ key: '9' });                        // no option 9
+    m.key({ key: '2', ctrlKey: true });         // a chord is not the operator choosing
+    m.flush();
+    const quiet = m.writes.length === 0;
+    m.key({ key: '2' });
+    m.flush();
+    const byPosition = m.writes.map((w) => w.data).join('|') === '\x1b[B|\r';
+    const f = dialogHarness(src);
+    f.prompt(PERMISSION);
+    const btns = (f.cs.dlg as Dn).querySelectorAll('.csd-opt');
+    btns[0].focus();
+    f.key({ key: 'ArrowDown' });
+    const down = Dn.active === btns[1];
+    f.key({ key: 'ArrowUp' }); f.key({ key: 'ArrowUp' });
+    const wrap = Dn.active === btns[2];
+    return digit && quiet && byPosition && down && wrap && f.writes.length === 0;
+  },
+  (src) => src.replace('const b = btns.find((x) => x.dataset.num === e.key);', 'const b = btns.find((x) => x.dataset.num === "0");'));
+
+test('an option that asks for typing only gets its key, and the live terminal comes forward so the operator can type', () => {
+  const h = dialogHarness();
+  h.prompt({ kind: 'question', hint: 'Which?', question: 'Which?', options: [
+    { n: null, label: 'The first', selected: true, key: '\r' },
+    { n: null, label: 'Type something.', selected: false, key: '\x1b[B', freeText: true }] });
+  h.pick(1);
+  h.flush();
+  assert.deepEqual(h.writes.map((w) => w.data), ['\x1b[B'], 'the arrow only: no Enter, which would submit an empty answer');
+  assert.equal(h.cs.promptTerm, true);
+  assert.ok(h.calls.includes('term.focus'), 'the xterm takes the focus');
+  assert.equal(h.cs.dlg, null, 'the card steps aside for the strip');
+  // control: an ordinary option does not bring the terminal
+  const g = dialogHarness();
+  g.prompt(MENU); g.pick(0);
+  assert.equal(g.cs.promptTerm, false);
+});
+
+test('"View in the terminal" shows the strip without answering anything, and the way back restores the buttons', () => {
+  const h = dialogHarness();
+  h.prompt(PERMISSION);
+  const link = (h.cs.dlg as Dn).querySelector('.csd-link')!;
+  link.click();
+  assert.equal(h.cs.promptTerm, true);
+  assert.equal(h.writes.length, 0, 'looking is not answering');
+  assert.equal(h.cs.dlg, null);
+  assert.equal(h.cs.promptOpts.length, 3, 'the options are kept for the way back');
+  assert.match(fnBody(skin, 'chatSkinPaintAlert'), /cs\.alertBack\.hidden = !\(cs\.promptKind && cs\.promptOpts && cs\.promptTerm\)/);
+  assert.match(skin, /alertBack\.addEventListener\('click', \(\) => \{ cs\.promptTerm = false;/);
+});
+
+guarded('only chatSkinPick answers a dialog, and only chatSkinSendKey writes its key: no other call site, no timer, no event handler',
+  (src) => {
+    const s = slice(src);
+    const callsOfSend = [...s.matchAll(/chatSkinSendKey\(/g)].length;      // the definition + the one call
+    const callsOfPick = [...s.matchAll(/chatSkinPick\(/g)].map((m) => m.index as number);
+    const insidePick = fnBody(s, 'chatSkinPick');
+    const pickCallers = [fnBody(s, 'chatSkinCardBuild'), fnBody(s, 'chatSkinCardKey')];
+    return callsOfSend === 2 && /chatSkinSendKey\(id, p, o\.key\)/.test(insidePick)
+      && pickCallers.every((b) => /chatSkinPick\(/.test(b)) && callsOfPick.length === 3   // the definition + the click handler + the digit key
+      && !/chatSkinPick\(/.test(fnBody(s, 'chatSkinPrompt')) && !/chatSkinPick\(/.test(fnBody(s, 'chatSkinCardPaint')) && !/chatSkinPick\(/.test(fnBody(s, 'chatSkinHandleEvent'));
+  },
+  (src) => src.replace('function chatSkinPrompt(id, p, ev) {\n  const cs = p.chatSkin;', 'function chatSkinPrompt(id, p, ev) {\n  const cs = p.chatSkin;\n  if (ev.auto) chatSkinPick(id, p, 0);'));
+
+test('dialog cards: every string is a locale key with the session\'s name in it where a name appears, in en, es and pt-br', () => {
+  const kinds = ['permission', 'trust', 'select', 'question', 'model', 'other'];
+  const keys = [...skin.matchAll(/\bt\('(chat\.skin\.dlg\.[\w.]+)'/g)].map((m) => m[1]).filter((k) => !k.endsWith('.'));
+  for (const k of kinds) keys.push(`chat.skin.dlg.kind.${k}`);
+  keys.push('chat.skin.needsYouHere');
+  assert.ok(new Set(keys).size >= 12, `found ${new Set(keys).size} keys`);
+  for (const l of Object.keys(loc)) for (const k of new Set(keys)) assert.ok(typeof loc[l][k] === 'string' && loc[l][k].length > 0, `${l}.json lacks ${k}`);
+  for (const l of Object.keys(loc)) for (const k of ['chat.skin.dlg.label', 'chat.skin.needsYouHere', ...kinds.map((x) => `chat.skin.dlg.kind.${x}`)]) {
+    assert.match(loc[l][k], /\{name\}/, `${l} ${k} names the session`);
+    assert.doesNotMatch(loc[l][k], /Claude/, `${l} ${k} must not hardcode the product name`);
+  }
+  assert.match(fnBody(skin, 'chatSkinCardBuild'), /t\('chat\.skin\.dlg\.label', \{ name: who \}\)/);
+  assert.match(fnBody(skin, 'chatSkinCardBuild'), /const who = chatSkinWho\(p\)/);
+  // control: a locale that dropped the name is caught by the same pattern
+  assert.doesNotMatch('Asks for permission', /\{name\}/);
+});
+
+test('the dialog card is the house component set: blue (--st-input), a neutral default, no coral, a hover and a focus ring, and nothing minted in the card\'s own rules', () => {
+  const all = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const card = /\.cs-dlg \{[^}]*\}/.exec(all)?.[0] ?? '';
+  assert.match(card, /--sc: var\(--st-input\)/);
+  assert.doesNotMatch(card, /--accent/);
+  for (const sel of ['.csd-opt', '.csd-opt.def', '.csd-opt:hover:not(:disabled)', '.csd-opt:disabled', '.csd-opt:focus-visible', '.csd-link']) {
+    const r = new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{[^}]*\\}`).exec(all)?.[0] ?? '';
+    assert.ok(r, `${sel} is styled`);
+    assert.doesNotMatch(r, /--accent|#[0-9a-fA-F]{3,8}\b/, `${sel}: no coral, no hex`);
+  }
+  assert.match(all, /\.csd-opt:focus-visible \{ outline: 2px solid var\(--chat-focus\)/);
+  assert.match(all, /@media \(prefers-reduced-motion: reduce\) \{ \.csd-opt \{ transition: none; \} \}/);
+});
+
+test('main forwards what the parser read of a dialog — the question and the options with their keys — bounded, and marks a moved cursor as a refresh, not a new dialog', () => {
+  const w = /ipcMain\.handle\('chatSkin:watch'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
+  const wire = /function promptWire\([\s\S]*?\n\}/.exec(main)?.[0] ?? '';
+  assert.match(w, /onChange: \(kind, hint, prompt\) => send\(\{ type: 'prompt', kind, \.\.\.\(hint \? \{ hint \} : \{\}\), \.\.\.promptWire\(prompt\) \}\)/);
+  assert.match(w, /onRefresh: \(prompt\) => send\(\{ type: 'prompt', kind: prompt\.kind,[^\n]*\.\.\.promptWire\(prompt\), refresh: true \}\)/);
+  assert.match(wire, /\.slice\(0, 12\)/, 'at most a dozen rows');
+  assert.match(wire, /label: String\(o\.label\)\.slice\(0, 200\)/);
+  assert.match(wire, /prompt\.question\.slice\(0, 300\)/);
+  assert.match(wire, /key: o\.key/, 'the key is the parser\'s, passed through untouched');
+  assert.doesNotMatch(wire, /key: [^o]|o\.key\s*[+=]/, 'main never edits or invents a key');
+  // a `null` dialog carries no options at all (nothing to draw once it is gone)
+  assert.match(wire, /if \(!prompt\) return \{\}/);
+  assert.match(preload, /\| \{ type: 'prompt'; kind: TuiPromptKind \| null; hint\?: string; question\?: string; options\?: TuiOption\[\]; refresh\?: boolean \}/);
+});
+
+test('chat-shot fixture: the permission card, the menu cards, the used card, the narrow card and the strip-with-a-way-back are shot in dark and light, from neutral, hand-written events', () => {
+  const byName = (n: string): FxShot | undefined => fixture.shots.find((s) => s.name === n);
+  for (const n of ['dialog-permission-dark', 'dialog-permission-light', 'dialog-menu-dark', 'dialog-menu-light',
+    'dialog-question-dark', 'dialog-question-light', 'dialog-permission-used-dark', 'dialog-terminal-dark', 'dialog-narrow-dark', 'dialog-narrow-light']) assert.ok(byName(n), `missing shot ${n}`);
+  // every dialog event carries options whose keys are what the renderer will accept (a digit, an arrow, Enter)
+  for (const n of ['permission-card', 'menu-card', 'question-card']) {
+    const pr = fixture.streams[n].find((e) => e.type === 'prompt') as FxEvent & { options: Array<{ label: string; key: string; selected: boolean }> };
+    assert.ok(pr && pr.options.length >= 3, `${n} has its options`);
+    assert.equal(pr.options.filter((o) => o.selected).length, 1, `${n}: one default`);
+    for (const o of pr.options) assert.match(o.key, /^(?:\x1b\[[AB]|\r|[0-9])+$/, `${n}: ${o.label} has a key the card accepts`);
+  }
+  assert.ok(fixture.streams['question-card'].some((e) => e.type === 'prompt' && (e.options as Array<{ freeText?: boolean }>).some((o) => o.freeText)), 'a typing option is shown too');
+  // the harness only feeds the skin: no shot clicks an option (that would write to the cat behind the pane)
+  for (const s of fixture.shots) assert.doesNotMatch([s.js].flat().join('\n'), /csd-opt[^\n]*click\(|chatSkinPick\(|ptyWrite/, `${s.name} must not answer a dialog`);
+  assert.match([byName('dialog-terminal-dark')?.js].flat().join('\n'), /\.csd-link'\)\.click\(\)/);
+});
+

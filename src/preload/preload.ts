@@ -3,7 +3,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { ChatStatus } from '../core/chatEvents';
 import type { SlashCommand } from '../core/slashCommands';
 import type { ChatItem } from '../core/transcriptChat';
-import type { TuiPromptKind } from '../core/tuiPrompt';
+import type { TuiPromptKind, TuiOption } from '../core/tuiPrompt';
 
 /** One row of the Connectors card. Mirrors main/connectors.ts ConnectorRow. */
 type ConnRow = {
@@ -15,7 +15,10 @@ type ConnRow = {
 type ConnResult = { ok: boolean; error?: string; row?: ConnRow };
 
 /** Events on 'chatSkin:event'. `reset` empties the view (before a backfill or on a file change);
- *  `items` upserts by uuid; `prompt` with kind null means the terminal dialog is gone. `stream` is the
+ *  `items` upserts by uuid; `prompt` with kind null means the terminal dialog is gone. A prompt that
+ *  carries `options` (and usually `question`) was read well enough to draw as buttons: each option has the
+ *  `key` that picks it, which the card writes to the pty ONLY on the operator's click or key. `refresh`
+ *  marks the same dialog with its cursor moved (new `selected`/`key`s), not a new dialog. `stream` is the
  *  reply being written, read off the screen (core/screenStream): a string is the preview so far, null is
  *  "nothing is being written now" (keep the preview frozen), and `adopt` names the transcript item that IS
  *  the previewed message (it arrives in the next `items` event and takes the preview's place). */
@@ -24,7 +27,7 @@ type ChatSkinEvent = { paneId: number } & (
   | { type: 'items'; items: ChatItem[] }
   | { type: 'turn'; open: boolean }
   | { type: 'usage'; contextTokens?: number; model?: string }
-  | { type: 'prompt'; kind: TuiPromptKind | null; hint?: string }
+  | { type: 'prompt'; kind: TuiPromptKind | null; hint?: string; question?: string; options?: TuiOption[]; refresh?: boolean }
   | { type: 'stream'; text: string; anchor: string; headCut: boolean }
   | { type: 'stream'; text: null; adopt?: string }
   | { type: 'missing' }
