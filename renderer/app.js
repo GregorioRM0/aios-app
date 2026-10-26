@@ -7093,7 +7093,6 @@ Object.assign(ICONS, {
   alert: '<path d="M10.3 3.9 2.4 17.5a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9.5v4"/><path d="M12 17h.01"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
   chevUpDown: '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
-  textSize: '<path d="M3 19 8.5 5 14 19"/><path d="M5 14.5h7"/><path d="M15.5 19l2.8-7 2.7 7"/><path d="M16.6 16.7h3.4"/>',
 });
 /* An icon as an element. The markup comes from the static ICONS table above, never from model text,
    which is why this is one of the very few innerHTML writes in the skin (see chatSkin.test.ts). */
@@ -7214,35 +7213,14 @@ function chatDecorate(frag) {
   }
 }
 
-/* ── preferences: font + size ─────────────────────────────────────────────── */
+/* ── preferences: font + size ───────────────────────────────────────────────
+   They are CHOSEN in Settings (openSettingsTab); the chat view only applies them. */
 function chatApplyPrefs() {
   for (const p of panes.values()) if (p.chatSkin) chatStyleSkin(p.chatSkin);
 }
 function chatStyleSkin(cs) {
   cs.root.style.setProperty('--chat-font', chatPrefs.family || 'inherit');   // '' = follow the app's own font
   cs.root.style.setProperty('--chat-size', String(chatPrefs.size));
-  // a stack or a size saved by hand in the config stays selectable (as an extra entry) rather than being silently replaced
-  if (cs.fontList) chatSkinCheck(cs.fontList, chatPrefs.family, (v) => chatSkinOpt(v, v, v));
-  if (cs.sizeList) chatSkinCheck(cs.sizeList, String(chatPrefs.size), (v) => chatSkinOpt(v, v));
-}
-/* The settings menu is two radio groups of buttons (font, size). One option is built by chatSkinOpt;
-   chatSkinCheck marks the one that matches the saved value (adding it if the value is not on the list)
-   and keeps a roving tabindex, so Tab enters the group once and the arrows move inside it. */
-function chatSkinOpt(value, label, family) {
-  const b = el('button', 'csm-opt');
-  b.type = 'button';
-  b.setAttribute('role', 'radio');
-  b.dataset.value = value;
-  b.appendChild(el('span', 'csm-t', label));
-  if (family !== undefined) b.style.fontFamily = family || 'inherit';   // each font is drawn in itself
-  else b.classList.add('csm-num');
-  b.appendChild(csIcon('check', 13));
-  return b;
-}
-function chatSkinCheck(list, value, make) {
-  let hit = [...list.children].find((b) => b.dataset.value === value);
-  if (!hit) { hit = make(value); list.appendChild(hit); }
-  for (const b of list.children) { b.setAttribute('aria-checked', String(b === hit)); b.tabIndex = b === hit ? 0 : -1; }
 }
 function chatReadPrefs(c) {
   if (!c) return;
@@ -7414,40 +7392,9 @@ function chatSkinBuild(id, p) {
   root.setAttribute('role', 'region');
   root.setAttribute('aria-label', t('chat.skin.logLabel'));
 
-  const head = el('div', 'cs-head');
-  const sw = el('div', 'cs-switch');
-  sw.setAttribute('role', 'group');
-  sw.setAttribute('aria-label', t('chat.skin.switchLabel'));
-  const swTerm = el('button', 'cs-sw', t('chat.skin.terminalTab'));
-  swTerm.title = t('chat.skin.toTerminal');
-  const swChat = el('button', 'cs-sw on', t('chat.skin.chatTab'));
-  swChat.setAttribute('aria-pressed', 'true');
-  swTerm.setAttribute('aria-pressed', 'false');
-  sw.append(swTerm, swChat);
-  /* Font and size live behind one small button (Aa) instead of two always-visible selects: reading
-     settings are set once and then in the way. The popover closes with Esc or a click outside, and Esc
-     there must NOT reach the handler that cuts the running turn (see the keydown listeners below). */
-  const gear = el('button', 'cs-gear');
-  gear.type = 'button';
-  gear.append(csIcon('textSize', 17));
-  gear.title = t('chat.settings.label'); gear.setAttribute('aria-label', t('chat.settings.label'));
-  gear.setAttribute('aria-haspopup', 'dialog'); gear.setAttribute('aria-expanded', 'false');
-  const menu = el('div', 'cs-menu');
-  menu.id = 'cs-menu-' + id;
-  menu.hidden = true;
-  menu.setAttribute('role', 'dialog');
-  menu.setAttribute('aria-label', t('chat.settings.label'));
-  gear.setAttribute('aria-controls', menu.id);
-  const fontList = el('div', 'csm-list');
-  fontList.setAttribute('role', 'radiogroup'); fontList.setAttribute('aria-label', t('chat.font.label'));
-  for (const f of CHAT_FONTS) fontList.appendChild(chatSkinOpt(f.stack, t(f.label), f.stack));
-  const sizeList = el('div', 'csm-sizes');
-  sizeList.setAttribute('role', 'radiogroup'); sizeList.setAttribute('aria-label', t('chat.size.label'));
-  for (const s of CHAT_SIZES) sizeList.appendChild(chatSkinOpt(String(s), String(s)));
-  menu.append(el('div', 'csm-h', t('chat.font.label')), fontList, el('div', 'csm-h', t('chat.size.label')), sizeList, el('div', 'csm-sample', t('chat.settings.sample')));
-  head.append(sw, el('span', 'cs-fill'), gear, menu);
-  /* The status bar lives UNDER the composer (built further down, in the compose block): the header is for
-     switching view and reading settings, and what answers, and what it costs, belongs next to the box it is the cost of. */
+  /* The pane has no header: the view is switched from the tab's own icon (chatSkinMountToggle), the shortcut and the menu, and the
+     font lives in Settings. What answers, and what it costs, is the status bar UNDER the composer (built further down, in the
+     compose block), next to the box it is the cost of. */
   const barParts = {};
   const bar = el('div', 'chat-bar');
   bar.setAttribute('role', 'group');
@@ -7609,14 +7556,12 @@ function chatSkinBuild(id, p) {
   meta.appendChild(bar);
   compose.append(jumpBtn, wrap, meta);
 
-  root.append(head, log, alertEl, compose);
+  root.append(log, alertEl, compose);
   p.el.appendChild(root);
 
   const cs = {
-    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateTips, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, alertBack, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, compose, box, wrap, meta, bar, barParts, modelSeg,
-    menuOpen: false, menuOff: null,
+    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateTips, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, alertBack, input, sendBtn, stopBtn, jumpBtn, compose, box, wrap, meta, bar, barParts, modelSeg,
     slash: { open: false, items: [], index: 0, seq: 0, pop: slashPop, list: slashList },   // the slash popup: see chatSkinSlashRefresh
-    swTerm, swChat,
     items: new Map(),            // transcript uuid -> { node, role, … }
     status: {}, model: '', ctxTokens: undefined, statusAt: 0,
     watched: null,               // the sessionId main is tailing for this pane, or null
@@ -7662,14 +7607,6 @@ function chatSkinBuild(id, p) {
     e.preventDefault();
     chatSkinSendNow(id, p);
   });
-  /* Registered BEFORE the interrupt listener below and stopping the event for it: while the settings menu
-     is open, Esc closes the menu and nothing else. Without this the same keystroke would also write a
-     lone ESC to the pty and cut the turn Claude is in the middle of. */
-  root.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || !cs.menuOpen) return;
-    e.preventDefault(); e.stopImmediatePropagation();
-    chatSkinMenu(cs, false, true);
-  });
   /* Same rule for the slash popup: Esc closes it and nothing else, so the keystroke that dismisses a menu never
      also reaches the listener below that cuts the turn Claude is in the middle of. */
   root.addEventListener('keydown', (e) => {
@@ -7686,56 +7623,10 @@ function chatSkinBuild(id, p) {
   sendBtn.addEventListener('click', () => chatSkinSendNow(id, p));
   modelSeg.addEventListener('click', () => chatSkinModelMenu(id, p));
   stopBtn.addEventListener('click', () => chatSkinInterrupt(id, p));
-  swTerm.addEventListener('click', () => chatSkinSetView(id, 'term'));
   alertBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
   alertBack.addEventListener('click', () => { cs.promptTerm = false; chatSkinLayout(p); try { p.term.blur(); } catch { /* disposed */ } chatSkinCardFocus(cs); });
   stateBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));
-  gear.addEventListener('click', () => chatSkinMenu(cs, !cs.menuOpen));
-  fontList.addEventListener('click', (e) => {
-    const b = e.target instanceof Element ? e.target.closest('[role="radio"]') : null;
-    if (!b) return;
-    chatPrefs.family = b.dataset.value || '';
-    chatApplyPrefs();
-    void Promise.resolve(window.glassShell.setSetting('chatFontFamily', chatPrefs.family)).catch(() => {});
-  });
-  sizeList.addEventListener('click', (e) => {
-    const b = e.target instanceof Element ? e.target.closest('[role="radio"]') : null;
-    const v = b ? Number(b.dataset.value) : NaN;
-    if (!Number.isFinite(v)) return;
-    chatPrefs.size = v;
-    chatApplyPrefs();
-    void Promise.resolve(window.glassShell.setSetting('chatFontSize', v)).catch(() => {});
-  });
-  for (const list of [fontList, sizeList]) list.addEventListener('keydown', (e) => {
-    // radio-group keys: the arrows move AND select, Home/End jump
-    const keys = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 };
-    const opts = [...list.children];
-    const at = opts.indexOf(document.activeElement);
-    if (at < 0 || !(e.key in keys || e.key === 'Home' || e.key === 'End')) return;
-    e.preventDefault();
-    const to = e.key === 'Home' ? 0 : e.key === 'End' ? opts.length - 1 : (at + keys[e.key] + opts.length) % opts.length;
-    opts[to].focus(); opts[to].click();
-  });
   return cs;
-}
-
-/* Open or close the settings popover. While open, a pointer press anywhere outside it (and outside
-   the button that owns it) closes it; the listener lives on the document only for that time. */
-function chatSkinMenu(cs, open, refocus) {
-  if (cs.menuOpen === open) return;
-  cs.menuOpen = open;
-  cs.menu.hidden = !open;
-  cs.gear.setAttribute('aria-expanded', String(open));
-  if (cs.menuOff) { cs.menuOff(); cs.menuOff = null; }
-  if (open) {
-    const away = (e) => { if (e.target instanceof Node && !cs.menu.contains(e.target) && !cs.gear.contains(e.target)) chatSkinMenu(cs, false); };
-    document.addEventListener('pointerdown', away, true);
-    cs.menuOff = () => document.removeEventListener('pointerdown', away, true);
-    const on = cs.fontList.querySelector('[aria-checked="true"]');
-    if (on) try { on.focus({ preventScroll: true }); } catch { /* detached */ }
-  } else if (refocus) {
-    try { cs.gear.focus({ preventScroll: true }); } catch { /* detached */ }
-  }
 }
 
 /* ── the switch itself ───────────────────────────────────────────────────── */
@@ -7807,7 +7698,6 @@ function chatSkinLayout(p) {
   p.el.classList.toggle('view-chat', on);
   p.el.classList.toggle('cs-strip', on && chatSkinStrip(cs));
   cs.root.hidden = !on;
-  if (!on) chatSkinMenu(cs, false);   // a popover left open would keep a document listener alive behind a hidden view
   cs.input.disabled = !!cs.promptKind || !!p.exited;
   if (!on || cs.promptKind) chatSkinSlashClose(cs);   // a popup left open over a hidden or blocked composer would be a ghost
   chatSkinCardPaint(p);
@@ -7851,7 +7741,7 @@ function chatSkinPaintAlert(p) {
   cs.alertText.textContent = text;
   cs.alertEl.classList.toggle('prompt', !!cs.promptKind);
   cs.alertEl.title = cs.promptHint || '';
-  cs.alertBtn.hidden = !!cs.promptKind;   // under a dialog the terminal is already in front; the header switch is still there
+  cs.alertBtn.hidden = !!cs.promptKind;   // under a dialog the terminal is already in front; the tab's icon is still there
   cs.alertBack.hidden = !(cs.promptKind && cs.promptOpts && cs.promptTerm);   // the strip was chosen over a card that could be drawn: offer the way back to it
   const kind = cs.promptKind ? 'prompt' : 'stalled';
   if (text && cs.alertKind !== kind) {
@@ -7883,7 +7773,7 @@ function chatSkinPaintState(p) {
     cs.stateIco.replaceChildren(CHAT_STATE_ICONS[kind] ? csIcon(CHAT_STATE_ICONS[kind], 20) : el('span', 'ct-spin'));
   }
 }
-/* The toggle on the tab (plus the header switch inside the overlay). Shown for panes that run
+/* The toggle on the tab: the one control that switches the view. Shown for panes that run
    Claude only; pressed state mirrors the view. */
 function chatSkinPaintToggle(p) {
   const on = p.view === 'chat';
@@ -7896,17 +7786,12 @@ function chatSkinPaintToggle(p) {
     p.viewBtn.title = label;
     p.viewBtn.setAttribute('aria-label', label);
   }
-  const cs = p.chatSkin;
-  if (cs) {
-    cs.swTerm.setAttribute('aria-pressed', String(!on));
-    cs.swChat.setAttribute('aria-pressed', String(on));
-  }
 }
 function chatSkinMountToggle(id, p) {
   const b = el('span', 'tview');
   b.setAttribute('role', 'button');
   b.tabIndex = -1;   // a focusable control inside a <button> tab is an a11y trap; the keyboard path is the menu item (⌘⇧L)
-  b.innerHTML = icon('chat', 12);
+  b.innerHTML = icon('chat', 14);
   const go = (e) => { e.preventDefault(); e.stopPropagation(); setActive(id); chatSkinToggle(id); };
   b.addEventListener('click', go);
   b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); });

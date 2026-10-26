@@ -1604,20 +1604,19 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .chatskin[hidden], .chatskin [hidden] { display: none !important; }
 .pane.cs-strip > .chatskin { bottom: var(--cs-strip-h, 62%); min-height: 120px; border-bottom: 1px solid var(--line-strong); border-radius: 12px 12px 0 0; }
 .pane.cs-strip > .chatskin .chat-bar, .pane.cs-strip > .chatskin .cc-meta, .pane.cs-strip > .chatskin .chat-compose, .pane.cs-strip > .chatskin .cs-working { display: none; }   /* the whole compose block (status bar included) steps aside for a live dialog */
-.cs-head { position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 9px 14px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
-.cs-fill { flex: 1; }
-/* The Terminal | Chat switch: a small segmented pill. The active half is a raised chip, not a coral underline —
-   coral stays for actions, and "which view am I in" is already clear from what is on screen. */
-.cs-switch { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 9px; background: var(--chat-out-bg); }
-.cs-sw { background: transparent; border: 0; border-radius: 7px; color: var(--subtle); font-family: var(--font); font-size: 12px; padding: 4px 12px; cursor: pointer; transition: background .15s ease, color .15s ease; }
-.cs-sw:hover { color: var(--ink); }
-.cs-sw:focus-visible { color: var(--ink); outline: 2px solid var(--chat-focus); outline-offset: 1px; }
-.cs-sw[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); box-shadow: var(--edge), var(--chat-lift); }   /* lifted by a soft shadow, not a second outline inside the switch's own border */
-@media (prefers-reduced-motion: reduce) { .cs-sw { transition: none; } }
-.tab .tview { display: inline-flex; align-items: center; color: var(--faint); border-radius: 4px; padding: 1px; cursor: pointer; }
-.tab .tview:hover, .tab .tview:focus-visible { color: var(--accent-ink); outline: none; }
-.tab .tview.on { color: var(--accent-ink); }
+/* The Terminal ⇄ Chat switch lives HERE and nowhere in the pane (the chat view has no header). It has to read as a button, not as
+   a decoration of the tab: a 22 px square with its own hover fill, a pointer, and — when the chat view is up — a tinted chip with a
+   hairline ring, so "this tab is in chat" is a shape and not only a colour (it must hold in both themes: the tint is a mix against
+   the theme's own transparent, the ring against the accent). Coral is allowed here because clicking it does something. */
+.tab .tview { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 22px; height: 22px; box-sizing: border-box; margin: 0 -2px 0 0; padding: 0;
+              border-radius: 7px; color: var(--subtle); cursor: pointer; transition: background .14s ease, color .14s ease, box-shadow .14s ease; }
+.tab .tview:hover { background: var(--chat-row-hover); color: var(--ink); }
+.tab .tview:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 1px; color: var(--ink); }
+.tab .tview:active { background: var(--line); }
+.tab .tview.on { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent-ink); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent); }
+.tab .tview.on:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); color: var(--accent-ink); }
 .tab .tview[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .tab .tview { transition: none; } }
 .cs-working { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin: var(--cs-m) 0 0; color: var(--subtle); font-size: .88em; }
 .cw-dots { display: inline-flex; align-items: center; gap: 4px; height: 14px; }
 .cw-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--st-busy); animation: cs-wave 1.3s ease-in-out infinite; }
@@ -1731,30 +1730,6 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 @keyframes cs-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ct-spin { animation: none; } .ct-chev { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .cw-dots i { animation: none; } }
-/* ── reading settings: an Aa button in the header that opens a small popover (font, size) ── */
-.cs-gear { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px;
-           background: transparent; color: var(--subtle); cursor: pointer; transition: background .15s ease, color .15s ease; }
-.cs-gear:hover, .cs-gear[aria-expanded="true"] { background: var(--chat-row-hover); color: var(--ink); }
-.cs-gear:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 1px; color: var(--ink); }
-.cs-menu { position: absolute; z-index: 6; top: calc(100% + 6px); right: 12px; width: min(292px, calc(100% - 24px)); box-sizing: border-box; padding: 12px;
-           background: var(--chat-composer-bg); border: 1px solid var(--chat-composer-line); border-radius: 14px; box-shadow: var(--chat-pop); font-size: 13px; }
-.csm-h { margin: 2px 4px 6px; color: var(--faint); font-size: 11.5px; font-weight: 600; }
-.csm-h:not(:first-child) { margin-top: 12px; }
-.csm-list { display: flex; flex-direction: column; gap: 1px; }
-.csm-opt { display: flex; align-items: center; justify-content: space-between; gap: 10px; box-sizing: border-box; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px;
-           background: transparent; color: var(--ink); font-size: 13px; text-align: left; cursor: pointer; }
-.csm-opt:hover { background: var(--chat-row-hover); }
-.csm-opt:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: -2px; }
-.csm-opt .cs-ico { visibility: hidden; color: var(--subtle); }
-.csm-opt[aria-checked="true"] { background: var(--chat-row-hover); }
-.csm-opt[aria-checked="true"] .cs-ico { visibility: inherit; }
-.csm-sizes { display: flex; flex-wrap: wrap; gap: 4px; }
-.csm-sizes .csm-opt { width: auto; justify-content: center; min-width: 34px; height: 30px; padding: 0 6px; border: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
-.csm-sizes .csm-opt .cs-ico { display: none; }
-.csm-sizes .csm-opt[aria-checked="true"] { background: var(--ink); border-color: var(--ink); color: var(--surface); }
-.csm-sample { margin: 12px 2px 0; padding: 10px 12px; border-radius: 10px; background: var(--chat-out-bg); border: 1px solid var(--line);
-              color: var(--ink); font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px); line-height: 1.5; }
-@media (prefers-reduced-motion: reduce) { .cs-gear { transition: none; } }
 /* ── the status bar, under the composer: model · effort · 5 h · week · context ─────────────────────────────────
    One look: a rounded strip glued under the card, segments with dividers, so card and strip read as one object.
    Colour follows the percentage: neutral below 60, amber (.warn) from 60, red (.hot) from 85,

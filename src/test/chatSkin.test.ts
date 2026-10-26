@@ -245,9 +245,9 @@ guarded('a prompt event brings the REAL xterm forward with focus and a visible, 
   (src) => src.replace("alertEl.setAttribute('role', 'alert');", ''));
 
 test('there is always a way back to the terminal, and a stalled turn offers it', () => {
-  assert.match(skin, /swTerm\.addEventListener\('click', \(\) => chatSkinSetView\(id, 'term'\)\)/, 'the header switch');
   assert.match(skin, /alertBtn\.addEventListener\('click', \(\) => chatSkinSetView\(id, 'term'\)\)/, 'the notice button');
-  assert.match(skin, /p\.viewBtn = b;/, 'the tab button');
+  assert.match(skin, /p\.viewBtn = b;/, 'the tab button: the pane has no header switch any more, so this icon is the way back');
+  assert.match(fnBody(skin, 'chatSkinMountToggle'), /b\.addEventListener\('click', go\)/);
   // the safety net: open turn + live pty + silent transcript -> the stalled notice
   const tick = fnBody(skin, 'chatSkinTick');
   assert.match(tick, /cs\.turnOpen && now - \(p\.lastPtyAt \|\| 0\) < CS_WORKING_MS \* 2 && quiet > CS_STALL_MS/);
@@ -710,19 +710,6 @@ test('tool kinds: each family gets its glyph by name, anchored, and anything els
   for (const [, , ico] of [...table.matchAll(/\['(\w+)', \/[^/]+\/, '(\w+)'\]/g)].map((m) => [m[0], m[1], m[2]])) assert.ok(have.has(ico), `icon ${ico} exists`);
 });
 
-guarded('Esc closes the settings menu and does NOT cut the turn: its listener runs first and stops the event for the interrupt one',
-  (src) => {
-    const b = fnBody(slice(src), 'chatSkinBuild');
-    const menuAt = b.indexOf("e.key !== 'Escape' || !cs.menuOpen");
-    const intrAt = b.indexOf('chatSkinInterrupt(id, p);\n  });');
-    const nextAt = b.indexOf("e.key !== 'Escape' || !cs.slash.open");   // the popup's own Esc listener follows the menu's: the stop must be IN the menu's
-    const menuEnd = nextAt > menuAt ? nextAt : intrAt;
-    return menuAt > 0 && intrAt > menuAt && /stopImmediatePropagation\(\)/.test(b.slice(menuAt, menuEnd))
-      && /chatSkinMenu\(cs, false, true\)/.test(b.slice(menuAt, menuEnd))
-      && /pointerdown/.test(fnBody(slice(src), 'chatSkinMenu')) && /removeEventListener\('pointerdown'/.test(fnBody(slice(src), 'chatSkinMenu'));
-  },
-  (src) => src.replace('e.preventDefault(); e.stopImmediatePropagation();', 'e.preventDefault();'));
-
 test('every animation in the skin has a prefers-reduced-motion fallback that stops it', () => {
   const sk = css.slice(css.indexOf('/* ═══ Chat skin')).replace(/\/\*[\s\S]*?\*\//g, '');
   const reduced = [...sk.matchAll(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\}\s*(?=\n|$)/g)].map((m) => m[1]).join('\n');
@@ -1049,15 +1036,66 @@ guarded('the status payload is asked for with THIS tab\'s session id, and per-se
 guarded('the status bar is built UNDER the card, and the card holds only the text and send/stop (no chips, no usage row)',
   (src) => {
     const b = fnBody(slice(src), 'chatSkinBuild');
-    const head = /head\.append\((.*)\);/.exec(b)?.[1] ?? '';
-    return head.length > 0 && !/bar|usage/i.test(head) && /sw, el\('span', 'cs-fill'\), gear, menu/.test(head)
-      && /meta\.appendChild\(bar\)/.test(b) && /compose\.append\(jumpBtn, wrap, meta\)/.test(b)
+    return /meta\.appendChild\(bar\)/.test(b) && /compose\.append\(jumpBtn, wrap, meta\)/.test(b)
+      && /root\.append\(log, alertEl, compose\)/.test(b)   // log, notice, compose block: nothing above the log
       && /box\.append\(input, ccRow, dropEl\)/.test(b) && /ccRow\.append\(stopBtn, sendBtn\)/.test(b)
       && !/cc-chip|chat-usage|usageEl|usageVals/.test(slice(src))
       && b.indexOf('wrap.append(slashPop, box)') > 0 && b.indexOf('wrap.append(slashPop, box)') < b.indexOf('compose.append(')
-      && !/\.cs-head \.chat-bar/.test(css) && !/cc-chip|chat-usage/.test(css);
+      && !/cc-chip|chat-usage/.test(css);
   },
-  (src) => src.replace("head.append(sw, el('span', 'cs-fill'), gear, menu);", "head.append(sw, el('span', 'cs-fill'), bar, gear, menu);"));
+  // the bar moved out of the compose block (into the pane itself): the card and the strip are no longer one object
+  (src) => src.replace('meta.appendChild(bar);', 'root.append(bar);'));
+
+// ── the pane has no header ──────────────────────────────────────────────────
+
+/** Everything the old header was made of, as it could be named in the source or the stylesheet. */
+const HEADER_TRACES = /cs-head|cs-switch|cs-sw\b|cs-gear|cs-menu|cs-fill|csm-|swTerm|swChat|chatSkinMenu|chatSkinOpt\b|chatSkinCheck|menuOpen|\bfontList\b|\bsizeList\b|textSize/;
+guarded('the pane has no header: no Terminal | Chat switch, no Aa button, no font menu — the log is the first thing in the overlay',
+  (src) => {
+    const s = slice(src);
+    const b = fnBody(s, 'chatSkinBuild');
+    return !HEADER_TRACES.test(s) && /root\.append\(log, alertEl, compose\)/.test(b) && !/\bhead\b/.test(b.replace(/\/\*[\s\S]*?\*\//g, ''))
+      // the reading settings are not set from the conversation any more: only applied there
+      && !/setSetting\('chatFont/.test(s) && /function chatApplyPrefs\(\)/.test(s) && /function chatReadPrefs\(c\)/.test(s);
+  },
+  (src) => src.replace('root.append(log, alertEl, compose);', "const head = el('div', 'cs-head');\n  root.append(head, log, alertEl, compose);"));
+
+test('the stylesheet carries no rule of the old header, and the stylesheet check catches one that comes back', () => {
+  assert.doesNotMatch(css, HEADER_TRACES);
+  assert.match(css + '\n.cs-head { padding: 9px 14px; }', HEADER_TRACES, 'control: a header rule would be caught');
+  assert.match(css + '\n.cs-gear { width: 30px; }', HEADER_TRACES, 'control: so would the Aa button');
+  // no place left for the strip: the first child of the overlay is the log, which fills it
+  assert.match(skinRules(css).find(([sel]) => sel === '.chat-log')?.[1] ?? '', /flex: 1/);
+});
+
+guarded('the tab icon is the way to switch: a labelled, pressed-aware button whose words say which view it leads to',
+  (src) => {
+    const s = slice(src);
+    const paint = fnBody(s, 'chatSkinPaintToggle');
+    const mount = fnBody(s, 'chatSkinMountToggle');
+    return /classList\.toggle\('on', on\)/.test(paint) && /setAttribute\('aria-pressed', String\(on\)\)/.test(paint)
+      && /t\(on \? 'chat\.skin\.toTerminal' : 'chat\.skin\.toChat'\)/.test(paint)
+      && /\.title = label/.test(paint) && /setAttribute\('aria-label', label\)/.test(paint)
+      && /setAttribute\('role', 'button'\)/.test(mount) && /addEventListener\('click', go\)/.test(mount);
+  },
+  (src) => src.replace("p.viewBtn.setAttribute('aria-label', label);", ''));
+
+test('the tab icon looks clickable in both themes: a hit area, a pointer, a hover fill and a distinct active chip, none of it a hex literal', () => {
+  const rules = [...css.matchAll(/^(\.tab \.tview[^{]*)\{([^}]*)\}/gm)].map((m) => [m[1].trim(), m[2]] as const);
+  const rule = (sel: string): string => rules.find(([x]) => x === sel)?.[1] ?? '';
+  const base = rule('.tab .tview');
+  assert.match(base, /cursor: pointer/);
+  const px = (re: RegExp): number => Number(re.exec(base)?.[1] ?? 0);
+  assert.ok(px(/width: (\d+)px/) >= 20 && px(/height: (\d+)px/) >= 20, 'a comfortable hit area, not the 12 px glyph');
+  assert.match(rule('.tab .tview:hover'), /background: var\(--chat-row-hover\)/);
+  assert.match(rule('.tab .tview:focus-visible'), /outline: 2px solid var\(--chat-focus\)/);
+  const on = rule('.tab .tview.on');
+  assert.match(on, /background: color-mix/);
+  assert.match(on, /box-shadow: inset 0 0 0 1px/, 'the active state is a shape (a ring), not only a colour');
+  assert.notEqual(on.replace(/\s+/g, ''), base.replace(/\s+/g, ''));
+  assert.doesNotMatch(rules.map((r) => r[1]).join('\n'), /#[0-9a-fA-F]{3,8}\b|\brgba?\(/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.tab \.tview \{ transition: none; \} \}/);
+});
 
 guarded('every meter answers hover AND keyboard focus with its detail card, aria-labelled, and the card is not read twice',
   (src) => {
@@ -1380,10 +1418,9 @@ guarded('Enter with the popup open completes and does NOT send: its listener is 
 guarded('Esc closes the slash popup and does NOT cut the turn: its listener runs before the interrupt one and stops the event',
   (src) => {
     const b = fnBody(slice(src), 'chatSkinBuild');
-    const menuAt = b.indexOf("e.key !== 'Escape' || !cs.menuOpen");
     const slashAt = b.indexOf("e.key !== 'Escape' || !cs.slash.open");
     const intrAt = b.indexOf('chatSkinInterrupt(id, p);\n  });');
-    return menuAt > 0 && slashAt > menuAt && intrAt > slashAt
+    return slashAt > 0 && intrAt > slashAt
       && /stopImmediatePropagation\(\)/.test(b.slice(slashAt, intrAt)) && /chatSkinSlashClose\(cs\)/.test(b.slice(slashAt, intrAt))
       && !/chatSkinInterrupt/.test(b.slice(slashAt, intrAt).split('// Esc anywhere')[0]);
   },
@@ -1393,15 +1430,15 @@ test('Esc with the popup open, run for real, reaches the interrupt listener neve
   // replay the skin's keydown listeners on `root` in the order they were registered, with a fake event that honours stopImmediatePropagation
   const b = fnBody(skin, 'chatSkinBuild');
   const listeners = [...b.matchAll(/root\.addEventListener\('keydown', \(e\) => \{([\s\S]*?)\n  \}\);/g)].map((m) => m[1]);
-  assert.equal(listeners.length, 3, 'menu Esc, popup Esc, interrupt');
+  assert.equal(listeners.length, 2, 'popup Esc, interrupt');
   const interrupted: string[] = [];
   const run = (open: boolean): string[] => {
     interrupted.length = 0;
-    const cs = { menuOpen: false, slash: { open }, promptKind: null };
-    const fns = listeners.map((body) => new Function('cs', 'e', 'chatSkinMenu', 'chatSkinSlashClose', 'chatSkinInterrupt', 'id', 'p', body) as (...a: unknown[]) => void);
+    const cs = { slash: { open }, promptKind: null };
+    const fns = listeners.map((body) => new Function('cs', 'e', 'chatSkinSlashClose', 'chatSkinInterrupt', 'id', 'p', body) as (...a: unknown[]) => void);
     let stopped = false;
     const e = { key: 'Escape', isComposing: false, preventDefault() { /* */ }, stopPropagation() { /* */ }, stopImmediatePropagation() { stopped = true; } };
-    for (const fn of fns) { if (stopped) break; fn(cs, e, () => interrupted.push('menu'), () => interrupted.push('popup'), () => interrupted.push('INTERRUPT'), 1, {}); }
+    for (const fn of fns) { if (stopped) break; fn(cs, e, () => interrupted.push('popup'), () => interrupted.push('INTERRUPT'), 1, {}); }
     return [...interrupted];
   };
   assert.deepEqual(run(true), ['popup'], 'the popup takes the key; the turn keeps running');
