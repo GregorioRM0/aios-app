@@ -1267,7 +1267,9 @@ test('slash popup, run for real: "/" asks main with the pane\'s folder, shows th
   assert.equal(h.cs.input.attrs['aria-activedescendant'], rows[0].id);
   assert.equal(h.cs.input.attrs['aria-expanded'], 'true');
   // built-ins are described through t(); a file's description is shown as written; a project command carries its tag, a plugin's name is already the prefix
-  assert.deepEqual(rows[0].children.map((c) => c.textContent), ['/compact', '<optional custom summarization instructions>', '«chat.slash.cmd.compact»']);
+  assert.deepEqual(rows[0].children.map((c) => c.textContent), ['/compact', '<optional custom…>', '«chat.slash.cmd.compact»'], 'a long usage is shortened at a word, brackets closed');
+  assert.equal((rows[0].children[1] as unknown as { title?: string }).title, '<optional custom summarization instructions>', 'and the whole usage stays one hover away');
+  assert.equal((rows[1].children[1] as unknown as { title?: string }).title, undefined, 'a usage that fits has no title');
   assert.deepEqual(rows[1].children.map((c) => c.textContent), ['/deploy', '[branch]', 'Push to staging', '«chat.slash.src.project»']);
   assert.deepEqual(rows[2].children.map((c) => c.textContent), ['/aios:today', '', 'Daily plan'], 'an empty usage cell keeps the columns aligned');
   // a text that no longer starts with a slash closes it, and an answer that arrives late does not bring it back
@@ -1418,6 +1420,61 @@ test('the slash popup\'s CSS: neutral, above the card, scrolls, rows are options
   assert.ok(rules.some(([s, d]) => s === '.csl-desc' && /flex: 1 1 100%/.test(d)), 'a narrow container stacks the description under the name');
   assert.match(rule('.csl-row'), /grid-template-columns: subgrid/, 'wide rows share their columns');
   assert.match(rule('.chatskin [hidden]') + css, /\.chatskin\[hidden\], \.chatskin \[hidden\] \{ display: none !important; \}/, 'hidden stays hidden');
+});
+
+test('the slash popup, polished: usage hints cut at a word, at most seven rows, a fade says there is more, the origin is a whisper not a capsule', () => {
+  // the shortener, from the real source: whole short hints pass through; long ones lose words, never half a word, and keep their brackets
+  const from = skin.indexOf('const CHAT_SLASH_HINT_MAX'); const to = skin.indexOf('function chatSkinSlashFade(');
+  assert.ok(from > 0 && to > from, 'the shortener was found');
+  const hint = new Function(`${skin.slice(from, to)}\nreturn chatSkinSlashHint;`)() as (h: string) => string;
+  assert.equal(hint('[branch]'), '[branch]');
+  assert.equal(hint(''), '');
+  assert.equal(hint('<optional custom summarization instructions>'), '<optional custom…>');
+  assert.equal(hint('[conversation id or search term]'), '[conversation id…]', 'never ends on a dangling joiner');
+  assert.equal(hint('averyveryveryverylongsingleword'), 'averyveryveryverylong…', 'one long word has no boundary: the CSS ellipsis is the net');
+  for (const h of ['<optional custom summarization instructions>', '[conversation id or search term]', 'x'.repeat(60)]) assert.ok(hint(h).length <= 22, `"${hint(h)}" fits the column`);
+  // negative control: a shortener that cut blindly would split the word
+  assert.notEqual('<optional custom summarization instructions>'.slice(0, 21) + '…', hint('<optional custom summarization instructions>'));
+  // the CSS: seven rows, a mask that follows the more-t / more-b classes, an origin with no border and no pill radius
+  const rules = skinRules(css);
+  const rule = (sel: string): string => rules.find(([x]) => x === sel)?.[1] ?? '';
+  assert.match(rule('.csl-list'), /--csl-row: 28px/);
+  assert.match(rule('.csl-list'), /max-height: calc\(7 \* var\(--csl-row\)\)/);
+  assert.match(rule('.csl-list'), /mask-image: linear-gradient/);
+  assert.match(rule('.csl-list.more-b'), /--csl-fb: \d+px/);
+  assert.match(rule('.csl-list'), /scroll-padding: 16px 5px 22px/, 'the active row is never parked under the fade');
+  assert.doesNotMatch(rule('.csl-tag'), /border|border-radius|background/, 'the origin is text, not a capsule');
+  assert.match(rule('.csl-tag'), /font-size: 10px/);
+  assert.match(fnBody(skin, 'chatSkinSlashMove'), /scrollIntoView\(\{ block: 'nearest' \}\)/, 'the active row is scrolled into view when the arrows move it');
+  assert.match(fnBody(skin, 'chatSkinSlashFade'), /more-t[\s\S]*more-b/);
+});
+
+test('the empty card: a name, a sentence and three keys, every word through t(), the keys only when the view is empty', () => {
+  const paint = fnBody(skin, 'chatSkinPaintState');
+  assert.match(paint, /cs\.stateTips\) cs\.stateTips\.hidden = kind !== 'empty'/);
+  assert.match(paint, /t\(key \+ '\.title', \{ name: chatSkinWho\(p\) \}\)/, 'the title carries the session name');
+  for (const k of ['chat.skin.empty.tip.slash', 'chat.skin.empty.tip.send', 'chat.skin.empty.tip.newline']) {
+    assert.ok(skin.includes(`'${k}'`), `the card builds ${k}`);
+    for (const l of Object.keys(loc)) assert.ok(typeof loc[l][k] === 'string' && loc[l][k].length > 0, `${l}.json lacks ${k}`);
+  }
+  for (const l of Object.keys(loc)) assert.match(loc[l]['chat.skin.state.empty.title'], /\{name\}/, `${l}: the empty title names the session`);
+  assert.match(css, /\.csc-title \{[^}]*color: var\(--ink\)/, 'the title has an explicit ink: a card has no message around it to inherit from');
+});
+
+test('the vertical scale: one set of spacing variables on the skin, used by rows, tools, notes and markdown blocks alike', () => {
+  const rules = skinRules(css);
+  const decl = (sel: string): string => rules.filter(([x]) => x === sel).map(([, d]) => d).join(' ');
+  assert.match(decl('.chatskin'), /--cs-m: 7px; --cs-turn: 19px; --cs-blk: \.85em; --cs-sec: 1\.4em/);
+  assert.match(decl('.chat-row.who-user'), /margin: var\(--cs-turn\) 0 var\(--cs-m\)/);
+  assert.match(decl('.chat-row.who-claude'), /margin: var\(--cs-m\) 0/);
+  assert.match(decl('.chat-tool.tg-solo, .chat-tool.tg-last'), /margin-bottom: var\(--cs-m\)/);
+  assert.match(decl('.cm-code'), /margin: 0 0 var\(--cs-blk\)/);
+  assert.match(decl('.cm-table'), /margin: 0 0 var\(--cs-blk\)/);
+  assert.match(decl('.chat-md p, .chat-md ul, .chat-md ol, .chat-md blockquote, .chat-md pre, .chat-md table'), /margin: 0 0 var\(--cs-blk\)/);
+  // the operator's bubble: smaller padding and radius than it had (10px 15px, 16px), a lighter skin
+  assert.match(decl('.who-user .chat-bubble'), /padding: 7px 13px 8px/);
+  assert.match(decl('.who-user .chat-bubble'), /border-radius: 14px 14px 4px 14px/);
+  assert.doesNotMatch(decl('.who-user .chat-bubble'), /box-shadow/);
 });
 
 test('the slash popup\'s sentences exist in every locale with the same placeholders', () => {

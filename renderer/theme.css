@@ -55,8 +55,8 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
      rule; light overrides below, see the note there). Deliberately NO coral here: the operator's bubble is told apart by tone, side and
      label, and coral stays reserved for the send action. "Waiting on the operator" is the
      existing --st-input hue, which is exactly what a permission card is. ── */
-  --chat-user-bg: color-mix(in srgb, var(--ink) 9%, var(--surface));
-  --chat-user-line: var(--line-strong);
+  --chat-user-bg: color-mix(in srgb, var(--ink) 6.5%, var(--surface));   /* the operator's message: a whisper of tone, lighter than the code and tool surfaces so it never competes with the answer */
+  --chat-user-line: var(--line);
   --chat-claude-bg: color-mix(in srgb, var(--ink) 3%, var(--surface));
   --chat-claude-line: var(--line);
   --chat-code-bg: color-mix(in srgb, var(--ink) 7%, var(--surface));
@@ -77,6 +77,7 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --chat-focus: color-mix(in srgb, var(--ink) 52%, transparent);          /* keyboard focus on a small control: a neutral outline, strong enough to see (coral is the send button only) */
   --chat-focus-line: color-mix(in srgb, var(--ink) 34%, var(--chat-composer-line));   /* the composer card's border while it holds the caret */
   --chat-focus-soft: color-mix(in srgb, var(--ink) 7%, transparent);      /* …and the faint halo around it: focus is felt, not announced */
+  --chat-pick-bg: color-mix(in srgb, var(--ink) 8%, var(--chat-tip-bg));   /* the highlighted row of a popup: one step ABOVE the popup, so it reads as lifted, not as a hole */
   --chat-tip-bg: color-mix(in srgb, var(--ink) 11%, var(--surface));     /* a tooltip floating over the composer card: one step above it, so the two never blend */
   --chat-link: var(--st-input-ink);   /* links in the conversation: the app's one cool hue. The house has no link token (the markdown viewer links in coral), and coral is spoken for here */
   --chat-on-accent: #fff;   /* the glyph on a coral button; white, as the house .vbtn.primary does */
@@ -95,6 +96,7 @@ body.unfocused *, body.unfocused *::before, body.unfocused *::after { animation-
   --chat-hot-line: color-mix(in srgb, var(--st-error) 50%, var(--surface));
   --chat-float: 0 18px 44px -20px rgba(0,0,0,.75), 0 3px 10px -4px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05);
   --chat-pop: 0 14px 36px -12px rgba(0,0,0,.7), 0 2px 8px -2px rgba(0,0,0,.4);   /* a menu floating over the conversation */
+  --chat-lift: 0 1px 3px -1px rgba(0,0,0,.34);   /* the chosen segment of a switch: raised a hair, no second outline */
   --edge: inset 0 1px 0 rgba(255,255,255,.05);
   --depth: 0 10px 26px -16px rgba(0,0,0,.6);
   --font: -apple-system, BlinkMacSystemFont, Inter, 'Segoe UI', sans-serif;
@@ -635,8 +637,8 @@ body.light {
      resolved on the element that declares it: minted on :root they would carry the DARK --ink and
      --surface down into body.light as already-computed colours, and the pane would stay dark-tinted
      in the light theme. Re-declaring makes them resolve against this block's own --ink/--surface. */
-  --chat-user-bg: color-mix(in srgb, var(--ink) 9%, var(--surface));
-  --chat-user-line: var(--line-strong);
+  --chat-user-bg: color-mix(in srgb, var(--ink) 5%, var(--surface));
+  --chat-user-line: var(--line);
   --chat-claude-bg: color-mix(in srgb, var(--ink) 4%, var(--surface));
   --chat-claude-line: var(--line);
   --chat-code-bg: color-mix(in srgb, var(--ink) 6%, var(--surface));
@@ -653,6 +655,7 @@ body.light {
   --chat-focus: color-mix(in srgb, var(--ink) 50%, transparent);
   --chat-focus-line: color-mix(in srgb, var(--ink) 32%, var(--chat-composer-line));
   --chat-focus-soft: color-mix(in srgb, var(--ink) 6%, transparent);
+  --chat-pick-bg: color-mix(in srgb, var(--ink) 5.5%, var(--chat-tip-bg));
   --chat-tip-bg: var(--surface);
   --chat-link: var(--st-input-ink);
   --chat-on-accent: #fff;
@@ -670,6 +673,7 @@ body.light {
   --chat-hot-line: color-mix(in srgb, var(--st-error) 42%, var(--surface));
   --chat-float: 0 16px 36px -22px rgba(30,30,40,.38), 0 2px 8px -3px rgba(30,30,40,.16);
   --chat-pop: 0 14px 34px -14px rgba(30,30,40,.34), 0 2px 8px -2px rgba(30,30,40,.14);
+  --chat-lift: 0 1px 3px -1px rgba(30,30,40,.22);
 }
 /* #24 — THE ACTIVE TAB IN LIGHT. Measured: the strip is #e9e9e6 and the active tab was #ececea
    with an 8% border, a step too small to see (operator: fine in dark, hard in light). White card,
@@ -1613,13 +1617,13 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cs-sw { background: transparent; border: 0; border-radius: 7px; color: var(--subtle); font-family: var(--font); font-size: 12px; padding: 4px 12px; cursor: pointer; transition: background .15s ease, color .15s ease; }
 .cs-sw:hover { color: var(--ink); }
 .cs-sw:focus-visible { color: var(--ink); outline: 2px solid var(--chat-focus); outline-offset: 1px; }
-.cs-sw[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); box-shadow: var(--edge), 0 0 0 1px var(--line); }
+.cs-sw[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); box-shadow: var(--edge), var(--chat-lift); }   /* lifted by a soft shadow, not a second outline inside the switch's own border */
 @media (prefers-reduced-motion: reduce) { .cs-sw { transition: none; } }
 .tab .tview { display: inline-flex; align-items: center; color: var(--faint); border-radius: 4px; padding: 1px; cursor: pointer; }
 .tab .tview:hover, .tab .tview:focus-visible { color: var(--accent-ink); outline: none; }
 .tab .tview.on { color: var(--accent-ink); }
 .tab .tview[hidden] { display: none; }
-.cs-working { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin: 4px 0 0; color: var(--subtle); font-size: .88em; }
+.cs-working { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin: var(--cs-m) 0 0; color: var(--subtle); font-size: .88em; }
 .cw-dots { display: inline-flex; align-items: center; gap: 4px; height: 14px; }
 .cw-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--st-busy); animation: cs-wave 1.3s ease-in-out infinite; }
 .cw-dots i:nth-child(2) { animation-delay: .16s; }
@@ -1700,11 +1704,11 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 /* ── tool rows: one compact line per call, joined into a card when they come in a run ── */
 .chat-tool { --tr: 9px; flex: 0 0 auto; min-width: 0; font-size: 12px; line-height: 1.35; color: var(--ink);
              background: var(--chat-claude-bg); border: 1px solid var(--chat-claude-line); }
-.chat-tool.tg-solo, .chat-tool.tg-first { margin-top: 6px; border-radius: var(--tr) var(--tr) 0 0; }
+.chat-tool.tg-solo, .chat-tool.tg-first { margin-top: var(--cs-m); border-radius: var(--tr) var(--tr) 0 0; }
 .chat-tool.tg-solo { border-radius: var(--tr); }
 .chat-tool.tg-mid, .chat-tool.tg-last { margin-top: -1px; border-radius: 0; }
 .chat-tool.tg-last { border-radius: 0 0 var(--tr) var(--tr); }
-.chat-tool.tg-solo, .chat-tool.tg-last { margin-bottom: 6px; }
+.chat-tool.tg-solo, .chat-tool.tg-last { margin-bottom: var(--cs-m); }
 .chat-tool.tg-first, .chat-tool.tg-mid { margin-bottom: 0; }
 .ct-head { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; min-height: 28px; padding: 3px 10px 3px 6px;
            background: none; border: 0; border-radius: inherit; color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -1873,32 +1877,36 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 /* The conversation is ONE centred reading column. The log itself spans the pane (so its scrollbar
    sits at the pane's edge, where a hand looks for it) and the column is made with side padding:
    a percentage padding resolves against the log's own width, which is exactly the pane's. */
-.chatskin { container-type: inline-size; --cs-col: 748px; }
+.chatskin { container-type: inline-size; --cs-col: 748px;
+            /* ONE vertical scale for the conversation. Rows are flex children, so neighbouring margins ADD: --cs-m on both sides of a block is the
+               14px between any two blocks; --cs-turn on top of it opens a new turn (an operator message) to ~26px. Inside a message the
+               markdown uses --cs-blk between its blocks (em, so it follows the reading size) and --cs-sec above a heading. */
+            --cs-m: 7px; --cs-turn: 19px; --cs-blk: .85em; --cs-sec: 1.4em; --cs-li: .25em; }
 .chat-log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; user-select: text;
             padding: 26px max(16px, calc((100% - var(--cs-col)) / 2)) 30px; scroll-padding-bottom: 24px;
             font-family: var(--chat-font); font-size: calc(var(--chat-size) * 1px); line-height: 1.6; }
 .chat-row { display: flex; flex-direction: column; min-width: 0; }
-.chat-row.who-user { align-items: flex-end; margin: 22px 0 8px; }
-.chat-row.who-claude { align-items: stretch; margin: 8px 0; }
+.chat-row.who-user { align-items: flex-end; margin: var(--cs-turn) 0 var(--cs-m); }
+.chat-row.who-claude { align-items: stretch; margin: var(--cs-m) 0; }
 .chat-log > .chat-row:first-child, .chat-log > .chat-row.who-user:first-of-type { margin-top: 0; }
 /* The "You" / "Claude" labels are gone from the screen (the box and its side already say who spoke)
    but stay in the tree for screen readers, which have no side. */
 .chat-who { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 /* The operator's message: a soft box on the right. Plain text, line breaks kept. */
-.who-user .chat-bubble { max-width: min(88%, 620px); box-sizing: border-box; padding: 10px 15px; border-radius: 16px 16px 5px 16px;
+.who-user .chat-bubble { max-width: min(86%, 600px); box-sizing: border-box; padding: 7px 13px 8px; border-radius: 14px 14px 4px 14px;
                          background: var(--chat-user-bg); border: 1px solid var(--chat-user-line); color: var(--ink);
-                         white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; box-shadow: var(--edge); }
+                         font-size: .96em; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }   /* a step under the answer's size, a thinner skin, no edge-light: a prompt is a line you said, not a card */
 /* Claude's reply: no box at all, just well-set text across the whole column. */
 .who-claude .chat-bubble { min-width: 0; max-width: 100%; color: var(--ink); overflow-wrap: anywhere; }
 .chat-md { line-height: 1.7; letter-spacing: .005em; }
 .chat-md > :first-child { margin-top: 0; }
 .chat-md > :last-child { margin-bottom: 0; }
-.chat-md p, .chat-md ul, .chat-md ol, .chat-md blockquote, .chat-md pre, .chat-md table { margin: 0 0 .9em; }
+.chat-md p, .chat-md ul, .chat-md ol, .chat-md blockquote, .chat-md pre, .chat-md table { margin: 0 0 var(--cs-blk); }
 .chat-md ul, .chat-md ol { padding-left: 1.5em; }
-.chat-md li { margin: .28em 0; padding-left: .15em; }
+.chat-md li { margin: var(--cs-li) 0; padding-left: .15em; }
 .chat-md li::marker { color: var(--faint); }
-.chat-md li > ul, .chat-md li > ol { margin: .2em 0 .3em; }
-.chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4, .chat-md h5, .chat-md h6 { margin: 1.5em 0 .5em; line-height: 1.25; color: var(--ink); font-weight: 640; letter-spacing: -.012em; }
+.chat-md li > ul, .chat-md li > ol { margin: var(--cs-li) 0 var(--cs-li); }
+.chat-md h1, .chat-md h2, .chat-md h3, .chat-md h4, .chat-md h5, .chat-md h6 { margin: var(--cs-sec) 0 .45em; line-height: 1.25; color: var(--ink); font-weight: 640; letter-spacing: -.012em; }
 .chat-md h1 { font-size: 1.5em; font-weight: 680; letter-spacing: -.02em; }
 .chat-md h2 { font-size: 1.26em; padding-bottom: .3em; border-bottom: 1px solid var(--line); }
 .chat-md h3 { font-size: 1.09em; }
@@ -1915,7 +1923,7 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .chat-md pre code { background: none; border: 0; padding: 0; font-size: .86em; }
 /* A code block: header (language on the left, copy on the right) over the code. The wrapper clips
    the corners so the header and the body read as one object. */
-.cm-code { margin: 0 0 1em; border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; background: var(--chat-code-bg); box-shadow: var(--edge); }
+.cm-code { margin: 0 0 var(--cs-blk); border: 1px solid var(--line-strong); border-radius: 10px; overflow: hidden; background: var(--chat-code-bg); box-shadow: var(--edge); }
 .cm-code-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 5px 3px 13px;
                 background: var(--chat-code-head); border-bottom: 1px solid var(--line); color: var(--subtle); font-size: 11.5px; line-height: 1; }
 .cm-lang { font-family: var(--mono); letter-spacing: .01em; }
@@ -1929,28 +1937,33 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .cs-ico { display: inline-flex; flex: 0 0 auto; }
 .chat-md .cm-code pre { margin: 0; border: 0; border-radius: 0; background: transparent; padding: 12px 15px 13px; font-size: .94em; line-height: 1.6; }
 /* A table: its own scroll box with a hairline frame, a tinted header and a faint zebra. */
-.cm-table { margin: 0 0 1em; width: fit-content; max-width: 100%; overflow-x: auto; border: 1px solid var(--line-strong); border-radius: 10px; }
+.cm-table { margin: 0 0 var(--cs-blk); width: fit-content; max-width: 100%; overflow-x: auto; border: 1px solid var(--line-strong); border-radius: 10px; }
 .chat-md .cm-table table { margin: 0; min-width: 100%; border-collapse: separate; border-spacing: 0; font-size: .94em; font-variant-numeric: tabular-nums; }
 .chat-md th, .chat-md td { padding: 8px 15px; text-align: left; border: 0; border-bottom: 1px solid var(--line); }
 .chat-md th { background: var(--chat-table-head); font-weight: 620; white-space: nowrap; border-bottom-color: var(--line-strong); }
 .chat-md tbody tr:last-child td { border-bottom: 0; }
 .chat-md tbody tr:nth-child(even) td { background: var(--chat-table-zebra); }
-.chat-md hr { border: 0; border-top: 1px solid var(--line-strong); margin: 1.6em 0; }
+.chat-md hr { border: 0; border-top: 1px solid var(--line-strong); margin: var(--cs-sec) 0; }
 @keyframes chatpulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 
 /* A system note inside the conversation (an interruption, an API error, a local command's output): a small centred pill. */
-.chat-note { align-self: center; margin: 10px 0; padding: 3px 12px; max-width: 100%; border-radius: 999px; background: var(--chat-out-bg); border: 1px solid var(--chat-claude-line);
+.chat-note { align-self: center; margin: var(--cs-m) 0; padding: 3px 12px; max-width: 100%; border-radius: 999px; background: var(--chat-out-bg); border: 1px solid var(--chat-claude-line);
              color: var(--subtle); font-size: .82em; text-align: center; overflow-wrap: anywhere; white-space: pre-wrap; }
 /* ── connecting · waiting · empty · error: a card, centred while the log has nothing else ── */
-.cs-card { --sc: var(--faint); align-self: center; margin: auto; display: flex; flex-direction: column; align-items: center; max-width: 340px; padding: 8px 12px; text-align: center; }
+.cs-card { --sc: var(--faint); align-self: center; margin: auto; display: flex; flex-direction: column; align-items: center; max-width: 360px; padding: 8px 12px 48px; text-align: center; color: var(--ink); }   /* the bottom padding lifts it to the optical centre of the column; the ink is explicit because a card has no message around it to inherit from */
 .cs-card[data-kind="connecting"] { --sc: var(--st-busy); }
 .cs-card[data-kind="error"] { --sc: var(--st-error); }
-.csc-ico { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; margin-bottom: 14px; border-radius: 16px; color: var(--subtle);
+.csc-ico { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; margin-bottom: 16px; border-radius: 15px; color: var(--subtle);
            background: var(--chat-out-bg); border: 1px solid var(--line-strong); box-shadow: var(--edge); }
 .cs-card[data-kind="error"] .csc-ico { color: var(--st-error-ink); background: color-mix(in srgb, var(--st-error) 11%, var(--surface)); border-color: color-mix(in srgb, var(--st-error) 36%, transparent); }
 .csc-ico .ct-spin { width: 20px; height: 20px; border-width: 3px; }
-.csc-title { font-size: 1.07em; font-weight: 640; letter-spacing: -.005em; margin-bottom: 5px; }
+.csc-title { font-size: 1.12em; font-weight: 640; letter-spacing: -.012em; margin-bottom: 6px; color: var(--ink); }
 .csc-text { color: var(--subtle); font-size: .9em; line-height: 1.55; }
+/* The empty card's three quiet hints: a key and what it does. A key is a mono glyph on a hairline chip, never a button. */
+.csc-tips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; margin-top: 22px; color: var(--faint); font-size: .82em; }
+.csc-tip { display: inline-flex; align-items: center; gap: 7px; }
+.csc-key { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 20px; padding: 0 6px; box-sizing: border-box; border-radius: 6px;
+           background: var(--chat-out-bg); border: 1px solid var(--line-strong); color: var(--subtle); font-family: var(--mono); font-size: 11px; line-height: 1; }
 .csc-btn { margin-top: 16px; }
 
 /* ── composer: a big rounded card floating over the end of the conversation ── */
@@ -1985,22 +1998,29 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 /* ── the slash-command popup: floats over the end of the log, right above the card, as wide as the card ──
    Neutral like every other popover here (no coral): the highlighted row is a step of tone, not a colour. */
 .cc-slash { position: absolute; left: 0; right: 0; bottom: calc(100% + 8px); z-index: 7; display: flex; flex-direction: column; box-sizing: border-box;
-            max-height: min(332px, 52vh); border-radius: 14px; overflow: hidden;
+            --chat-row-hover: var(--chat-pick-bg);   /* inside the popup the hover step is measured from the popup's own tone, not from the page's */
+            max-height: min(332px, 52vh); max-width: 640px; border-radius: 12px; overflow: hidden;
             background: var(--chat-tip-bg); border: 1px solid var(--chat-composer-line); box-shadow: var(--chat-pop); }
-.csl-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 5px; overscroll-behavior: contain;
-            display: grid; grid-template-columns: fit-content(15em) fit-content(9em) minmax(0, 1fr) auto; column-gap: 12px; align-content: start; }   /* one set of columns for every row, so the descriptions line up */
-.csl-row { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: baseline; padding: 6px 10px; border-radius: 9px; cursor: pointer; font-size: 12.5px; line-height: 1.4; }
-.csl-row.on { background: var(--chat-row-hover); box-shadow: inset 0 0 0 1px var(--line); }
+.csl-list { --csl-row: 28px; --csl-ft: 0px; --csl-fb: 0px;
+            flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 5px; scroll-padding: 16px 5px 22px; overscroll-behavior: contain;   /* the padding is the fade's height: an arrow-key move never parks the chosen row under it */
+            max-height: calc(7 * var(--csl-row));   /* seven rows at most (the list is content-box, so its padding comes on top); the rest is a scroll, and the fade says so */
+            -webkit-mask-image: linear-gradient(to bottom, transparent 0, black var(--csl-ft), black calc(100% - var(--csl-fb)), transparent 100%);
+            mask-image: linear-gradient(to bottom, transparent 0, black var(--csl-ft), black calc(100% - var(--csl-fb)), transparent 100%);
+            display: grid; grid-template-columns: fit-content(13em) fit-content(16ch) minmax(0, 1fr) auto; column-gap: 14px; align-content: start; }   /* one set of columns for every row: name | usage | what it does | origin */
+.csl-list.more-t { --csl-ft: 16px; }
+.csl-list.more-b { --csl-fb: 22px; }
+.csl-row { display: grid; grid-template-columns: subgrid; grid-column: 1 / -1; align-items: center; box-sizing: border-box; min-height: var(--csl-row); padding: 0 10px; border-radius: 8px; cursor: pointer; font-size: 12.5px; line-height: 1.4; }
+.csl-row.on { background: var(--chat-row-hover); }
 .csl-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-family: var(--mono); font-size: 12px; font-weight: 600; }
 .csl-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-family: var(--mono); font-size: 11px; }
 .csl-desc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--subtle); }
 .csl-row.on .csl-desc { color: var(--ink); }
-.csl-tag { align-self: center; justify-self: end; padding: 0 7px; border: 1px solid var(--line-strong); border-radius: 999px; color: var(--faint); font-size: 10px; line-height: 16px; }
-.csl-foot { flex: 0 0 auto; padding: 7px 14px 8px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10.5px; letter-spacing: .01em; }
+.csl-tag { justify-self: end; color: var(--faint); font-size: 10px; letter-spacing: .04em; }   /* where it comes from: a whisper at the edge, no capsule */
+.csl-foot { flex: 0 0 auto; padding: 6px 14px 7px; border-top: 1px solid var(--line); color: var(--faint); font-size: 10.5px; letter-spacing: .01em; }
 /* a narrow pane has no room for four columns: name and usage on the first line, what it does under them */
 @container (max-width: 480px) {
-  .csl-list { display: block; }
-  .csl-row { display: flex; flex-wrap: wrap; gap: 0 8px; }
+  .csl-list { display: block; --csl-row: 47px; max-height: calc(5 * var(--csl-row)); }
+  .csl-row { display: flex; flex-wrap: wrap; align-content: center; gap: 0 8px; padding: 5px 10px; min-height: 0; }
   .csl-hint { flex: 0 1 auto; max-width: 60%; }
   .csl-desc { flex: 1 1 100%; order: 3; }
   .csl-tag { margin-left: auto; }

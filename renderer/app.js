@@ -7550,7 +7550,16 @@ function chatSkinBuild(id, p) {
   const stateBtn = el('button', 'csc-btn', t('chat.skin.showTerminal'));
   stateBtn.type = 'button';
   stateBtn.hidden = true;
-  stateEl.append(stateIco, stateTitle, stateText, stateBtn);
+  /* The empty card also teaches the three keys that matter before the first message: the slash, send, a new line. Quiet, and shown only
+     for that state (see chatSkinPaintState); the glyphs are the keys themselves, the words go through t(). */
+  const stateTips = el('div', 'csc-tips');
+  for (const [glyph, key] of [['/', 'chat.skin.empty.tip.slash'], ['↵', 'chat.skin.empty.tip.send'], ['⇧↵', 'chat.skin.empty.tip.newline']]) {
+    const tip = el('span', 'csc-tip');
+    tip.append(el('kbd', 'csc-key', glyph), el('span', 'csc-tip-t', t(key)));
+    stateTips.appendChild(tip);
+  }
+  stateTips.hidden = true;
+  stateEl.append(stateIco, stateTitle, stateText, stateTips, stateBtn);
   log.appendChild(stateEl);
 
   /* "Claude is working", inside the column and under the last message (it is the log's last child: new
@@ -7645,7 +7654,7 @@ function chatSkinBuild(id, p) {
   p.el.appendChild(root);
 
   const cs = {
-    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, alertBack, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, compose, box, wrap, meta, bar, barParts, modelSeg,
+    id, pane: p, who: chatSkinWho(p), root, log, stateEl, stateIco, stateTitle, stateText, stateTips, stateBtn, workEl, alertEl, alertIco, alertTitle, alertText, alertBtn, alertBack, input, sendBtn, stopBtn, jumpBtn, gear, menu, fontList, sizeList, compose, box, wrap, meta, bar, barParts, modelSeg,
     menuOpen: false, menuOff: null,
     slash: { open: false, items: [], index: 0, seq: 0, pop: slashPop, list: slashList },   // the slash popup: see chatSkinSlashRefresh
     swTerm, swChat,
@@ -7909,6 +7918,7 @@ function chatSkinPaintState(p) {
   cs.stateTitle.textContent = t(key + '.title', { name: chatSkinWho(p) });
   cs.stateText.textContent = t(key + '.text', { code });
   cs.stateBtn.hidden = kind !== 'error';
+  if (cs.stateTips) cs.stateTips.hidden = kind !== 'empty';
   if (cs.stateKind !== kind) {
     cs.stateKind = kind;
     // connecting shows the same quiet spinner as a running tool; the others get a glyph
@@ -8104,7 +8114,10 @@ function chatSkinSlashShow(cs, rows) {
     row.setAttribute('role', 'option');
     row.setAttribute('aria-selected', 'false');
     row.appendChild(el('span', 'csl-name', '/' + c.name));
-    row.appendChild(el('span', 'csl-hint', c.argumentHint || ''));   // always present, even empty: the rows share columns (name · usage · what it does · tag)
+    const hintFull = c.argumentHint || '';
+    const hintEl = el('span', 'csl-hint', chatSkinSlashHint(hintFull));   // always present, even empty: the rows share columns (name · usage · what it does · tag)
+    if (hintEl.textContent !== hintFull) hintEl.title = hintFull;   // shortened: the whole usage is one hover away
+    row.appendChild(hintEl);
     row.appendChild(el('span', 'csl-desc', c.descKey ? t(c.descKey) : String(c.description || '')));
     const tag = c.source === 'project' ? t('chat.slash.src.project') : c.source === 'user' ? t('chat.slash.src.user') : '';
     if (tag) row.appendChild(el('span', 'csl-tag', tag));
@@ -8114,10 +8127,31 @@ function chatSkinSlashShow(cs, rows) {
   });
   s.list.replaceChildren(...nodes);
   s.list.scrollTop = 0;
+  s.list.onscroll = () => chatSkinSlashFade(s.list);   // one handler on the list itself: showing again replaces it instead of stacking another
   s.pop.hidden = false;
   s.open = true;
   cs.input.setAttribute('aria-expanded', 'true');
   chatSkinSlashMove(cs, 0, true);
+  chatSkinSlashFade(s.list);
+}
+/* A usage hint wider than the column is shortened at a word, not in the middle of one, and its brackets are closed again:
+   `<optional custom summarization instructions>` becomes `<optional custom…>`. The CSS ellipsis stays as the net for a
+   single word that is itself too long. */
+const CHAT_SLASH_HINT_MAX = 22;
+function chatSkinSlashHint(h) {
+  if (h.length <= CHAT_SLASH_HINT_MAX) return h;
+  const close = { '<': '>', '[': ']', '(': ')' }[h[0]] || '';
+  const room = CHAT_SLASH_HINT_MAX - 1 - (close ? 1 : 0);
+  const cut = h.slice(0, room + 1);
+  const at = cut.lastIndexOf(' ');
+  const head = (at > 4 ? cut.slice(0, at) : h.slice(0, room)).replace(/[\s,;:|]+$/, '').replace(/(\s+(or|and|of|the|a|to))+$/i, '');   // never end on a dangling joiner
+  return head + '…' + close;
+}
+/* The popup shows seven rows at most. A soft fade at the edge that still has rows beyond it says "there is more" without a
+   scrollbar (an overlay scrollbar is invisible until it moves). */
+function chatSkinSlashFade(list) {
+  list.classList.toggle('more-t', list.scrollTop > 1);
+  list.classList.toggle('more-b', list.scrollTop + list.clientHeight < list.scrollHeight - 1);
 }
 function chatSkinSlashMove(cs, to, scroll) {
   const s = cs.slash;
@@ -8126,7 +8160,7 @@ function chatSkinSlashMove(cs, to, scroll) {
   s.index = Math.max(0, Math.min(rows.length - 1, to));
   rows.forEach((r, i) => { r.classList.toggle('on', i === s.index); r.setAttribute('aria-selected', String(i === s.index)); });
   cs.input.setAttribute('aria-activedescendant', rows[s.index].id);
-  if (scroll) rows[s.index].scrollIntoView({ block: 'nearest' });
+  if (scroll) { rows[s.index].scrollIntoView({ block: 'nearest' }); chatSkinSlashFade(s.list); }   // the list's scroll-padding keeps the active row clear of the fade
 }
 function chatSkinSlashClose(cs) {
   const s = cs.slash;
