@@ -1339,6 +1339,10 @@
   "chat.slash.cmd.voice": "Ligar ou desligar o modo de voz",
   "settings.chatViewDefault": "Abrir as sessões do Claude como chat",
   "settings.chatViewDefaultHint": "As novas sessões do Claude começam na visualização de chat. Você pode voltar qualquer aba para o terminal quando quiser.",
+  "settings.chatFont": "Fonte do chat",
+  "settings.chatFontHint": "A tipografia da conversa na visualização de chat. Muda na hora em todos os chats abertos.",
+  "settings.chatSize": "Tamanho do texto do chat",
+  "settings.chatSizeHint": "Quão grande a conversa é lida na visualização de chat.",
   "chat.drop.label": "Solte para adicionar o caminho",
   "chat.drop.failed": "Não foi possível anexar esse arquivo"
 }

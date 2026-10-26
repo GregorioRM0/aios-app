@@ -310,6 +310,7 @@ test('every key the skin, the menu and the settings row use exists in en, es and
     ...[...skin.matchAll(/label: '(chat\.[A-Za-z.]+)'/g)].map((m) => m[1]),    // CHAT_FONTS labels
     ...[...skin.matchAll(/\['[A-Za-z]+', '(chat\.usage\.[A-Za-z]+)'/g)].map((m) => m[1]),   // CHAT_USAGE_FIELDS labels
     'menu.chatView', 'settings.chatViewDefault', 'settings.chatViewDefaultHint',
+    'settings.chatFont', 'settings.chatFontHint', 'settings.chatSize', 'settings.chatSizeHint', 'chat.settings.sample',   // the Settings rows for the chat's font and size
   ]);
   // keys built at run time: 'chat.skin.prompt.' + kind, 'chat.skin.tool.' + status
   const kinds = /const CHAT_PROMPT_KINDS = \[([^\]]+)\]/.exec(skin)?.[1].match(/'([a-z]+)'/g) ?? [];
@@ -357,10 +358,28 @@ test('every colour the skin uses is a token (none minted in the skin\'s own rule
   assert.match(sk + '\n.x { color: #fff; }', /#[0-9a-fA-F]{3,8}\b/);
 });
 
-test('the font and size pickers persist through the same settings as before', () => {
-  assert.match(skin, /setSetting\('chatFontFamily'/);
-  assert.match(skin, /setSetting\('chatFontSize'/);
-});
+/** The Settings screen's own function: the font and size of the chat live there and nowhere in the conversation. */
+const settingsFn = (src: string): string => fnBody(src, 'openSettingsTab');
+guarded('the chat font and size are chosen in Settings, in the chatViewDefault section, saved under the same two keys and applied live',
+  (src) => {
+    const st = settingsFn(src);
+    const at = (needle: string): number => st.indexOf(needle);
+    const def = at("row(wrap, t('settings.chatViewDefault')");
+    const font = at("row(wrap, t('settings.chatFont')");
+    const size = at("row(wrap, t('settings.chatSize')");
+    const next = at("row(wrap, t('settings.appFont')");
+    // the same section: right after the chat-by-default toggle, before the next unrelated row
+    const together = def > 0 && font > def && size > font && next > size && font - def < 3500;
+    const fontHandler = /chatFontSel\.addEventListener\('change'[\s\S]*?\n    \}\);/.exec(st)?.[0] ?? '';
+    const sizeHandler = /chatSizeSel\.addEventListener\('change'[\s\S]*?\n    \}\);/.exec(st)?.[0] ?? '';
+    return together
+      && /chatPrefs\.family = chatFontSel\.value/.test(fontHandler) && /chatApplyPrefs\(\)/.test(fontHandler) && /setSetting\('chatFontFamily', chatPrefs\.family\)/.test(fontHandler)
+      && /chatPrefs\.size = v/.test(sizeHandler) && /chatApplyPrefs\(\)/.test(sizeHandler) && /setSetting\('chatFontSize', v\)/.test(sizeHandler)
+      && /chatReadPrefs\(cfg\)/.test(st)   // seeded from the config this page was built from, not from whatever a chat view last read
+      && /CHAT_FONTS\.map/.test(st) && /CHAT_SIZES\.map/.test(st);
+  },
+  // the live effect is lost: the font is saved but no open chat repaints until the next time it is entered
+  (src) => src.replace("      chatPrefs.family = chatFontSel.value;\n      chatApplyPrefs();", "      chatPrefs.family = chatFontSel.value;"));
 
 
 // ── integration: renderer ↔ preload ↔ main speak the same contract ──────────

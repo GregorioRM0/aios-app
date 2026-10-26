@@ -1339,6 +1339,10 @@
   "chat.slash.cmd.voice": "Turn voice mode on or off",
   "settings.chatViewDefault": "Open Claude sessions as chat",
   "settings.chatViewDefaultHint": "New Claude sessions start in the chat view. You can switch any tab back to the terminal at any time.",
+  "settings.chatFont": "Chat font",
+  "settings.chatFontHint": "The typeface of the conversation in the chat view. It changes at once in every chat that is open.",
+  "settings.chatSize": "Chat text size",
+  "settings.chatSizeHint": "How large the conversation reads in the chat view.",
   "chat.drop.label": "Drop to add the path",
   "chat.drop.failed": "Couldn't attach that file"
 }

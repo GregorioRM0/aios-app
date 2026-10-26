@@ -9107,6 +9107,51 @@ function openSettingsTab() {
     });
     row(wrap, t('settings.chatViewDefault'), chatDefToggle, t('settings.chatViewDefaultHint'));
 
+    /* The chat's reading font and size. They are set HERE and nowhere in the chat view itself: reading settings are
+       chosen once and are in the way afterwards, so the conversation keeps no menu for them. A change applies at once
+       to every chat view that is open (chatApplyPrefs) and is saved under the same two keys the chat has always read
+       (chatFontFamily / chatFontSize), so nothing the operator already chose is lost. Seeded from the config this page
+       was just built from, because chatPrefs only learns of a saved value when a chat view is entered. */
+    chatReadPrefs(cfg);
+    /* A font stack or a size written into the config by hand stays selectable as an extra entry instead of being silently replaced. */
+    const chatPrefSelect = (options, current) => {
+      const sel = document.createElement('select');
+      sel.className = 'tinput';
+      const all = options.some(([, v]) => v === current) ? options : [...options, [current, current]];
+      for (const [l, v] of all) { const o = document.createElement('option'); o.textContent = l; o.value = v; sel.appendChild(o); }
+      sel.value = current;
+      return sel;
+    };
+    const chatFontSel = chatPrefSelect(CHAT_FONTS.map((f) => [t(f.label), f.stack]), chatPrefs.family);
+    const chatSizeSel = chatPrefSelect(CHAT_SIZES.map((n) => [String(n), String(n)]), String(chatPrefs.size));
+    chatSizeSel.style.width = '90px';
+    /* What the two choices look like, drawn with the same two custom properties the chat view reads. */
+    const chatSample = el('div', 'chat-pref-sample', t('chat.settings.sample'));
+    const paintChatSample = () => {
+      chatSample.style.setProperty('--chat-font', chatPrefs.family || 'inherit');
+      chatSample.style.setProperty('--chat-size', String(chatPrefs.size));
+    };
+    paintChatSample();
+    chatFontSel.addEventListener('change', async () => {
+      chatPrefs.family = chatFontSel.value;
+      chatApplyPrefs();
+      paintChatSample();
+      await window.glassShell.setSetting('chatFontFamily', chatPrefs.family);
+      toast(t('settings.saved'));
+    });
+    chatSizeSel.addEventListener('change', async () => {
+      const v = Number(chatSizeSel.value);
+      if (!Number.isFinite(v)) return;
+      chatPrefs.size = v;
+      chatApplyPrefs();
+      paintChatSample();
+      await window.glassShell.setSetting('chatFontSize', v);
+      toast(t('settings.saved'));
+    });
+    row(wrap, t('settings.chatFont'), chatFontSel, t('settings.chatFontHint'));
+    row(wrap, t('settings.chatSize'), chatSizeSel, t('settings.chatSizeHint'));
+    wrap.appendChild(chatSample);
+
     // interface scale — the UI's counterpart to terminal font size, applied live
     const appFontIn = document.createElement('input');
     appFontIn.className = 'tinput'; appFontIn.type = 'number'; appFontIn.min = '10'; appFontIn.max = '18'; appFontIn.step = '0.5'; appFontIn.style.width = '70px';
