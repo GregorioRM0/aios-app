@@ -633,6 +633,15 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
     const view = await js<string>(`(() => { const p = panes.get(${paneId}); if (!p || !p.viewBtn) return 'no toggle'; p.viewBtn.click(); return p.view || 'term'; })()`);
     if (view !== 'chat') return fail(`the tab toggle did not switch to chat (view=${view})`);
     say('chat view on (via the tab toggle)');
+    /* The pane has no header of its own any more: the bubble icon on the tab is the only switch (plus the shortcut and the menu). A header
+       that crept back would be a second switch and a strip of dead space above the log, and nothing else in this run would notice it. */
+    const shape = await js<string>(`(() => { const p = panes.get(${paneId}); const cs = p && p.chatSkin; if (!cs) return 'no chat view';
+      if (cs.root.querySelector('.cs-head, .cs-switch, .cs-gear, .cs-menu')) return 'the chat view has a header again';
+      if (p.viewBtn.getAttribute('aria-pressed') !== 'true') return 'the tab icon is not pressed while the chat view is on';
+      if (cs.root.firstElementChild !== cs.log) return 'the log is not the first thing in the chat view';
+      return 'ok'; })()`);
+    if (shape !== 'ok') return fail(shape);
+    say('no pane header; the tab icon is pressed and the log starts the view');
 
     // 3. answer the trust dialog if there is one, and wait for the pane to adopt its session id
     let trustSeen = false; let trustAnswered = false; let nagAnswered = false; let lastTry = 0; let byCard = 0; let direct = 0;
