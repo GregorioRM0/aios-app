@@ -583,6 +583,7 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
   const since = (): string => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
 
   let paneId = -1;
+  let priorMode = '';
   let sessionId = '';
   const kids = new Set<number>();
   const problems: string[] = [];
@@ -629,20 +630,25 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
     const shellPid = ptys.get(paneId)?.pid;
     say(`pane ${paneId} opened in ${path.basename(dir)} (claude --model haiku --name ${name})`);
 
-    // 2. the operator's toggle, pressed at once: a new session is still blocked on the folder-trust
+    // 2. the operator's choice in Settings, made at once: a new session is still blocked on the folder-trust
     //    dialog and has no id, which is exactly when the chat view must not hide the terminal
-    const view = await js<string>(`(() => { const p = panes.get(${paneId}); if (!p || !p.viewBtn) return 'no toggle'; p.viewBtn.click(); return p.view || 'term'; })()`);
-    if (view !== 'chat') return fail(`the tab toggle did not switch to chat (view=${view})`);
-    say('chat view on (via the tab toggle)');
-    /* The pane has no header of its own any more: the bubble icon on the tab is the only switch (plus the shortcut and the menu). A header
-       that crept back would be a second switch and a strip of dead space above the log, and nothing else in this run would notice it. */
+    /* The same function the Settings selector and the shortcut call (chatSkinSetMode), so the pane that is ALREADY open follows the
+       mode. `persist: false` on purpose: the setting lives in the framework's `.glass/shell.json` (the operator's ~/aios unless
+       GLASS_FRAMEWORK_PATH points elsewhere), NOT in the throwaway userData this run was given, so a persisted write would flip the
+       operator's real preference from a QA run. The mode it found is put back in the cleanup. */
+    priorMode = await js<string>('chatMode');
+    const view = await js<string>(`(async () => { await chatSkinSetMode('chat', { persist: false }); const p = panes.get(${paneId}); return p ? (p.view || 'term') : 'no pane'; })()`);
+    if (view !== 'chat') return fail(`the chat mode did not put the open Claude pane in chat view (view=${view})`);
+    say('chat view on (via the same mode setting as Settings, applied to the open pane)');
+    /* The pane has no header and the tab has no switch: the view is one setting. A header or a tab icon that crept back would be a second
+       switch and a strip of dead space above the log, and nothing else in this run would notice it. */
     const shape = await js<string>(`(() => { const p = panes.get(${paneId}); const cs = p && p.chatSkin; if (!cs) return 'no chat view';
       if (cs.root.querySelector('.cs-head, .cs-switch, .cs-gear, .cs-menu')) return 'the chat view has a header again';
-      if (p.viewBtn.getAttribute('aria-pressed') !== 'true') return 'the tab icon is not pressed while the chat view is on';
+      if (p.tab.querySelector('.tview') || p.viewBtn) return 'the tab has a view switch again';
       if (cs.root.firstElementChild !== cs.log) return 'the log is not the first thing in the chat view';
       return 'ok'; })()`);
     if (shape !== 'ok') return fail(shape);
-    say('no pane header; the tab icon is pressed and the log starts the view');
+    say('no pane header and no tab switch; the log starts the view');
 
     // 3. answer the trust dialog if there is one, and wait for the pane to adopt its session id
     let trustSeen = false; let trustAnswered = false; let nagAnswered = false; let lastTry = 0; let byCard = 0; let direct = 0;
@@ -844,6 +850,7 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
       const shellPid = ptys.get(paneId)?.pid;
       if (shellPid) for (const k of await descendants(shellPid)) kids.add(k);
       if (paneId >= 0) await js(`(() => { if (panes.has(${paneId})) closePane(${paneId}); return true; })()`).catch(() => undefined);
+      if (priorMode === 'chat' || priorMode === 'terminal') await js(`chatSkinSetMode(${JSON.stringify(priorMode)}, { persist: false })`).catch(() => undefined);   // the live mode goes back to what the run found
       for (let i = 0; i < 40 && [...kids].some(alive); i++) await sleep(250);
       const left = [...kids].filter(alive);
       if (left.length) {
@@ -2717,7 +2724,7 @@ app.whenReady().then(() => {
          already failed, so a broken build does not also spend a model call. */
       let chat: SmokeChatVerdict = { status: 'skipped', detail: 'an earlier gate failed' };
       if (ok) chat = await chatViewSmoke(win).catch((e): SmokeChatVerdict => ({ status: 'failed', detail: String(e?.message ?? e) }));
-      if (chat.status === 'ok') console.log('shell-smoke: chat view OK ✓ — a real claude session, the chat toggle, the composer and the bubbles agree');
+      if (chat.status === 'ok') console.log('shell-smoke: chat view OK ✓ — a real claude session, the chat mode, the composer and the bubbles agree');
       else if (chat.status === 'skipped') console.log(`shell-smoke: chat view SKIPPED — ${chat.detail}`);
       else console.error(`shell-smoke: chat view FAILED — ${chat.detail}`);
       dropSmokeUserData();
