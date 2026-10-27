@@ -12,7 +12,9 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as ts from 'typescript';
 import { createTranscriptTail, locateTranscript, isSessionId, type TailEvent } from '../main/transcriptTail';
+import { normalizeClaudeView, shellSettings, setShellSetting } from '../main/aios';
 import type { ChatItem } from '../core/transcriptChat';
 
 type Ev = { paneId: number } & TailEvent;
@@ -313,10 +315,78 @@ test('a dialog is cleared only by proof from the transcript, not by assistant te
   assert.match(main, /it\.role === 'user' \|\| \(it\.tool && it\.tool\.status !== 'running'\)/);
 });
 
-test('chatViewDefault is a boolean setting, off unless literally true, and settable', () => {
-  assert.match(aios, /chatViewDefault: boolean/);
-  assert.match(aios, /chatViewDefault: raw\.chatViewDefault === true/);
-  assert.match(main, /'lidAsked' \| 'chatViewDefault', value: unknown\)/);
+/** The migration function, compiled from aios.ts as written (optionally mutated first), so a control can break the SOURCE and watch the behaviour change. */
+function compileNormalizer(mutate: (src: string) => string = (x) => x): (raw: Record<string, unknown>) => string {
+  const m = /export function normalizeClaudeView[\s\S]*?\n\}\n/.exec(aios);
+  assert.ok(m, 'normalizeClaudeView is in aios.ts');
+  const src = mutate(m[0]);
+  const js = ts.transpileModule(src, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+  const exp: Record<string, unknown> = {};
+  new Function('exports', js)(exp);
+  return exp.normalizeClaudeView as (raw: Record<string, unknown>) => string;
+}
+/** What every stored shape must become: the migration table of the setting. */
+const MIGRATION: Array<[string, Record<string, unknown>, string]> = [
+  ['old checkbox ticked -> chat', { chatViewDefault: true }, 'chat'],
+  ['old checkbox unticked -> terminal', { chatViewDefault: false }, 'terminal'],
+  ['nothing stored -> terminal', {}, 'terminal'],
+  ['only a literal true counts (a hand-edit "true")', { chatViewDefault: 'true' }, 'terminal'],
+  ['only a literal true counts (1)', { chatViewDefault: 1 }, 'terminal'],
+  ['explicit terminal beats a ticked old box', { claudeView: 'terminal', chatViewDefault: true }, 'terminal'],
+  ['explicit chat beats an unticked old box', { claudeView: 'chat', chatViewDefault: false }, 'chat'],
+  ['explicit chat with no old key', { claudeView: 'chat' }, 'chat'],
+  ['an unknown stored value falls back to the old key (true)', { claudeView: 'both', chatViewDefault: true }, 'chat'],
+  ['an unknown stored value falls back to the old key (absent)', { claudeView: 7 }, 'terminal'],
+];
+test('claudeView migrates from chatViewDefault: true -> chat, false or absent -> terminal, and an explicit value wins', () => {
+  for (const [name, raw, want] of MIGRATION) {
+    assert.equal(normalizeClaudeView(raw), want, name);
+    assert.equal(compileNormalizer()(raw), want, `${name} (the compiled source agrees with the import)`);
+  }
+});
+test('claudeView migration: negative controls — a source that forgets the old key, or lets it beat the new one, fails the table', () => {
+  const fails = (mutate: (x: string) => string): boolean => {
+    const f = compileNormalizer(mutate);
+    return MIGRATION.some(([, raw, want]) => f(raw) !== want);
+  };
+  assert.ok(fails((x) => x.replace("raw.chatViewDefault === true ? 'chat' : 'terminal'", "'terminal'")), 'control: the old checkbox is ignored');
+  assert.ok(fails((x) => x.replace("raw.chatViewDefault === true ? 'chat' : 'terminal'", "raw.chatViewDefault ? 'chat' : 'terminal'")), 'control: any truthy old value counts');
+  assert.ok(fails((x) => x.replace("  if (raw.claudeView === 'chat' || raw.claudeView === 'terminal') return raw.claudeView;\n", '')), 'control: the explicit value no longer wins');
+  assert.ok(fails((x) => x.replace("return raw.chatViewDefault === true ? 'chat' : 'terminal';", "return raw.chatViewDefault === false ? 'terminal' : 'chat';")), 'control: absent means chat');
+});
+test('shellSettings reads claudeView from the stored file, migrating the old key, and the shell:setSetting door validates it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aios-claudeview-'));
+  const home = path.join(root, 'home');
+  const fw = path.join(root, 'fw');
+  fs.mkdirSync(path.join(fw, '.glass'), { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+  const saved = { h: process.env.HOME, u: process.env.USERPROFILE, f: process.env.GLASS_FRAMEWORK_PATH };
+  process.env.HOME = home; process.env.USERPROFILE = home; process.env.GLASS_FRAMEWORK_PATH = fw;   // ~/.aios/app.json must not point elsewhere
+  try {
+    const viewFor = (stored: object | null): string => {
+      if (stored) fs.writeFileSync(path.join(fw, '.glass', 'shell.json'), JSON.stringify(stored)); else fs.rmSync(path.join(fw, '.glass', 'shell.json'), { force: true });
+      return shellSettings().claudeView;
+    };
+    assert.equal(viewFor(null), 'terminal');
+    assert.equal(viewFor({ chatViewDefault: true }), 'chat');
+    assert.equal(viewFor({ chatViewDefault: false }), 'terminal');
+    assert.equal(viewFor({ claudeView: 'terminal', chatViewDefault: true }), 'terminal');
+    assert.equal(viewFor({ claudeView: 'chat' }), 'chat');
+    setShellSetting('claudeView', 'terminal');   // the first save supersedes the old key, which stays in the file for an older app
+    assert.equal(shellSettings().claudeView, 'terminal');
+  } finally {
+    for (const [k, v] of [['HOME', saved.h], ['USERPROFILE', saved.u], ['GLASS_FRAMEWORK_PATH', saved.f]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  // the door: only the two values are stored, and the old key is no longer writable from the renderer
+  const door = /ipcMain\.handle\('shell:setSetting'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
+  assert.match(door, /'lidAsked' \| 'claudeView', value: unknown\)/);
+  assert.doesNotMatch(door.split('=> {')[0], /chatViewDefault/);
+  assert.match(door, /if \(key === 'claudeView' && value !== 'chat' && value !== 'terminal'\) return aios\.shellSettings\(\);\n\s+aios\.setShellSetting\(key, value\);/);
+  assert.match(aios, /claudeView: ClaudeView;/);
+  assert.match(aios, /claudeView: normalizeClaudeView\(raw\)/);
+  const guard = /if \(key === 'claudeView' && value !== 'chat' && value !== 'terminal'\) return aios\.shellSettings\(\);\n\s+aios\.setShellSetting\(key, value\);/;
+  assert.doesNotMatch(door.replace("if (key === 'claudeView' && value !== 'chat' && value !== 'terminal') return aios.shellSettings();\n", ''), guard, 'control: without the guard line the check fails');
 });
 
 test('chat:status reads the global statusline payload without the SDK', () => {
