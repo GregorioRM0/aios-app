@@ -1952,7 +1952,7 @@ const CHAT_SHOT_DRIVER = String.raw`(() => {
   };
   window.__chatShot = {
     async ready() {
-      await waitFor(() => typeof createPane === 'function' && typeof chatSkinSetView === 'function' && window.glassShell && panes instanceof Map && document.readyState === 'complete', 'the renderer');
+      await waitFor(() => typeof createPane === 'function' && typeof chatSkinSetView === 'function' && typeof chatSkinSetMode === 'function' && window.glassShell && panes instanceof Map && document.readyState === 'complete', 'the renderer');
       await document.fonts.ready;
       await sleep(1500);   // first paint of the workbench (pulse, explorer) before anything is measured
       return true;
@@ -1971,7 +1971,11 @@ const CHAT_SHOT_DRIVER = String.raw`(() => {
       p.isSession = true;
       p.sessionId = FAKE_SESSION;   // eligibility normally comes from the session registry; set directly, never persisted
       await sleep(400);             // the shell has printed whatever it will print
-      if (!chatSkinSetView(id, 'chat')) throw new Error('the pane is not eligible for the chat view');
+      /* Through the mode, as an operator gets there (Settings → Claude sessions view → Chat), so the Settings page photographed
+         later reads "Chat" and the tab strip is the one a real chat user sees. With persist:false: the shot has no stored setting
+         to write, and nothing here should reach a shell.json. */
+      await chatSkinSetMode('chat', { persist: false });
+      if (p.view !== 'chat') throw new Error('the pane is not eligible for the chat view');
       await waitFor(() => p.chatSkin && p.chatSkin.watched === FAKE_SESSION, 'the chat watch');
       await window.glassShell.chatSkinWatch(id, FAKE_SESSION);   // see "THE FAKE SESSION" in main.ts
       await sleep(150);

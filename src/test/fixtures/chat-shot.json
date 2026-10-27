@@ -1014,13 +1014,17 @@
       "js": [
         "openSettingsTab();",
         "await ctx.sleep(400);",
-        "// the font and size now live here and nowhere else: bring their rows into view, and FAIL the run if the sample is not on screen",
+        "// the view lives here and nowhere on the tab: bring the selector into view, and FAIL the run if it is missing or does not say what the open tabs are doing",
+        "const sel = document.querySelector('[data-setting=\"claudeView\"]');",
+        "if (!sel) throw new Error('the Settings tab has no Claude view selector');",
+        "if (sel.tagName !== 'SELECT' || sel.value !== 'chat') throw new Error('the Claude view selector does not show the live mode');",
+        "if ((ctx.p.view === 'chat') !== (sel.value === 'chat')) throw new Error('the open Claude tab is not in the mode the selector shows');",
         "const sample = document.querySelector('.chat-pref-sample');",
         "if (!sample) throw new Error('the Settings tab has no chat font sample');",
-        "sample.scrollIntoView({ block: 'center' });",
+        "sel.scrollIntoView({ block: 'center' });",
         "await ctx.sleep(250);",
-        "const sr = sample.getBoundingClientRect();",
-        "if (!(sr.width > 40 && sr.height > 8 && sr.top >= 0 && sr.bottom <= window.innerHeight)) throw new Error('the chat font sample is not visible in the Settings tab');"
+        "const sr = sample.getBoundingClientRect(), vr = sel.getBoundingClientRect();",
+        "if (!(sr.width > 40 && sr.height > 8 && sr.bottom <= window.innerHeight && vr.top >= 0)) throw new Error('the selector and the chat font sample are not on screen together');"
       ],
       "clip": "window",
       "layout": "workbench"
@@ -1035,13 +1039,109 @@
       "js": [
         "openSettingsTab();",
         "await ctx.sleep(400);",
-        "// the font and size now live here and nowhere else: bring their rows into view, and FAIL the run if the sample is not on screen",
+        "// the view lives here and nowhere on the tab: bring the selector into view, and FAIL the run if it is missing or does not say what the open tabs are doing",
+        "const sel = document.querySelector('[data-setting=\"claudeView\"]');",
+        "if (!sel) throw new Error('the Settings tab has no Claude view selector');",
+        "if (sel.tagName !== 'SELECT' || sel.value !== 'chat') throw new Error('the Claude view selector does not show the live mode');",
+        "if ((ctx.p.view === 'chat') !== (sel.value === 'chat')) throw new Error('the open Claude tab is not in the mode the selector shows');",
         "const sample = document.querySelector('.chat-pref-sample');",
         "if (!sample) throw new Error('the Settings tab has no chat font sample');",
-        "sample.scrollIntoView({ block: 'center' });",
+        "sel.scrollIntoView({ block: 'center' });",
         "await ctx.sleep(250);",
-        "const sr = sample.getBoundingClientRect();",
-        "if (!(sr.width > 40 && sr.height > 8 && sr.top >= 0 && sr.bottom <= window.innerHeight)) throw new Error('the chat font sample is not visible in the Settings tab');"
+        "const sr = sample.getBoundingClientRect(), vr = sel.getBoundingClientRect();",
+        "if (!(sr.width > 40 && sr.height > 8 && sr.bottom <= window.innerHeight && vr.top >= 0)) throw new Error('the selector and the chat font sample are not on screen together');"
+      ],
+      "clip": "window",
+      "layout": "workbench"
+    },
+    {
+      "name": "tab-dark",
+      "theme": "dark",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await ctx.sleep(300);",
+        "// the tab of a Claude session in chat view: its name and close mark and nothing else. FAIL the run if a view switch is on it, or if the tab is not on screen.",
+        "if (ctx.p.tab.querySelector('.tview') || ctx.p.viewBtn) throw new Error('the tab has a view switch again');",
+        "const tr = ctx.p.tab.getBoundingClientRect();",
+        "if (!(tr.width > 40 && tr.height > 10 && tr.top >= 0 && tr.bottom <= window.innerHeight)) throw new Error('the Claude tab is not on screen');",
+        "if (ctx.p.view !== 'chat') throw new Error('the Claude tab is not in the chat view');"
+      ],
+      "clip": "window",
+      "layout": "workbench"
+    },
+    {
+      "name": "tab-light",
+      "theme": "light",
+      "events": [
+        "conversation",
+        "bar-idle"
+      ],
+      "js": [
+        "await ctx.sleep(300);",
+        "// the tab of a Claude session in chat view: its name and close mark and nothing else. FAIL the run if a view switch is on it, or if the tab is not on screen.",
+        "if (ctx.p.tab.querySelector('.tview') || ctx.p.viewBtn) throw new Error('the tab has a view switch again');",
+        "const tr = ctx.p.tab.getBoundingClientRect();",
+        "if (!(tr.width > 40 && tr.height > 10 && tr.top >= 0 && tr.bottom <= window.innerHeight)) throw new Error('the Claude tab is not on screen');",
+        "if (ctx.p.view !== 'chat') throw new Error('the Claude tab is not in the chat view');"
+      ],
+      "clip": "window",
+      "layout": "workbench"
+    },
+    {
+      "name": "settings-terminal-dark",
+      "theme": "dark",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "js": [
+        "// Terminal mode: the same page after the operator picked Terminal. The font and size only mean something in Chat, so their rows must step aside.",
+        "await chatSkinSetMode('terminal', { persist: false });",
+        "openSettingsTab();",
+        "await ctx.sleep(400);",
+        "// the view lives here and nowhere on the tab: bring the selector into view, and FAIL the run if it is missing or does not say what the open tabs are doing",
+        "const sel = document.querySelector('[data-setting=\"claudeView\"]');",
+        "if (!sel) throw new Error('the Settings tab has no Claude view selector');",
+        "if (sel.tagName !== 'SELECT' || sel.value !== 'terminal') throw new Error('the Claude view selector does not show the live mode');",
+        "if ((ctx.p.view === 'chat') !== (sel.value === 'chat')) throw new Error('the open Claude tab is not in the mode the selector shows');",
+        "const sample = document.querySelector('.chat-pref-sample');",
+        "if (!sample) throw new Error('the Settings tab has no chat font sample');",
+        "sel.scrollIntoView({ block: 'center' });",
+        "await ctx.sleep(250);",
+        "if (!sample.hidden || sample.getBoundingClientRect().height > 0) throw new Error('the chat font sample is still shown in Terminal mode');",
+        "const vr = sel.getBoundingClientRect();",
+        "if (!(vr.width > 40 && vr.top >= 0 && vr.bottom <= window.innerHeight)) throw new Error('the selector is not on screen');"
+      ],
+      "clip": "window",
+      "layout": "workbench"
+    },
+    {
+      "name": "settings-terminal-light",
+      "theme": "light",
+      "events": [
+        "conversation"
+      ],
+      "composer": "Also check that the retry count is logged",
+      "js": [
+        "// Terminal mode: the same page after the operator picked Terminal. The font and size only mean something in Chat, so their rows must step aside.",
+        "await chatSkinSetMode('terminal', { persist: false });",
+        "openSettingsTab();",
+        "await ctx.sleep(400);",
+        "// the view lives here and nowhere on the tab: bring the selector into view, and FAIL the run if it is missing or does not say what the open tabs are doing",
+        "const sel = document.querySelector('[data-setting=\"claudeView\"]');",
+        "if (!sel) throw new Error('the Settings tab has no Claude view selector');",
+        "if (sel.tagName !== 'SELECT' || sel.value !== 'terminal') throw new Error('the Claude view selector does not show the live mode');",
+        "if ((ctx.p.view === 'chat') !== (sel.value === 'chat')) throw new Error('the open Claude tab is not in the mode the selector shows');",
+        "const sample = document.querySelector('.chat-pref-sample');",
+        "if (!sample) throw new Error('the Settings tab has no chat font sample');",
+        "sel.scrollIntoView({ block: 'center' });",
+        "await ctx.sleep(250);",
+        "if (!sample.hidden || sample.getBoundingClientRect().height > 0) throw new Error('the chat font sample is still shown in Terminal mode');",
+        "const vr = sel.getBoundingClientRect();",
+        "if (!(vr.width > 40 && vr.top >= 0 && vr.bottom <= window.innerHeight)) throw new Error('the selector is not on screen');"
       ],
       "clip": "window",
       "layout": "workbench"
@@ -1992,15 +2092,14 @@
     "  if (!o.pane && vis > 7) throw new Error('slash popup shows ' + vis + ' rows (list ' + list.clientHeight + 'px, row ' + list.children[0].offsetHeight + 'px, top ' + list.scrollTop + ')');",
     "  if (on.top < box.top - 1 || on.bottom > box.bottom + 1) throw new Error('the active slash row is out of view');",
     "};",
-    "// The no-header shots: the pane has no title strip of its own any more, so the chat starts at the very top of the pane and the way back to the terminal is the bubble icon on the tab.",
+    "// The no-header shots: the pane has no title strip of its own any more, so the chat starts at the very top of the pane, and the tab carries no view switch either (the view is one setting, chosen in Settings).",
     "window.headerShot = async (ctx, o) => {",
     "  o = o || {};",
     "  if (o.pane) { ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = o.pane + 'px'; ctx.p.el.style.alignSelf = 'flex-start'; }",
     "  await ctx.sleep(350);",
-    "  // FAIL the run if a header came back, if the icon is not on the tab and pressed, or if the log does not start at the top edge of the chat",
+    "  // FAIL the run if a header came back, if a view switch came back onto the tab, or if the log does not start at the top edge of the chat",
     "  if (ctx.$('.cs-head, .cs-switch, .cs-gear')) throw new Error('the chat view has a header again');",
-    "  const icon = ctx.p.tab.querySelector('.tview');",
-    "  if (!icon || !icon.classList.contains('on') || icon.getAttribute('aria-pressed') !== 'true') throw new Error('the tab has no pressed view icon');",
+    "  if (ctx.p.tab.querySelector('.tview') || ctx.p.viewBtn) throw new Error('the tab has a view switch again');",
     "  const r = (e) => e.getBoundingClientRect();",
     "  if (r(ctx.cs.log).top - r(ctx.root).top > 1.5) throw new Error('there is a gap above the log where the header used to be');",
     "  ctx.cs.log.scrollTop = 0;   // the start of the conversation: the first thing in the chat sits right under the tab strip",
