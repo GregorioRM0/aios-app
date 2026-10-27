@@ -53,7 +53,7 @@ export const ONBOARDING_STEPS: OnboardingStepSpec[] = [
   {
     id: 'firstrun',
     required: ['personalized'],
-    optional: ['framework', 'vault', 'skills', 'mcpObsidian', 'spawn', 'plugin', 'starter'],
+    optional: ['framework', 'vault', 'skills', 'mcpObsidian', 'spawn', 'plugin', 'hooks', 'starter'],
   },
 ];
 

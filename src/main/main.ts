@@ -1025,6 +1025,11 @@ ipcMain.handle('onboarding:storePat', async (_e, pat: string): Promise<'verified
 });
 // doctor: headless repair + re-run-the-same-check proof (see aios.repairCheck)
 ipcMain.handle('doctor:repair', (_e, id: string) => aios.repairCheck(String(id)));
+/* "Finish setup": the App runs the four wiring installers itself (skills → plugin → spawn → hooks),
+   re-checking each — the lane the guided setup session cannot use in auto mode. See core/finishSetup.ts. */
+ipcMain.handle('doctor:finishSetup', () => aios.finishSetup());
+// what is still not wired, each with its one-line manual command — the Next steps page's fallback
+ipcMain.handle('doctor:wiringLeft', () => aios.wiringLeft());
 ipcMain.handle('doctor:health', () => aios.computeHealth());
 ipcMain.handle('health:routines', () => aios.routineHealth());   // #27
 // "Having issues?" — one battery + a plan per failing tool → the next ACTION, not a report.

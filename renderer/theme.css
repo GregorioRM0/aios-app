@@ -513,6 +513,29 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 .onboarding-done { text-align: center; margin-top: 26px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .onboarding-done .step-acts { justify-content: center; }
 
+/* Finish setup — consent first: the list IS the consent text, one plain line per change, so the
+   panel reads as "here is what will happen" rather than an alert. Tokens only: both themes. */
+.setup-finish { margin: 12px 0 4px; padding: 12px 14px; border-radius: 10px; text-align: left;
+  background: var(--surface-2); border: 1px solid var(--line-strong); }
+.setup-finish-t { font-size: 12.5px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
+.setup-finish-list { margin: 0 0 8px; padding-left: 18px; color: var(--subtle); font-size: 12px; line-height: 1.55; }
+.setup-finish-list li { margin: 2px 0; }
+.setup-finish-out { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; margin-top: 8px; }
+.setup-finish-out:empty { display: none; }
+
+/* Next steps — four short sections; the "still not wired" one comes first and carries one-line
+   commands. `white-space: pre` + horizontal scroll: what is shown is ONE line too, never wrapped. */
+.nextsteps { max-width: 720px; }
+.ns-sect { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.ns-t { font-size: 13.5px; font-weight: 600; color: var(--ink); margin: 0 0 6px; }
+.ns-b { font-size: 12.5px; color: var(--subtle); line-height: 1.6; margin: 0 0 6px; }
+.ns-left { border: 1px solid var(--line-strong); border-radius: 10px; padding: 12px 14px; background: var(--surface-2); }
+.ns-cmdrow { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.ns-cmdlab { font-size: 12px; color: var(--ink); }
+.ns-cmdline { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.ns-cmd { flex: 1; min-width: 0; overflow-x: auto; white-space: pre; user-select: all; font-family: var(--mono); font-size: 11.5px;
+  color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; }
+
 /* ── Home (the human front door) ── */
 .tool.home { max-width: 720px; padding-top: 48px; }
 .hgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 30px; }
