@@ -1604,19 +1604,6 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .chatskin[hidden], .chatskin [hidden] { display: none !important; }
 .pane.cs-strip > .chatskin { bottom: var(--cs-strip-h, 62%); min-height: 120px; border-bottom: 1px solid var(--line-strong); border-radius: 12px 12px 0 0; }
 .pane.cs-strip > .chatskin .chat-bar, .pane.cs-strip > .chatskin .cc-meta, .pane.cs-strip > .chatskin .chat-compose, .pane.cs-strip > .chatskin .cs-working { display: none; }   /* the whole compose block (status bar included) steps aside for a live dialog */
-/* The Terminal ⇄ Chat switch lives HERE and nowhere in the pane (the chat view has no header). It has to read as a button, not as
-   a decoration of the tab: a 22 px square with its own hover fill, a pointer, and — when the chat view is up — a tinted chip with a
-   hairline ring, so "this tab is in chat" is a shape and not only a colour (it must hold in both themes: the tint is a mix against
-   the theme's own transparent, the ring against the accent). Coral is allowed here because clicking it does something. */
-.tab .tview { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; width: 22px; height: 22px; box-sizing: border-box; margin: 0 -2px 0 0; padding: 0;
-              border-radius: 7px; color: var(--subtle); cursor: pointer; transition: background .14s ease, color .14s ease, box-shadow .14s ease; }
-.tab .tview:hover { background: var(--chat-row-hover); color: var(--ink); }
-.tab .tview:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 1px; color: var(--ink); }
-.tab .tview:active { background: var(--line); }
-.tab .tview.on { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent-ink); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent); }
-.tab .tview.on:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); color: var(--accent-ink); }
-.tab .tview[hidden] { display: none; }
-@media (prefers-reduced-motion: reduce) { .tab .tview { transition: none; } }
 .cs-working { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; margin: var(--cs-m) 0 0; color: var(--subtle); font-size: .88em; }
 .cw-dots { display: inline-flex; align-items: center; gap: 4px; height: 14px; }
 .cw-dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--st-busy); animation: cs-wave 1.3s ease-in-out infinite; }

@@ -330,6 +330,7 @@ void window.glassShell.shellConfig().then((c) => {
   EXPLORER.icons = c.fileIcons !== false;
   EXPLORER.autoReveal = c.autoReveal !== false;
   BUS_FOCUS = c.busFocus === 'follow' ? 'follow' : 'stay';
+  chatReadMode(c);
   SHOWWK = c.showWeekNumbers !== false;
   if (pulse.lastMonth) paintCalendar(); // config may resolve after the first month message
 });
@@ -3491,7 +3492,9 @@ function makeTab(id, name, iconName) {
     /* AI-169 read-aloud is HIDDEN for now (operator decision, 0.11.0): it returns with two-way voice.
        The code stays; flipping READ_ALOUD brings the menu row back. */
     if (READ_ALOUD && pane.kind === 'term' && (pane.isSession || pane.sessionId)) items.push({ label: t(pane.readAloud ? 'tab.readAloudOff' : 'tab.readAloudOn'), value: 'readAloud' });   // AI-169
-    if (pane.kind === 'term' && (chatSkinEligible(pane) || pane.view === 'chat')) items.push({ label: t(pane.view === 'chat' ? 'chat.skin.toTerminal' : 'chat.skin.toChat'), value: 'chatView' });
+    /* The view is ONE setting for every Claude session now (Settings, or the shortcut), so this row is not a per-tab switch. It
+       appears only for a tab that has stepped out of the mode on purpose (the notice's "Show terminal"), and puts it back. */
+    if (pane.kind === 'term' && chatSkinOutOfMode(pane)) items.push({ label: t(chatMode === 'chat' ? 'chat.skin.toChat' : 'chat.skin.toTerminal'), value: 'chatView' });
     items.push({ label: '-', value: '-' }, { label: t('tab.close'), value: 'close' });
     /* A NATIVE menu, not the app's listModal. That picker carries a filter box because it was
        built for long searchable lists (sessions, skills, commands), and on four rows the operator
@@ -3503,7 +3506,7 @@ function makeTab(id, name, iconName) {
       else if (pick === 'unsplit') unsplitZone(z);
       else if (pick === 'close') void requestClosePane(id);
       else if (pick === 'report') void reportThis(id);
-      else if (pick === 'chatView') chatSkinToggle(id);
+      else if (pick === 'chatView') chatSkinFollowMode(id);
       else if (pick === 'readAloud') setReadAloud(id, !pane.readAloud);
       else if (pick === 'copyAnswer') void window.glassShell.copyLastAnswer(pane.sessionId).then((n) => toast(t(n > 0 ? 'term.copiedAnswer' : 'term.noAnswer')));
       else if (pick === 'rename') {
@@ -3772,7 +3775,6 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
   const p = { kind: 'term', name, el, tab, term, fit, exited: false, cmd, cwd: cwd || '', isSession: paneIsClaude(cmd) };
   panes.set(id, p);
   attachPaneDropTarget(p, id);   // AI-82: any pane is a split drop target
-  chatSkinMountToggle(id, p);    // the Terminal/Chat switch on the tab (shown for Claude panes only)
   const snap = background ? snapshotFocus() : null;
   homePane(id, p, { fresh: !background });
   // raw tty fills the pane — type straight into the session; drag with the mouse
@@ -4002,7 +4004,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
      Plain-text copy lives on the session TAB as "Copy last answer", read from the transcript —
      no selection needed. A plain terminal keeps select-to-copy. */
   paintRunning(); // reflect the new terminal in the RUNNING card immediately
-  void chatSkinMaybeDefault(id, p);   // chatViewDefault: a new Claude session opens straight in chat view
+  void chatSkinMaybeDefault(id, p);   // claudeView: a new Claude session opens in the view the operator chose in Settings
   return id;
 }
 
@@ -6436,7 +6438,7 @@ window.glassShell.onIntent(async (m) => {
     case 'terminal':
       await createPane({ name: m.name || 'terminal', cmd: m.cmd, background: busBackground(m) });
       return;
-    case 'toggleChatView': chatSkinToggleFocused(); return;
+    case 'toggleChatView': void chatSkinToggleMode(); return;
     case 'spawnWorker': void spawnWorkerFlow(); return;
     case 'launchPrimary': { const c = await window.glassShell.shellConfig(); launchPrimary(c.primary || 'aios'); return; }
     case 'shortcuts': openShortcutsTab(); return;
@@ -7586,7 +7588,7 @@ function chatSkinRefreshStatus(cs) {
 
 /* ── eligibility ──────────────────────────────────────────────────────────── */
 /* Only a pane that runs Claude has a transcript to show. A plain shell, a viewer or an ended
-   session gets no toggle (and one that ends while in chat view is handed back to the terminal). */
+   session never takes the chat view (and one that ends while in chat view is handed back to the terminal). */
 function chatSkinEligible(p) {
   return !!p && p.kind === 'term' && !p.exited && !!(p.isSession || p.sessionId || (paneIsClaude(p.cmd) && !p.chatEnded));
 }
@@ -7604,8 +7606,8 @@ function chatSkinBuild(id, p) {
   root.setAttribute('role', 'region');
   root.setAttribute('aria-label', t('chat.skin.logLabel'));
 
-  /* The pane has no header: the view is switched from the tab's own icon (chatSkinMountToggle), the shortcut and the menu, and the
-     font lives in Settings. What answers, and what it costs, is the status bar UNDER the composer (built further down, in the
+  /* The pane has no header and the tab has no switch: the view is ONE setting for every Claude session (Settings, or the shortcut
+     and the menu item that flip it), and the font lives in Settings too. What answers, and what it costs, is the status bar UNDER the composer (built further down, in the
      compose block), next to the box it is the cost of. */
   const barParts = {};
   const bar = el('div', 'chat-bar');
@@ -7925,24 +7927,49 @@ function chatSkinSetView(id, view) {
   }
   chatSkinSync(id, p);
   chatSkinLayout(p);
-  chatSkinPaintToggle(p);
   if (view === 'chat') chatSkinFocus(p);
   else chatSkinHandBack(id, p);
   return true;
 }
-function chatSkinToggle(id) {
-  const p = panes.get(id);
-  if (!p) return;
-  chatSkinSetView(id, p.view === 'chat' ? 'term' : 'chat');
+/* ── the mode: ONE preference for every Claude session ───────────────────────────────────────────────────
+   Chat or Terminal is chosen in Settings (claudeView) and nowhere on a tab: a per-tab switch meant N answers to one question, and the
+   operator who prefers chat had to flip every new session by hand. The setting is applied LIVE to every pane that runs Claude
+   (chatSkinEligible) and to each one that appears later; a plain shell is never touched, it has no transcript to show.
+   `chatMode` caches the stored value so the tick and the shortcut need no round trip; the stored file stays the truth. */
+let chatMode = 'terminal';
+const chatModeSubs = new Set();   // Settings pages showing the selector: the shortcut changes the mode under them
+function chatReadMode(c) {
+  if (c && (c.claudeView === 'chat' || c.claudeView === 'terminal')) chatMode = c.claudeView;
 }
-/* The menu/shortcut path: the pane the operator is looking at, preferring the one holding focus. */
-function chatSkinToggleFocused() {
-  const inFocus = [...panes.entries()].find(([, p]) => p.kind === 'term' && p.el.contains(document.activeElement));
-  const pick = inFocus
-    || (active.term !== null && panes.get(active.term)?.kind === 'term' ? [active.term, panes.get(active.term)] : null)
-    || (active.main !== null && panes.get(active.main)?.kind === 'term' ? [active.main, panes.get(active.main)] : null);
-  if (!pick) { toast(t('chat.skin.notClaude')); return; }
-  chatSkinToggle(pick[0]);
+function chatSkinApplyMode(mode) {
+  const view = mode === 'chat' ? 'chat' : 'term';
+  for (const [id, p] of panes) {
+    if (!chatSkinEligible(p)) continue;   // a plain terminal (or a viewer) has no Claude behind it: it stays as it is
+    chatSkinSetView(id, view);
+  }
+}
+/* The one door every change goes through: Settings, the shortcut and the menu item. `persist: false` applies without writing, for
+   the smoke run, whose shell.json is the framework's and not the throwaway userData's. */
+async function chatSkinSetMode(mode, opts) {
+  if (mode !== 'chat' && mode !== 'terminal') return;
+  chatMode = mode;
+  chatSkinApplyMode(mode);
+  for (const sub of [...chatModeSubs]) sub();
+  if (!opts || opts.persist !== false) await window.glassShell.setSetting('claudeView', mode);
+}
+/* ⌘⇧L and File → Switch…: flips the GLOBAL mode (not the focused tab). Read fresh first, so a value synced in from another machine is
+   what gets flipped. */
+async function chatSkinToggleMode() {
+  try { chatReadMode(await window.glassShell.shellConfig()); } catch { /* the cached value stands */ }
+  const next = chatMode === 'chat' ? 'terminal' : 'chat';
+  await chatSkinSetMode(next);
+  toast(t(next === 'chat' ? 'chat.skin.modeNowChat' : 'chat.skin.modeNowTerminal'));
+}
+/* A tab that left the mode on purpose ("Show terminal" on a notice) — the only way a Claude tab differs from the setting. */
+const chatSkinOutOfMode = (p) => chatSkinEligible(p) && (p.view === 'chat') !== (chatMode === 'chat');
+function chatSkinFollowMode(id) {
+  const p = panes.get(id);
+  if (p && chatSkinEligible(p)) chatSkinSetView(id, chatMode === 'chat' ? 'chat' : 'term');
 }
 /* Give the terminal back: re-fit ONCE (the only fit this block performs, and only after the
    overlay is gone), push the geometry if it moved, and put the caret where the operator expects. */
@@ -8019,7 +8046,7 @@ function chatSkinPaintAlert(p) {
   cs.alertText.textContent = text;
   cs.alertEl.classList.toggle('prompt', !!cs.promptKind);
   cs.alertEl.title = cs.promptHint || '';
-  cs.alertBtn.hidden = !!cs.promptKind;   // under a dialog the terminal is already in front; the tab's icon is still there
+  cs.alertBtn.hidden = !!cs.promptKind;   // under a dialog the terminal is already in front
   cs.alertBack.hidden = !(cs.promptKind && cs.promptOpts && cs.promptTerm);   // the strip was chosen over a card that could be drawn: offer the way back to it
   const kind = cs.promptKind ? 'prompt' : 'stalled';
   if (text && cs.alertKind !== kind) {
@@ -8051,33 +8078,6 @@ function chatSkinPaintState(p) {
     cs.stateIco.replaceChildren(CHAT_STATE_ICONS[kind] ? csIcon(CHAT_STATE_ICONS[kind], 20) : el('span', 'ct-spin'));
   }
 }
-/* The toggle on the tab: the one control that switches the view. Shown for panes that run
-   Claude only; pressed state mirrors the view. */
-function chatSkinPaintToggle(p) {
-  const on = p.view === 'chat';
-  const eligible = chatSkinEligible(p);
-  if (p.viewBtn) {
-    p.viewBtn.hidden = !eligible && !on;
-    p.viewBtn.classList.toggle('on', on);
-    p.viewBtn.setAttribute('aria-pressed', String(on));
-    const label = t(on ? 'chat.skin.toTerminal' : 'chat.skin.toChat');
-    p.viewBtn.title = label;
-    p.viewBtn.setAttribute('aria-label', label);
-  }
-}
-function chatSkinMountToggle(id, p) {
-  const b = el('span', 'tview');
-  b.setAttribute('role', 'button');
-  b.tabIndex = -1;   // a focusable control inside a <button> tab is an a11y trap; the keyboard path is the menu item (⌘⇧L)
-  b.innerHTML = icon('chat', 14);
-  const go = (e) => { e.preventDefault(); e.stopPropagation(); setActive(id); chatSkinToggle(id); };
-  b.addEventListener('click', go);
-  b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); });
-  p.tab.insertBefore(b, p.tab.querySelector('.tx'));
-  p.viewBtn = b;
-  chatSkinPaintToggle(p);
-}
-
 /* ── watching the transcript ─────────────────────────────────────────────── */
 /* Reconcile WHAT IS BEING WATCHED with WHAT THE PANE IS. Called after every change that could move
    the answer (view switched, sessionId adopted/changed/cleared, pty exited), so it is idempotent:
@@ -8158,7 +8158,6 @@ function chatSkinScreenSoon(id, p) {
 function chatSkinSessionChanged(id, p) {
   if (!p || p.kind !== 'term') return;
   if (p.sessionId) p.chatEnded = false;   // a session was (re)adopted after an ending
-  chatSkinPaintToggle(p);
   if (p.view === 'chat' && !chatSkinEligible(p)) { chatSkinSetView(id, 'term'); return; }   // the Claude behind it is gone
   chatSkinSync(id, p);
 }
@@ -8173,18 +8172,17 @@ function chatSkinTeardown(id, p) {
   cs.watched = null;
 }
 function chatSkinOnExit(id, p) {
-  if (!p.chatSkin) { chatSkinPaintToggle(p); return; }
+  if (!p.chatSkin) return;
   chatSkinTeardown(id, p);
   if (p.view === 'chat') chatSkinSetView(id, 'term');   // show "[session ended]" instead of a dead composer
-  chatSkinPaintToggle(p);
 }
-/* A new Claude pane opens straight in chat view when the preference says so — including panes
-   restored at launch and resumed ones, since both come through createPane with a claude command.
-   Read fresh from the config each time: the toggle in Settings applies to the very next session. */
+/* A new Claude pane opens in the chosen view — including panes restored at launch and resumed ones, since both come through
+   createPane with a claude command. Read fresh from the config each time (a value synced from another machine counts), but only
+   ever TOWARD chat: terminal is what a pane already is, and a pane the operator stepped out of the mode with is not ours to move. */
 async function chatSkinMaybeDefault(id, p) {
   if (!paneIsClaude(p.cmd)) return;
   let want = false;
-  try { want = (await window.glassShell.shellConfig()).chatViewDefault === true; } catch { want = false; }
+  try { want = (await window.glassShell.shellConfig()).claudeView === 'chat'; } catch { want = false; }
   if (want && panes.get(id) === p && !p.exited) chatSkinSetView(id, 'chat');
 }
 
@@ -9126,7 +9124,13 @@ function chatSkinTick() {
     /* Reconcile sessions learned by a path that does not call chatSkinSessionChanged itself
        (adoptUnidentified, or an assignment added later): idempotent, no DOM work when nothing moved. */
     const ok = chatSkinEligible(p);
-    if (ok !== p.csEligible) { p.csEligible = ok; chatSkinSessionChanged(id, p); }
+    if (ok !== p.csEligible) {
+      p.csEligible = ok;
+      chatSkinSessionChanged(id, p);
+      /* Claude started inside a terminal that was a plain shell until now (or came back after an ending): it takes the mode the
+         operator chose, since there is no tab switch left to reach for. Only on the flip, so a "Show terminal" is never undone. */
+      if (ok && chatMode === 'chat' && p.view !== 'chat') chatSkinSetView(id, 'chat');
+    }
     else if (p.view === 'chat') chatSkinSync(id, p);
     const cs = p.chatSkin;
     if (p.view !== 'chat' || !cs) continue;
@@ -9457,15 +9461,15 @@ function openSettingsTab() {
     fontIn.addEventListener('change', () => setTermFont(Number(fontIn.value) || TERM_FONT_DEFAULT));
     row(wrap, t('settings.termFont'), fontIn, t('settings.termFontHint'));
 
-    /* New Claude sessions open as chat. Read fresh by chatSkinMaybeDefault on every new pane, so
-       there is nothing renderer-side to update when it flips. */
-    const chatDefToggle = document.createElement('input');
-    chatDefToggle.type = 'checkbox'; chatDefToggle.className = 'ttoggle'; chatDefToggle.checked = cfg.chatViewDefault === true;
-    chatDefToggle.addEventListener('change', async () => {
-      await window.glassShell.setSetting('chatViewDefault', chatDefToggle.checked);
-      toast(t('settings.saved'));
-    });
-    row(wrap, t('settings.chatViewDefault'), chatDefToggle, t('settings.chatViewDefaultHint'));
+    /* How Claude sessions look: Chat | Terminal. ONE choice for every session — applied at once to the ones that are open
+       (chatSkinSetMode) and read by each new, restored or resumed one. The font and size below only mean something in Chat, so
+       they step aside in Terminal. A select, like every other choice on this screen. */
+    const claudeViewSel = document.createElement('select');
+    claudeViewSel.className = 'tinput';
+    for (const [l, v] of [[t('settings.claudeView.chat'), 'chat'], [t('settings.claudeView.terminal'), 'terminal']]) { const o = document.createElement('option'); o.textContent = l; o.value = v; claudeViewSel.appendChild(o); }
+    claudeViewSel.dataset.setting = 'claudeView';   // a stable handle for the screenshot harness
+    claudeViewSel.value = chatMode;   // the live mode (read at boot, moved by every change), so the page never disagrees with the open tabs
+    row(wrap, t('settings.claudeView'), claudeViewSel, t('settings.claudeViewHint'));
 
     /* The chat's reading font and size. They are set HERE and nowhere in the chat view itself: reading settings are
        chosen once and are in the way afterwards, so the conversation keeps no menu for them. A change applies at once
@@ -9508,9 +9512,21 @@ function openSettingsTab() {
       await window.glassShell.setSetting('chatFontSize', v);
       toast(t('settings.saved'));
     });
-    row(wrap, t('settings.chatFont'), chatFontSel, t('settings.chatFontHint'));
-    row(wrap, t('settings.chatSize'), chatSizeSel, t('settings.chatSizeHint'));
+    const chatFontRow = row(wrap, t('settings.chatFont'), chatFontSel, t('settings.chatFontHint'));
+    const chatSizeRow = row(wrap, t('settings.chatSize'), chatSizeSel, t('settings.chatSizeHint'));
     wrap.appendChild(chatSample);
+    const paintClaudeView = () => {
+      if (!claudeViewSel.isConnected && claudeViewSel.dataset.painted) { chatModeSubs.delete(paintClaudeView); return; }   // the page was closed
+      claudeViewSel.dataset.painted = '1';
+      claudeViewSel.value = chatMode;
+      for (const n of [chatFontRow, chatSizeRow, chatSample]) n.hidden = chatMode !== 'chat';
+    };
+    chatModeSubs.add(paintClaudeView);
+    paintClaudeView();
+    claudeViewSel.addEventListener('change', async () => {
+      await chatSkinSetMode(claudeViewSel.value);
+      toast(t('settings.saved'));
+    });
 
     // interface scale — the UI's counterpart to terminal font size, applied live
     const appFontIn = document.createElement('input');
