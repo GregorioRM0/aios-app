@@ -1851,6 +1851,7 @@ if (process.platform === 'win32') {
                     "layout": "dock-max" | "workbench",   // dock maximised (default) or the stock layout
                     "clip": "window" | "pane",   // default window
                     "wait": 0,                   // extra ms before the capture
+                    "hover": ".chat-md .cs-path.file",   // selector of an element to put the REAL mouse pointer over (see below)
                     "working": true } ] }        // keep the "working" indicator lit (default true
                                                  // while the last turn event left the turn open)
    An <event> is what chatSkinHandleEvent takes minus paneId (reset · items · turn · usage · prompt ·
@@ -1860,6 +1861,12 @@ if (process.platform === 'win32') {
    ctx = { id, p (the pane), cs (p.chatSkin), root (the chat overlay), $ / $$ (querySelector(All) in
    it), sleep(ms), feed(events) }; throwing fails the run, naming the shot. Adding a shot is adding an
    object to "shots" — main.ts never changes.
+
+   HOVER. A :hover style cannot be photographed by toggling a class (that would test a copy of the rule, not the
+   rule), so a shot's "hover" selector makes this process send a real mouseMove to the centre-left of that element
+   after the shot's js has run, which makes the browser apply :hover and fire mouseenter exactly as for an operator.
+   The shot FAILS if the element does not end up matching :hover, so a pointer that missed cannot pass for a hover
+   picture. Nothing production is involved: the event goes to the hidden QA window only.
 
    THE FAKE SESSION, AND THE WATCH THAT COMES BACK. The pane gets a made-up (but well-formed) session
    id so the chat view is eligible and enters watch mode, which asks main to tail
@@ -1872,7 +1879,7 @@ if (process.platform === 'win32') {
 interface ChatShotShot {
   name: string; theme?: 'dark' | 'light'; events?: Array<string | Record<string, unknown>>; composer?: string;
   terminal?: string | string[] | null; js?: string | string[]; size?: { width: number; height: number };
-  clip?: 'window' | 'pane'; wait?: number; working?: boolean; layout?: 'dock-max' | 'workbench';
+  clip?: 'window' | 'pane'; wait?: number; working?: boolean; layout?: 'dock-max' | 'workbench'; hover?: string;
 }
 interface ChatShotFixture { version: 1; settleMs?: number; layout?: 'dock-max' | 'workbench'; setup?: string | string[]; streams?: Record<string, Array<Record<string, unknown>>>; shots: ChatShotShot[]; }
 
@@ -1893,6 +1900,7 @@ function validateChatShotFixture(raw: unknown): ChatShotFixture {
     for (const e of s.events ?? []) {
       if (typeof e === 'string' ? !Array.isArray(streams[e]) : !e || typeof e !== 'object' || typeof (e as { type?: unknown }).type !== 'string') throw new Error(`fixture: shot "${s.name}": unknown stream or malformed event ${JSON.stringify(e).slice(0, 80)}`);
     }
+    if (s.hover !== undefined && (typeof s.hover !== 'string' || !s.hover.trim())) throw new Error(`fixture: shot "${s.name}": hover must be a non-empty selector`);
     if (s.size && !(s.size.width >= 320 && s.size.height >= 320 && s.size.width <= 4000 && s.size.height <= 4000)) throw new Error(`fixture: shot "${s.name}": size out of range`);
   }
   return fx;
@@ -2075,6 +2083,19 @@ async function runChatShot(win: BrowserWindow): Promise<void> {
         await exec(`window.__chatShot.apply(${id}, ${JSON.stringify({ events, composer: shot.composer, terminal: Array.isArray(shot.terminal) ? shot.terminal.join('\n') : shot.terminal, working: shot.working })})`);
         if (shot.js) await userJs(shot.js, id);
       } catch (e) { throw step('applying events / js', e); }
+      if (shot.hover) {
+        try {
+          const at = (await exec(`(() => { const e = window.__chatShot.ctx(${id}).$(${JSON.stringify(shot.hover)}); if (!e) return null;
+            e.scrollIntoView({ block: 'center' }); const r = e.getBoundingClientRect();
+            return { x: Math.round(r.left + Math.min(r.width / 2, 40)), y: Math.round(r.top + r.height / 2) }; })()`)) as { x: number; y: number } | null;
+          if (!at) throw new Error(`nothing matches ${shot.hover}`);
+          await sleep(100);   // the scroll above must have been laid out before the pointer lands
+          wc.sendInputEvent({ type: 'mouseMove', x: at.x, y: at.y });
+          await sleep(200);
+          const hovered = await exec(`window.__chatShot.ctx(${id}).$(${JSON.stringify(shot.hover)}).matches(':hover')`);
+          if (hovered !== true) throw new Error(`the pointer did not end up over ${shot.hover}`);
+        } catch (e) { throw step('hovering', e); }
+      }
       const rect = (await exec(`window.__chatShot.settle(${id}, ${Math.max(0, (fx.settleMs ?? 700) + (shot.wait ?? 0))})`)) as { x: number; y: number; width: number; height: number };
       const img = shot.clip === 'pane' ? await wc.capturePage(rect) : await wc.capturePage();
       const { width, height } = img.getSize();

@@ -66,9 +66,30 @@ const home = path.join(work, 'home');
 const userData = path.join(work, 'userdata');
 fs.mkdirSync(userData, { recursive: true });
 
+/**
+ * Real files and folders for the shots that show path links in the conversation. A path is only a link
+ * when it EXISTS (and sits under the framework root, which the synthetic HOME makes <home>/aios), so the
+ * fixture's messages can only be photographed against things that are really there. They are made here,
+ * inside the throwaway HOME, with invented names; the fixture also names one that is NOT created
+ * (notes/missing-draft.md) as the control that must stay plain text. Seeded after the demo home is built
+ * because that build wipes the folder first.
+ */
+function seedPathFixtures(home) {
+  const base = path.join(home, 'aios');
+  const put = (rel, body) => {
+    const p = path.join(base, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, body);
+  };
+  put('notes/plan.md', '# Plan\n\n- Draft the summary\n- Review with the team\n');
+  put('projects/demo/README.md', '# Demo project\n\nAn invented folder for the path-link screenshots.\n');
+  put('projects/demo/src/components/reports/quarterly-summary-final-draft.md', '# Quarterly summary\n\nInvented.\n');
+}
+
 let code = 1;
 try {
   execFileSync(process.execPath, [path.join(ROOT, 'scripts', 'demo.mjs'), '--build-only', '--out', home], { stdio: 'ignore' });
+  seedPathFixtures(home);
   const electron = path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
   const env = { ...process.env, HOME: home, USERPROFILE: home, AIOS_BUS_DISABLED: '1', GLASS_FRAMEWORK_PATH: path.join(home, 'aios') };
   delete env.ELECTRON_RUN_AS_NODE;   // inherited from some launchers; it would run the entry as plain node

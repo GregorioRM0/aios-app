@@ -863,6 +863,51 @@
         "type": "turn",
         "open": false
       }
+    ],
+    "paths": [
+      {
+        "type": "status",
+        "fiveHourPct": 42,
+        "sevenDayPct": 71,
+        "contextPct": 38,
+        "model": "claude-sonnet-5-5",
+        "effort": "high",
+        "contextWindow": 200000,
+        "fiveHourResetsAt": "+8280",
+        "sevenDayResetsAt": "+190000",
+        "sessionMatch": true
+      },
+      {
+        "type": "usage",
+        "contextTokens": 84000,
+        "model": "claude-sonnet-5-5"
+      },
+      {
+        "type": "items",
+        "items": [
+          {
+            "uuid": "pu-1",
+            "role": "user",
+            "text": "Can you read notes/plan.md and tell me where the demo project stands?"
+          },
+          {
+            "uuid": "pt-1",
+            "role": "tool",
+            "tool": {
+              "id": "ptool-1",
+              "name": "Read",
+              "summary": "notes/plan.md",
+              "status": "ok",
+              "output": "1  # Plan\n2  \n3  - Draft the summary\n4  - Review with the team"
+            }
+          },
+          {
+            "uuid": "pa-1",
+            "role": "assistant",
+            "text": "The plan lives in `notes/plan.md` and the work itself is under projects/demo/. Two steps are still open: the summary draft and the team review.\n\nThe draft is at projects/demo/src/components/reports/quarterly-summary-final-draft.md, which is a long path and should be clipped rather than push the column wider.\n\nI also looked for `notes/missing-draft.md`, but that file does not exist yet, so it stays plain text."
+          }
+        ]
+      }
     ]
   },
   "shots": [
@@ -1842,6 +1887,74 @@
         "await groupShot(ctx, { state: 'error', open: true, pane: 400 });"
       ],
       "clip": "pane"
+    },
+    {
+      "name": "paths-dark",
+      "theme": "dark",
+      "events": [
+        "paths"
+      ],
+      "js": [
+        "await pathsShot(ctx);"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "paths-light",
+      "theme": "light",
+      "events": [
+        "paths"
+      ],
+      "js": [
+        "await pathsShot(ctx);"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "paths-narrow-dark",
+      "theme": "dark",
+      "events": [
+        "paths"
+      ],
+      "js": [
+        "await pathsShot(ctx, { pane: 400 });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "paths-narrow-light",
+      "theme": "light",
+      "events": [
+        "paths"
+      ],
+      "js": [
+        "await pathsShot(ctx, { pane: 400 });"
+      ],
+      "clip": "pane"
+    },
+    {
+      "name": "paths-hover-dark",
+      "theme": "dark",
+      "events": [
+        "paths"
+      ],
+      "js": [
+        "await pathsShot(ctx);"
+      ],
+      "hover": ".chat-md .cs-path.file",
+      "clip": "window"
+    },
+    {
+      "name": "paths-hover-light",
+      "theme": "light",
+      "events": [
+        "paths"
+      ],
+      "js": [
+        "await pathsShot(ctx);"
+      ],
+      "hover": ".chat-md .cs-path.file",
+      "clip": "window"
     }
   ],
   "setup": [
@@ -1929,6 +2042,29 @@
     "    if (cr.width && cr.right > hr.right + 0.5) throw new Error('the summary row text overflows its row: ' + c.className);",
     "  }",
     "  ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;",
+    "};",
+    "// The path-link shots: the three paths that exist must be links (a file, a folder, a long file), the one that does not exist must stay plain text, and nothing may carry an href. FAIL the run otherwise, so a picture of unlinked paths cannot pass for a picture of links.",
+    "window.pathsShot = async (ctx, o) => {",
+    "  o = o || {};",
+    "  if (o.pane) { ctx.p.el.style.flex = '0 0 auto'; ctx.p.el.style.width = o.pane + 'px'; ctx.p.el.style.alignSelf = 'flex-start'; await ctx.sleep(350); }",
+    "  const t0 = Date.now();",
+    "  while (ctx.$$('.chat-md .cs-path').length < 3 && Date.now() - t0 < 8000) await ctx.sleep(100);",
+    "  const links = ctx.$$('.cs-path');",
+    "  const text = (sel) => ctx.$$(sel).map((e) => e.textContent);",
+    "  if (!ctx.$('.chat-md .cs-path.file') || !ctx.$('.chat-md .cs-path.dir')) throw new Error('the reply has no linked file and linked folder');",
+    "  if (!ctx.$('.chat-md .cs-path.file.long')) throw new Error('the long path was not linked (or not marked long); links: ' + JSON.stringify(links.map((e) => e.className + ' ' + e.textContent)));",
+    "  if (links.some((e) => /missing-draft/.test(e.textContent))) throw new Error('a path that does not exist was linked');",
+    "  if (!ctx.$('.chat-md').textContent.includes('notes/missing-draft.md')) throw new Error('the missing path is no longer in the text');",
+    "  if (ctx.$('a[href^=\"file:\"], .cs-path[href]')) throw new Error('a path link carries an href');",
+    "  // In a narrow pane the long path must be CLIPPED with an ellipsis, not widen the column: its text is wider than its box, and the box stays inside the log.",
+    "  if (o.pane) {",
+    "    const lg = ctx.$('.chat-md .cs-path.long'), r = lg.getBoundingClientRect(), lr = ctx.cs.log.getBoundingClientRect();",
+    "    if (!(lg.scrollWidth > lg.clientWidth + 1)) throw new Error('the long path is not clipped in a narrow pane');",
+    "    if (r.right > lr.right + 0.5) throw new Error('the long path pushes past the edge of the log');",
+    "    if (ctx.cs.log.scrollWidth > ctx.cs.log.clientWidth + 1) throw new Error('the log scrolls sideways');",
+    "  }",
+    "  ctx.cs.log.scrollTop = ctx.cs.log.scrollHeight;",
+    "  await ctx.sleep(150);",
     "};"
   ]
 }
