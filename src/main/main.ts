@@ -530,7 +530,7 @@ ipcMain.handle('chatFiles:savePastedImage', async (_e, bytes: unknown, mime: unk
 /* ── SMOKE: the chat view over a REAL Claude Code session, end to end ───────────────────────────
    Everything else in this file proves the chat view with fixtures; this proves it against the real
    `claude`, in the hidden smoke window, by driving the same functions the operator's hands drive:
-   createPane (the launch path every session uses), the tab's Terminal/Chat toggle, the composer
+   createPane (the launch path every session uses), the Chat/Terminal view mode (the function the Settings selector calls), the composer
    (Enter → submitToPty) and the bubbles it paints from the transcript.
 
    WHAT IT TOUCHES, AND WHY THAT IS SAFE. A fresh temp folder is the session's cwd, so the session
