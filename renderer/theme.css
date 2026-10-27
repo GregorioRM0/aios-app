@@ -512,6 +512,12 @@ textarea.dzbody { width: 100%; box-sizing: border-box; font-family: var(--font);
 }
 .onboarding-done { text-align: center; margin-top: 26px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .onboarding-done .step-acts { justify-content: center; }
+/* The label over the finished steps, which are drawn BELOW the next one (setupStepOrder). Quiet:
+   it explains the order, it is not a heading to read. */
+.steps-donelab { font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--subtle); margin: 6px 2px -4px; }
+/* Visually hidden, still read by screen readers — the Setup tab's "next step" announcement. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* ── Home (the human front door) ── */
 .tool.home { max-width: 720px; padding-top: 48px; }

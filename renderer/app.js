@@ -7699,6 +7699,25 @@ const onboardingFixPanes = new Set(); // pty ids of Onboarding fix terminals →
 const stepTried = new Set();
 let onboardingRepaint = null;         // live while the Setup tab is open
 
+/**
+ * The order the Setup steps are DRAWN in: the next thing to do first, then what comes after it,
+ * then what is already done. Returns step indexes; the numbers on the steps stay their own, so
+ * "4 · Set up my AIOS" on top of "✓ 1 · ✓ 2 · ✓ 3" still reads as a sequence.
+ *
+ * Operator-reported: drawn in sequence order, every finished step stayed ABOVE the active one, so
+ * by the time git and node were installed the button that mattered ("Set up my AIOS") had been
+ * pushed below the fold — on a laptop, with no sign there was anything further down. A stepper
+ * whose next action needs a scroll to discover is a stepper that looks finished, or stuck.
+ * All done → plain sequence order: there is no "next" to pin, and the done screen follows.
+ */
+function setupStepOrder(steps, current) {
+  const idx = steps.map((_, i) => i);
+  if (!(current >= 0) || current >= steps.length) return idx;
+  const pending = idx.filter((i) => i !== current && !steps[i].done);
+  const done = idx.filter((i) => i !== current && steps[i].done);
+  return [current, ...pending, ...done];
+}
+
 function openSetupTab() {
   openToolTab('::setup', t('setup.title'), (body, head) => {
     const wrap = el('div', 'tool onboarding');
@@ -7734,11 +7753,18 @@ function openSetupTab() {
     wrap.appendChild(why);
     const list = el('div', 'steps');
     wrap.appendChild(list);
+    /* Announces the step that just became next. Visually hidden: the moved focus and the step at
+       the top are what a sighted operator sees; this is the same news for a screen reader. */
+    const announce = el('div', 'sr-only');
+    announce.setAttribute('role', 'status');
+    announce.setAttribute('aria-live', 'polite');
+    wrap.appendChild(announce);
 
     const recheck = el('button', 'vbtn', t('setup.recheck'));
     head.appendChild(recheck);
 
     let prevDone = null;   // step ids done on the previous paint → animate fresh completions once
+    let prevCurrent = null;   // the active step on the previous paint → bring a NEW next step into view once
     let painting = false;
     /* THE ONE CONVERSATION WORTH THE BEST MODEL — and the PRIMARY button is the one that has to
        act on that, which is where the first version of this went wrong.
@@ -8226,14 +8252,53 @@ function openSetupTab() {
         .map((d) => d.closest('.step') && d.closest('.step').dataset.stepId).filter(Boolean));
       list.replaceChildren();
       if (subEl) subEl.textContent = t('setup.onboardingSub', { n: String(st.steps.length) });
-      st.steps.forEach((s, i) => list.appendChild(stepEl(s, i)));
+      /* NEXT STEP FIRST (setupStepOrder). Finished steps collapse to one line each BELOW it, under
+         a small "Already done" label so the out-of-sequence numbers read as intended. */
+      const order = setupStepOrder(st.steps, st.current);
+      let doneLabel = false;
+      for (const i of order) {
+        const s = st.steps[i];
+        if (st.current < st.steps.length && s.done && !doneLabel) {
+          list.appendChild(el('div', 'steps-donelab', t('setup.alreadyDone')));
+          doneLabel = true;
+        }
+        list.appendChild(stepEl(s, i));
+      }
       if (st.current >= st.steps.length) list.appendChild(onboardingDoneEl());
       else list.appendChild(troubleEl());
+      /* The "why" note argues for the setup BEFORE anything happens; once a step is done it has
+         made its case, and above the steps it only pushes the next action down. So it moves under
+         them — still there for whoever scrolls, never between the operator and the next button. */
+      if (st.current > 0) { if (why.nextSibling !== announce) wrap.insertBefore(why, announce); }
+      else if (why.nextSibling !== list) wrap.insertBefore(why, list);
       for (const id of openAdv) {
         const d = list.querySelector('.step[data-step-id="' + id + '"] details.step-adv');
         if (d) d.open = true;
       }
       if (scroller) scroller.scrollTop = keepTop;
+      /* A NEW next step (or the first paint) → show it and put focus on its primary action. Only on
+         that change: the 5-second poll repaints too, and dragging a reader back every tick is the
+         defect the scroll restore above exists to prevent. Focus is never taken from someone
+         typing — a terminal (xterm's textarea), an input or an editor — because the setup session
+         is a terminal the operator is talking to while this tab polls beside it. */
+      if (st.current !== prevCurrent) {
+        const done = st.current >= st.steps.length;
+        const target = done ? list.querySelector('.onboarding-done') : list.querySelector('.step.active');
+        const action = target && (target.querySelector('.step-acts button.primary') || target.querySelector('.step-acts button'));
+        if (target && scroller) {
+          scroller.scrollTop = 0;
+          (action || target).scrollIntoView({ block: 'nearest' });
+        }
+        const ae = document.activeElement;
+        const typing = !!ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable);
+        if (action && !typing && wrap.offsetParent !== null) {
+          try { action.focus({ preventScroll: true }); } catch { /* older engines */ }
+        }
+        announce.textContent = done
+          ? t('onboarding.allDone')
+          : t('setup.nextStepAnnounce', { n: String(st.current + 1), total: String(st.steps.length), name: t('onboarding.step.' + st.steps[st.current].id) });
+        prevCurrent = st.current;
+      }
       prevDone = new Set(st.steps.filter((s) => s.done).map((s) => s.id));
     }
 
