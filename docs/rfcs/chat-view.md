@@ -266,6 +266,55 @@ whether any failed, and to look inside only when they care.
   joins again; a manual fold stays folded; a `reset` forgets everything. Unfolding follows the log to the
   tail, folding does not.
 
+### 2.3 Paths in the conversation are links
+
+A reply names files and folders all the time (`it is in ~/Projects/site/dist`, `I changed src/app.ts`), and in
+the terminal the same words are already links. The chat does the same, with the same gesture, so an operator
+does not have to learn a second one.
+
+**What is linked.** Any path-shaped string in the assistant's reply, in the operator's own bubble, and in the
+argument of a tool row (a `Read` or `Edit` row whose argument *is* a path is linked whole). The candidates come
+from the terminal's own `pathCandidates` (one definition of what a path looks like), plus two shapes the terminal
+never needed: a folder named on its own (`/tmp`, `renderer/`) and a quoted rooted path that holds spaces.
+**Nothing is a link until it exists.** Every candidate is asked about, and only what exists, under an allowed
+root, becomes a link; that is also what makes the loose candidate pattern safe, since a false positive would have
+to be a real path. A path that does not exist stays plain text, exactly as it was written.
+
+**The gesture is the terminal's.** A click on a file opens it in the viewer; a click on a folder reveals it in the
+explorer; Cmd/Ctrl+Shift+click hands either to the operating system (Finder, Explorer). Enter does the same from
+the keyboard on a focused link (a link inside a tool row's header is mouse-only, because a focusable element
+nested in a button is not valid). Dragging to copy a path is not a click: with text selected nothing opens. The
+hover tooltip is the terminal's `div.pathtip` with the absolute path, what a click does and the Cmd/Ctrl+Shift
+hint. The link is the house link colour (`--chat-link`), plain at rest and underlined on hover, with the same
+focus ring as every other control; a path longer than 48 characters is clipped with an ellipsis (stopping a
+little short of the line, so the comma that follows it does not wrap alone) instead of widening the column.
+
+**Why the decoration comes after the sanitiser, and why there is no `file://` href.** The reply is model text, and
+`chatSanitize` lets through only `http(s)` and `mailto:` links. A path link is therefore never part of the
+markdown: it is a `span` built by the renderer **after** sanitising, with its target (`{ abs, dir }`) kept in a
+JS property. There is no `href` at all, so model text can neither carry a link of its own nor point one at a
+file, and the allowlist is exactly as strict as it was. Opening goes through `openViewer`, `revealPath` and
+`revealInOS`, which validate the path again.
+
+**Resolution is batched, cached and asynchronous.** The text is on screen first; the links appear when the
+answer comes. One message is one call to `fs:resolvePaths` (chunks of 200), because a long answer can name dozens
+of files and a round trip per handful is what made hover slow in the terminal. Answers are cached per base folder:
+a hit is kept, and a miss for ten seconds only, so a file the answer has just written does not stay unlinked. A
+failed call is never remembered as "does not exist". The pass re-checks its nodes before changing anything (a
+newer pass over the same node supersedes it, and a node painted over or removed in the meantime is skipped), and
+a message asks about at most 240 distinct strings, so a pasted log cannot become hundreds of `stat` calls.
+
+**The streaming preview never links.** `chatLinkPaths` is called only on a block painted **final**. The preview
+is what the terminal paints, its text changes under every snapshot, and a link that vanishes with the next one
+is worse than none; at hand-over the finished message is linked once.
+
+**The new IPC.** `fs:resolvePaths(cands, base?)` returns `{ [candidate]: { abs, dir } }` for what exists, so the
+chat can tell a folder from a file. The rules live in one place, `src/main/pathResolve.ts` (trim the prose
+punctuation, drop `:line[:col]`, expand `~`, try the shell's current folder, then the framework root, then the
+home folder, refuse anything outside the allowed roots), and `fs:resolveFile` and `fs:resolveFiles` now call the
+same function with folders switched off. The terminal's replies keep their shape and its ceiling of 24; a
+separate channel rather than a flag keeps it that way. Both call sites are checked by a test (§ 9).
+
 ## 3. Architecture
 
 ```
@@ -847,6 +896,25 @@ against the operator's settings. That is the price of there being one session, a
     (`tools-live`, `tools-fail`) are invented, and a unit test counts what they hold (a live run with exactly one
     call running; a finished one with exactly one failure), with controls. None of them picks a level: the
     driver only looks, and a test forbids `ptyWrite`, `chatSkinSubmit` and `chatSkinEffortPick` in the helpers.
+  - **Path links (§ 2.3) are tested in two halves.** `src/test/chatPathLinks.test.ts` runs the resolver for real
+    against a folder it creates itself (a file, a folder, names with spaces, `~`, a `:line` suffix, a path that does
+    not exist, one outside the allowed roots, `..` that would climb out of one) and the linker against a fake
+    resolver and a fake DOM: what is linked and what is not (the control: a missing path stays text), the longest
+    candidate winning over a shorter prefix, code blocks linked inside their highlight spans, nothing nested inside
+    an existing link or a button, the click, Cmd/Ctrl+Shift and Enter gestures, a message re-rendered while the
+    answer was on its way, and the cache with a newer pass superseding an older one. Its security cases feed model text containing `file://` URLs and `<a href="file:...">` and
+    assert that no `href` and no `<a>` results, with a deliberately broken linker as the negative control, and that
+    the sanitiser's pattern still admits only `http(s)` and `mailto:`. Source guards pin the order (linking after
+    `chatSanitize`), the absence of linking in the streaming path, the use of `pathCandidates`, and that the
+    terminal still goes through `resolveFiles` and gets no folders. `src/test/chatSkin.test.ts` gives the streaming
+    harness a spy: the preview is not linked and the final message is.
+  - **Path links are shot too** (`paths-dark`, `paths-light`, `paths-narrow-*`, `paths-hover-*`). The runner creates
+    real files and a folder with invented names inside the throwaway HOME's framework root, and the reply also
+    names one path that does not exist as the control. The shot **fails** if the file, the folder or the long path
+    is not a link, if the missing one is, if any link carries an `href`, or, in the narrow pane, if the long path is
+    not clipped or pushes the log sideways. The hover shots do not toggle a class (that would photograph a copy of
+    the rule): a `hover` selector on a shot makes the process send a real `mouseMove` to the hidden window and
+    fails the run unless the element then matches `:hover`.
   - How it is used: after every visual change, look at **every** PNG (dark and light) before calling it done —
     spacing, hierarchy, contrast in the light theme, truncation, shadows. It does not replace the gates; it is
     the one place a redesign is actually seen. It never answers a dialog and never writes to a pty.
@@ -872,6 +940,17 @@ against the operator's settings. That is the price of there being one session, a
 - **The `/` popup does not tag plugin commands.** A plugin's name is already the prefix (`weekly:plan`), so only
   the project's and the operator's own commands carry an origin word. An `aios` tag for the bundled plugin would
   be one more locale key and a `source` value; it was left out until someone misses it.
+- **Path links are for what exists on this machine, in this pane's reach.** A path the model invents, a file that
+  was deleted since, or one outside the allowed roots stays text, and so does one that only exists on another
+  machine. A relative path is read against the shell's *current* folder (the same rule as the terminal), so a
+  message written before the operator `cd`-ed may resolve somewhere else, or not at all. A file named with spaces
+  and no quotes is found by trying the longer candidates (up to six words), not by any parsing, so an unusual
+  name can lose to a shorter prefix that happens to exist. The links are asked about when the message is
+  painted: a file created later is linked only if the message is painted again, and the cache forgets a miss after
+  ten seconds. The tooltip is the terminal's, so a very long absolute path is cut by its width rather than wrapped.
+  The streaming preview is not linked (§ 2.3). Where the candidate pattern cannot tell where a path ends (a path
+  glued to other characters inside a long command line) the link may be shorter or longer than the operator
+  expects; existence decides, so it is never a path that is not there.
 - **Cloud mode.** The tail reads a local file; moving sessions behind a host is the cloud-mode RFC's
   concern, and the tail's injected projects folder and callback are the seam.
 
