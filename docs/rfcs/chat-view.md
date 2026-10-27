@@ -2,7 +2,9 @@
 
 - **Status:** Prototype, for discussion
 - **Scope:** AIOS App (this repo). No framework change.
-- **Code references:** `feat/chat-skin`, branched from 0.12.0 (it replaces the earlier `feat/chat-view` prototype)
+- **Code references:** `feat/chat-skin`, branched from 0.12.0 (it replaces the earlier `feat/chat-view` prototype).
+  The view mode moved from a tab icon to a Settings choice in `fdb4eca`, `0aae124`, `2ce84f0`, `d000cfe` and
+  `c20ca7a` (§ 2.4)
 
 ## 1. Summary
 
@@ -14,8 +16,8 @@ away, no quiet "how much have I used".
 This RFC describes a **chat view that is a visual layer over the same Claude Code session an existing
 terminal pane already runs**. It is not a new pane, not a new session and not a second route to Claude.
 Whatever starts a Claude pane today (Start / Launch, an agent, a ritual, `--resume`, a restored tab) keeps
-doing exactly that; the pane just gains a way to switch, **Terminal ⇄ Chat** (the icon on its tab), that changes how the one session
-is *looked at*. The pty and the `claude` process inside it remain the only source of truth. The chat reads
+doing exactly that; the app gains one choice, **Chat | Terminal** (Settings, § 2.4), that changes how the Claude
+sessions are *looked at*. The pty and the `claude` process inside it remain the only source of truth. The chat reads
 along (the session's transcript file, plus the tail of the pty output to notice dialogs) and writes back
 through the same door the terminal uses. It never answers a dialog by itself: a dialog it could read is drawn as a
 card of buttons, and a key goes to the pty only when the operator presses one of them (§ 5).
@@ -29,16 +31,17 @@ It is a prototype: the loop is proved on a real session end to end by a gate in 
 
 ## 2. What it does for the operator
 
-Every pane that runs Claude gets the switch; panes that run anything else (a shell, a viewer, a session
-that has ended) do not.
+The view mode applies to every pane that runs Claude; panes that run anything else (a shell, a viewer, a
+session that has ended) are never touched by it.
 
-- **Toggle, three doors.** A small icon on the pane's tab; *File → Switch Between Terminal and Chat*
-  (`CmdOrCtrl+Shift+L`, acting on the focused or active pane); a row in the tab's context menu. The icon is
-  the switch in **both** directions: the chat view has no header or switch of its own (§ 2.2). Flipping
-  creates no pane and no pty.
-- **Open in chat by default.** Settings → `chatViewDefault` (off unless the stored value is literally
-  `true`). It is read fresh on each pane creation, so it covers new, restored and resumed sessions — all of
-  them go through `createPane` with a `claude` command.
+- **One mode, set in Settings.** *Settings → Claude sessions view: Chat | Terminal* (`claudeView`, § 2.4). There
+  is no switch on the tab and none inside the pane (§ 2.2). The choice applies **live** to every open Claude
+  pane and to each one that appears later, new, restored or resumed. `CmdOrCtrl+Shift+L` and *File → Switch
+  Claude Sessions Between Chat and Terminal* flip the same global setting. Changing the mode creates no pane and
+  no pty.
+- **Looking is not choosing.** *View in the terminal* on a dialog card shows the live strip for that dialog and
+  nothing else changes. The *Show terminal* buttons of the notice strip and of the error card step **that one
+  tab** out of the mode. Neither ever writes the setting (§ 2.4).
 - **One reading column.** The conversation is a single centred column, at most ~748 px wide with 16 px
   gutters, so a wide dock reads like a page and a narrow one simply fills. The log itself spans the pane (its
   scrollbar stays at the pane's edge); the column is made with side padding, which resolves against the pane.
@@ -134,7 +137,7 @@ that has ended) do not.
   the system temp folder (`aios-chat-paste/`, a name main chooses, png/jpeg/gif/webp, ≤ 25 MB, own files older
   than a day swept) and returns the path.
 - **Reading settings live in Settings and nowhere else.** The font and the text size are two rows of the
-  Settings tab, right after `chatViewDefault`, with a live sample line; a change repaints every open chat
+  Settings tab, right after the `claudeView` selector, with a live sample line (both rows and the sample step aside while the mode is Terminal); a change repaints every open chat
   view at once and is stored through the same `chatFontFamily` / `chatFontSize` settings. A stack or size
   saved by hand stays selectable (§ 2.2).
 - **Cards for the states.** *Connecting*, *waiting*, *empty* and *error* are one centred card (icon, a short
@@ -151,7 +154,7 @@ that has ended) do not.
   loaded within 1.5 s of a reset); the log glides to the tail while the view is following it (`cs.stick`; a
   wheel-up takes the control back at once) and a round *latest* button appears when the operator has scrolled
   away. Every animation has a `prefers-reduced-motion` fallback.
-- **Always a way out.** The tab icon (pressed while the chat is on), the shortcut, the menu entry and the notice button all return to the terminal.
+- **Always a way out.** The Settings selector, the shortcut, the menu entry, the notice's *Show terminal* and the card's *View in the terminal* all lead to the terminal. The first three change the mode for every session; the last two only look (§ 2.4).
 
 ### 2.1 The polish pass: the popup, the bubble, the scale, the empty card
 
@@ -188,27 +191,28 @@ A pass over what looked rough in the screenshots, with no change to streaming or
   hairline chips with mono glyphs, shown only for the empty state and optically centred. It teaches the three
   things that matter before the first message and says nothing the bar below does not already say.
 - **The Terminal | Chat switch** was a segmented control in the pane header, polished here (no double
-  outline). It no longer exists: § 2.2 removed the header and the tab icon took over.
+  outline). It no longer exists: § 2.2 removed the header and a tab icon took over, and § 2.4 then removed the
+  icon too, leaving the mode in Settings.
 
-### 2.2 The headerless pass: the switch on the tab, the font in Settings, the effort menu, the folded run
+### 2.2 The headerless pass: the font in Settings, the effort menu, the folded run (and, then, a switch on the tab)
 
 Four decisions, taken together because each one frees or fills the same few pixels. Every one was judged on
 `npm run chat:shot` pictures in dark and light, wide and narrow (§ 9), not on the code.
 
-**1. No header; the switch lives on the tab.** The strip that held the `Terminal | Chat` switch and the font
+**1. No header; the switch lives on the tab.** *(The tab icon was replaced by a Settings choice afterwards, § 2.4; the header stays gone.)* The strip that held the `Terminal | Chat` switch and the font
 button is gone: the log is the first thing in the pane, and the state card, the dialogs and the
 composer sit where they sat. *Why:* the header said nothing the tab did not already say. The tab is where the
 operator already looks to know which session this is, its chat/terminal state is one fact about that session,
-and a second switch inside the pane meant two controls for one state and a strip of height spent on both. The switch is now the bubble icon on the tab (`.tview`), a 22×22 px
-target with a hover fill, a focus ring and a tinted chip with a fine ring while the chat is on (`aria-pressed`
-mirrors it; tooltip and label are `chat.skin.toChat` / `chat.skin.toTerminal`), plus `CmdOrCtrl+Shift+L` and
-the *File* menu entry, which are unchanged. Nothing is lost: all three act on the same pane and none creates a
-pty. One visible consequence had to be fixed on purpose: the state card is the log's first child even while
+and a second switch inside the pane meant two controls for one state and a strip of height spent on both. At the time of this pass the switch was a bubble icon on the tab (`.tview`, a 22×22 px
+target with a hover fill, a focus ring and a tinted chip while the chat was on), plus `CmdOrCtrl+Shift+L`, the
+*File* menu entry and a row in the tab's context menu; all of them acted on one pane and none created a pty. The
+icon, its CSS and its helpers are gone (§ 2.4); what this pass decided, that the pane has no header and the log
+is its first child, still holds. One visible consequence had to be fixed on purpose: the state card is the log's first child even while
 hidden, so the first message used to sit ~45 px under the tab strip (the log's padding plus its turn margin,
 which the header had been hiding); the first visible row now starts at the padding alone (~26 px).
 
 **2. The reading font and size are in Settings, nothing else.** `Aa` was a popover in the header; it is now
-two rows of the Settings tab, `settings.chatFont` and `settings.chatSize`, beside `chatViewDefault`, with a
+two rows of the Settings tab, `settings.chatFont` and `settings.chatSize`, beside the view selector (then `chatViewDefault`, now `claudeView`), with a
 sample line drawn in the chosen font and size. Changing one repaints every open chat view at once
 (`chatApplyPrefs`) and persists through the same two settings as before, so nothing stored moves. A stack or
 size written by hand in the config stays selectable as an extra entry. *Why:* a typeface is chosen once and
@@ -314,6 +318,67 @@ punctuation, drop `:line[:col]`, expand `~`, try the shell's current folder, the
 home folder, refuse anything outside the allowed roots), and `fs:resolveFile` and `fs:resolveFiles` now call the
 same function with folders switched off. The terminal's replies keep their shape and its ceiling of 24; a
 separate channel rather than a flag keeps it that way. Both call sites are checked by a test (§ 9).
+
+### 2.4 The mode lives in Settings, not on the tab
+
+The tab icon of § 2.2 answered "chat or terminal?" once **per tab**. An operator who prefers chat had to flip
+every new session by hand, and one who prefers the terminal had a bubble on every Claude tab they never used. It
+is one preference, so it is now one setting and the icon is gone.
+
+- **The setting.** `claudeView`, `'chat' | 'terminal'`, shown in Settings as *Claude sessions view: Chat |
+  Terminal* (a `<select class="tinput" data-setting="claudeView">`) in the same section as the chat font and
+  size rows. In Terminal those two rows and their sample step aside, since they only mean something in Chat.
+  The page shows `chatMode` (below), not the file, so it never disagrees with the tabs that are open.
+- **Migration from `chatViewDefault`.** The setting this replaces was a checkbox, "open Claude sessions as
+  chat". `normalizeClaudeView` (`src/main/aios.ts`, used by `shellSettings()`) reads it in this order: a stored
+  `'chat'` or `'terminal'` wins; otherwise `chatViewDefault === true` gives chat; everything else (false, absent,
+  `'true'`, `1`) gives terminal, which is what the unticked checkbox was. An operator who had ticked the box
+  lands in chat with nothing to do. The old key is never rewritten or deleted, so an older app that is still
+  pointed at the same `shell.json` finds the value it knows; the first save of `claudeView` supersedes it.
+  `shell:setSetting` accepts `claudeView` only with one of the two values (anything else is refused without
+  writing, because a bad value would be ignored on read and let a stale `chatViewDefault` come back) and no
+  longer accepts `chatViewDefault`.
+- **Applied live, to all of them.** `chatSkinSetMode(mode, { persist })` is the **only** door and the only
+  writer of `claudeView`: it updates `chatMode` (a cache read once at start by `chatReadMode`), calls
+  `chatSkinApplyMode`, tells the open Settings pages so their selector follows, and then saves. The apply walks
+  the panes and calls `chatSkinSetView` on those that pass `chatSkinEligible` (a Claude session that has not
+  ended); a shell, a viewer or an ended session is skipped, and applying creates no pane and no pty.
+- **New, restored and resumed sessions.** `chatSkinMaybeDefault` reads `claudeView` fresh on every `createPane`
+  with a `claude` command, which is the one path all three take. It only ever moves a pane **toward** chat:
+  Terminal is what a pane already is.
+- **Claude started inside a shell.** A tab that was a plain shell becomes eligible when `claude` starts in it
+  (and again after an ending). `chatSkinTick` puts it in chat once, **on that flip**, when the mode is chat. This
+  is new: the old default never did it, and without a tab icon there would be no other way to reach chat from
+  there. Nothing else in the tick forces chat, so a tab the operator stepped out of is not pulled back.
+- **The shortcut.** `CmdOrCtrl+Shift+L` and *File → Switch Claude Sessions Between Chat and Terminal* (intent
+  `toggleChatView`) flip the **global** mode, not the focused tab: `chatSkinToggleMode` reads the config fresh (a
+  value synced from another machine is what gets flipped), inverts it, goes through `chatSkinSetMode`, and shows
+  a toast ("Claude sessions now show as chat" or "...as terminal") because no icon changes to tell the operator.
+- **A session that ends goes back to the terminal**, as before (`chatSkinOnExit`, `chatSkinSessionChanged`), so
+  "[session ended]" is shown rather than a dead composer. This changes that pane's view and never the setting.
+- **A look is not a choice.** *View in the terminal* (dialog card, and the strip for a dialog the parser could
+  not read) only changes `cs.promptTerm`, which of the card and the live strip is in front, and the mode is
+  untouched. The *Show terminal* buttons of the notice strip and the error card do step that tab out of the
+  mode, on purpose. Since there is no icon to come back with, the tab's context menu has one row for it,
+  *Return this tab to the chat view* (or *terminal view*), shown only for a tab that is out of the mode
+  (`chatSkinOutOfMode`). It makes the tab follow the mode (`chatSkinFollowMode`) and never writes the setting.
+  Neither action can reach `claudeView`, which a test pins (§ 9).
+- **Removed.** `chatSkinMountToggle`, `chatSkinPaintToggle`, `chatSkinToggle`, `chatSkinToggleFocused`,
+  `p.viewBtn`, the call in `createPane` and the `.tview` CSS, plus the strings `settings.chatViewDefault` and its
+  hint. Added: `settings.claudeView` (+ hint, `.chat`, `.terminal`) and `chat.skin.modeNowChat` /
+  `chat.skin.modeNowTerminal`, in en, es and pt-br. `chat.skin.toChat` / `chat.skin.toTerminal` stay for the
+  context-menu row only, with new wording.
+
+Commits on `feat/chat-skin` (each trailer-signed; the intermediate ones are not green on their own, because the
+renderer and its tests land separately, and only the end state is):
+
+| Commit | What |
+|---|---|
+| `fdb4eca` | `feat(settings)`: `claudeView` and the migration from `chatViewDefault` |
+| `0aae124` | `refactor(chat)`: one global view mode replaces the per-tab toggle |
+| `2ce84f0` | `test(smoke)`: enter chat through the view mode, not a tab button |
+| `d000cfe` | `test(chat-shot)`: shoot the Claude tab without a switch and the view selector |
+| `c20ca7a` | `test(chat)`: pin the global view mode, the missing tab switch and the doors |
 
 ## 3. Architecture
 
@@ -682,7 +747,7 @@ id before anything per-session is believed** (the filter lives in main, with a s
 
 ## 7. Invariants that hold because the pane is the same
 
-The skin adds fields (`p.view`, `p.chatSkin`, `p.viewBtn`, …) and DOM nodes inside `p.el`, and nothing
+The skin adds fields (`p.view`, `p.chatSkin`, …) and DOM nodes inside `p.el`, and nothing
 else. So everything that finds or controls a pane keeps working untouched:
 
 | Invariant | Why it holds |
@@ -692,8 +757,10 @@ else. So everything that finds or controls a pane keeps working untouched:
 | **bus `send` / `kill`** | They address the pane and its pty; `send` goes through the same `submitToPty` the box uses. |
 | **`runInPrimary`, rituals** | They write into the primary pane's pty; the skin is just another way to look at it. |
 | **closing the tab** | `closePane` tears the watch down before the pane and its id go away. |
-| **restore** | Restored panes come through `createPane`; `chatViewDefault` applies to them. |
-| **no second session** | Toggling spawns no pty (`createPane`, `ptySpawn`, `new Terminal` are absent from the toggle path). |
+| **restore, resume** | Restored and resumed panes come through `createPane`; `chatSkinMaybeDefault` reads `claudeView` there, so the mode applies to them like any new one. |
+| **no second session** | Changing the mode spawns no pty (`createPane`, `ptySpawn`, `new Terminal` are absent from `chatSkinSetMode`, `chatSkinApplyMode` and `chatSkinSetView`). |
+| **only Claude panes** | `chatSkinApplyMode` filters by `chatSkinEligible`: a shell, a viewer or an ended session is never moved by the mode. |
+| **the mode has one writer** | Only `chatSkinSetMode` writes `claudeView`. A tab stepping out of the mode, a card's *View in the terminal* and the context-menu row never do. |
 
 The one deliberate exception is stated and bounded: the skin may **correct** `p.sessionId` (a `/clear` or
 a forking resume replaces the session under the same pty), by asking the process tree (`session:under`),
@@ -701,7 +768,7 @@ the same authority the other adoption sites use. There is exactly one `sessionId
 
 How the tests cover it: `src/test/chatSkin.test.ts` reads the source and checks each of the above, and each
 check is paired with a **negative control** — the same check run on a deliberately broken copy must fail
-(for example: a toggle that calls `createPane`; a box that writes `text + '\r'` itself; a hidden host given
+(for example: a mode change that calls `createPane`; a box that writes `text + '\r'` itself; a hidden host given
 `display:none`; a dialog notice without `role="alert"`). A check that cannot fail would report confidence
 about something it never examined.
 
@@ -769,6 +836,25 @@ against the operator's settings. That is the price of there being one session, a
   an inserted path). `src/test/slashCommands.test.ts` covers the pure module (merge precedence, ranking,
   what the box is asking for) and `src/test/usageReader.test.ts` covers the statusline parser, the new reset
   and window-size fields included (absent, unusable and millisecond values).
+- **Guards for the view mode** (§ 2.4), in `src/test/chatSkin.test.ts` and `src/test/transcriptTail.test.ts`, each
+  with a negative control. *No switch on the tab:* `createPane` must not mount one, and a CSS rule for `.tab .tview`
+  is detected by the pattern the test uses (the control adds one). *Migration:* `normalizeClaudeView` is compiled
+  from `src/main/aios.ts` with `ts.transpileModule` and run over a table of ten cases (explicit value wins; only a
+  literal `true` of the old key means chat; `false`, absent, `'true'` and `1` mean terminal); controls ignore the
+  old key, accept any truthy value, let the old key beat an explicit one, and make absent mean chat. A temporary
+  `shell.json` read through `shellSettings()` (with `HOME` and `GLASS_FRAMEWORK_PATH` isolated) checks the real
+  read path, and `setSetting` is shown to refuse a bad `claudeView` (control: remove the guard). *Live
+  application:* the real block is run with `new Function` and a stand-in pane list; changing the mode moves the
+  Claude panes and not the shell, the viewer or the ended session (control: drop the `chatSkinEligible` filter).
+  *The shortcut:* it reads fresh, inverts, writes `('claudeView', next)`, applies and toasts; a bogus value
+  changes nothing and `persist: false` writes nothing (controls: remove the write, remove the apply, change the
+  intent). *One writer:* `chatSkinSetMode` is the only caller of `setSetting('claudeView', …)` (control: a notice
+  button that calls it fails), the tick forces chat only on the eligibility flip (control: force it always), and
+  `createPane`/`chatSkinMaybeDefault` read `claudeView`. The context-menu row exists only for a tab that is out of
+  the mode. The font rows share a section with the selector and are hidden in Terminal. The chat-shot fixture
+  adds `tab-dark`/`tab-light` (the Claude tab with no switch, asserted) and `settings-terminal-dark`/`-light`
+  (the selector at Terminal with the font rows gone); `settings-dark`/`-light` now assert the selector shows the
+  live mode.
 - **Guards for the streaming bubble and the dialog cards**, also in `src/test/chatSkin.test.ts`, each with a
   negative control and each **run for real** from the real source against a stand-in DOM that has ordered
   children, classes and a class-selector query: text growing is one provisional bubble and the finished message
@@ -819,10 +905,14 @@ against the operator's settings. That is the price of there being one session, a
        hooks off, remote control off and the status line into a no-op, and with the environment inherited
        from a launching Claude session dropped (`env -u`), so a throwaway session reaches nothing of the
        operator's world;
-    2. the tab's Terminal/Chat toggle (the bubble icon, now the only switch) pressed **at once**, while the
-       session is still blocked on the folder-trust dialog and has no id, which is exactly when the chat view
-       must not hide the terminal; right after, it fails if a header or a second switch is present, if the icon
-       is not pressed, or if the log is not the first thing in the view;
+    2. the chat mode set **at once** through `chatSkinSetMode('chat', { persist: false })`, the function the
+       Settings selector calls, while the session is still blocked on the folder-trust dialog and has no id,
+       which is exactly when the chat view must not hide the terminal; right after, it fails if the open pane did
+       not follow the mode, if a header, a `.tview` or a `viewBtn` is present, or if the log is not the first thing
+       in the view. `persist: false` is deliberate: the smoke run has its own throwaway userData, but `claudeView`
+       lives in the framework's `.glass/shell.json` (the operator's `~/aios` unless `GLASS_FRAMEWORK_PATH` points
+       elsewhere), so a persisted write would change the operator's real preference from a QA run. The cleanup
+       puts the live mode back to what the run found;
     3. the wait (up to 75 s) for the pane to adopt its session id and for the chat view to follow it. It
        records whether the detector reported `trust`, and answers the dialogs itself by reading the screen
        and moving the cursor: "Yes, I trust" for the trust dialog and "No" for the auto-mode offer. No
@@ -881,7 +971,7 @@ against the operator's settings. That is the price of there being one session, a
   - Some shots are **assertions as well as pictures**: a helper in the fixture's `setup` makes the run fail
     when a bar's detail card reaches into the composer or past the bar, when the effort shows for a payload
     that is not the tab's, when the `/` popup shows more than seven whole rows, or when the active row is out
-    of view; when the pane has a header again, the tab icon is not pressed or a gap opens above the log; when the
+    of view; when the pane has a header again, the tab has a view switch again or a gap opens above the log; when the
     effort menu is cut off by the pane, sits over the bar or has no level ticked; when a run of tool calls was
     not folded, is not in the state the shot names, will not unfold with the failed row open, or its summary
     text spills out of the row. A look that regresses breaks the run, not only a picture nobody opens.
@@ -889,8 +979,8 @@ against the operator's settings. That is the price of there being one session, a
     150 s until the fixture reached 79 shots and took about two minutes; `settleMs` is 450, which is enough for
     the 340 ms entry animation. The next big batch should make the timer per-shot rather than raise it again.
   - **The headerless pass has twenty shots** (`no-header`, `effort-menu`, `group-live`, `group-done-fail`,
-    `group-open-row`, each × dark/light × wide/`-narrow`; the first is the full window, so the tab icon is in
-    it, the rest are cropped to the pane): the chat with no header and the pressed tab icon; the effort menu
+    `group-open-row`, each × dark/light × wide/`-narrow`; the first is the full window, so the tab strip is in
+    it, the rest are cropped to the pane): the chat with no header and no switch on the tab; the effort menu
     open over the end of the log; a run still going with the action in progress; the same run finished with
     one failure; and the run unfolded with the failed row open and its output showing. Their streams
     (`tools-live`, `tools-fail`) are invented, and a unit test counts what they hold (a live run with exactly one
@@ -936,7 +1026,7 @@ against the operator's settings. That is the price of there being one session, a
   footer-less shape other than Yes/No) are still only pointed at: the strip, as before (§ 5).
 - **`@` mentions** in the box (files and images arrive as quoted paths, § 2, not as attachment chips).
 - **A permission-mode picker.** The chat follows what the session already runs under.
-- **Accessibility pass** beyond the log region, the alert notice, `aria-pressed` on the tab icon and the menu roles of the effort menu.
+- **Accessibility pass** beyond the log region, the alert notice and the menu roles of the effort menu.
 - **The `/` popup does not tag plugin commands.** A plugin's name is already the prefix (`weekly:plan`), so only
   the project's and the operator's own commands carry an origin word. An `aios` tag for the bundled plugin would
   be one more locale key and a `source` value; it was left out until someone misses it.
@@ -1021,6 +1111,6 @@ window stitching matters more for replies taller than the pane.
 2. Is 20 s the right threshold for the stalled-turn notice, and should it differ for long tool runs?
 3. *(answered)* The tool's output now sits behind a disclosure in each row. Open: should the row open on its
    own for an error, or for the tool that is blocking a turn?
-4. Should `chatViewDefault` be per agent or per pane kind rather than global?
+4. *(answered by § 2.4)* The mode is global on purpose: one setting, `claudeView`, for every Claude session. Open: would anyone want it per agent or per project? The per-tab *Show terminal* and its way back cover the one-off case today, and nothing asked for more, so a per-agent override is not built.
 5. Is a version guard on the transcript format worth having (warn when no `user`/`assistant` line was
    recognised in a non-empty file)?
