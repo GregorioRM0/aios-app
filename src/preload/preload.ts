@@ -101,6 +101,9 @@ contextBridge.exposeInMainWorld('glassShell', {
   resolveFile: (cand: string, base?: string): Promise<string | null> => ipcRenderer.invoke('fs:resolveFile', cand, base),
   dirtyLines: (abs: string): Promise<Array<[number, number]>> => ipcRenderer.invoke('fs:dirtyLines', abs),
   resolveFiles: (cands: string[], base?: string): Promise<Record<string, string>> => ipcRenderer.invoke('fs:resolveFiles', cands, base),
+  /* The chat's resolver: like resolveFiles (same rules, one batch) but folders count too, and each hit says which it is.
+     Kept apart so the terminal's files-only reply never changes shape. */
+  resolvePaths: (cands: string[], base?: string): Promise<Record<string, { abs: string; dir: boolean }>> => ipcRenderer.invoke('fs:resolvePaths', cands, base),
   /* One flag only, and a diagnostic one: AIOS_NO_WEBGL disables the GPU renderer so a
      rendering artifact can be attributed or ruled out. Deliberately not the whole env. */
   env: { AIOS_NO_WEBGL: process.env.AIOS_NO_WEBGL || '' },

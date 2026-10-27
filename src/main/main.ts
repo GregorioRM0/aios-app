@@ -33,6 +33,7 @@ import { needsSpill } from '../core/ptyLine';
 import { initAutoUpdater } from './updater';
 import * as aios from './aios';
 import { redactSecrets } from './redact';
+import { resolveOne, resolveMany, RESOLVE_FILES_LIMIT, RESOLVE_PATHS_LIMIT } from './pathResolve';
 import * as connectors from './connectors';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -1253,41 +1254,28 @@ ipcMain.handle('pty:cwd', async (_e, id: number) => {
   ptyCwdCache.set(p.pid, { at: Date.now(), cwd });
   return cwd;
 });
+/* The three resolvers below share ONE implementation of the rules (pathResolve.ts): trim, `:line`, `~`,
+   the base folders, the allowed roots. Three copies of those rules is how a terminal link and a chat
+   link would end up disagreeing about the same string. */
+const resolveEnv = { allowed: (abs: string) => inAllowed(abs), frameworkRoot: () => aios.frameworkRoot() };
 ipcMain.handle('fs:resolveFile', (_e, cand: string, base?: string) => {
-  try {
-    let c = String(cand || '').trim().replace(/[)\]},.;:'"]+$/, '');   // trailing punctuation from prose
-    if (!c) return null;
-    c = c.replace(/:\d+(?::\d+)?$/, '');                              // file.ts:42[:7] → file.ts
-    if (c.startsWith('~')) c = path.join(os.homedir(), c.slice(1));
-    const bases = [base, aios.frameworkRoot(), os.homedir()].filter(Boolean) as string[];
-    const cands = path.isAbsolute(c) ? [c] : bases.map((b) => path.resolve(b, c));
-    for (const abs of cands) {
-      if (!inAllowed(abs)) continue;
-      try { if (fs.statSync(abs).isFile()) return abs; } catch { /* next */ }
-    }
-    return null;
-  } catch { return null; }
+  try { return resolveOne(cand, base, resolveEnv, false)?.abs ?? null; } catch { return null; }
 });
 /* Plural form: a hovered terminal line can hold a dozen path-shaped tokens, and resolving
-   them one IPC at a time is what made the first hover feel slow. */
+   them one IPC at a time is what made the first hover feel slow. FILES ONLY: the terminal opens a
+   viewer, and a folder has none. */
 ipcMain.handle('fs:resolveFiles', (_e, cands: string[], base?: string) => {
   const out: Record<string, string> = {};
-  for (const c of (Array.isArray(cands) ? cands : []).slice(0, 24)) {
-    try {
-      let v = String(c || '').trim().replace(/[)\]},.;:'"]+$/, '');
-      if (!v) continue;
-      v = v.replace(/:\d+(?::\d+)?$/, '');
-      if (v.startsWith('~')) v = path.join(os.homedir(), v.slice(1));
-      const bases = [base, aios.frameworkRoot(), os.homedir()].filter(Boolean) as string[];
-      const tries = path.isAbsolute(v) ? [v] : bases.map((b) => path.resolve(b, v));
-      for (const abs of tries) {
-        if (!inAllowed(abs)) continue;
-        try { if (fs.statSync(abs).isFile()) { out[c] = abs; break; } } catch { /* next */ }
-      }
-    } catch { /* skip */ }
-  }
+  for (const [c, r] of Object.entries(resolveMany(cands, base, resolveEnv, { dirs: false, limit: RESOLVE_FILES_LIMIT }))) out[c] = r.abs;
   return out;
 });
+/* The chat's variant. It exists because a chat message names folders as often as files ("the output is
+   in ~/Projects/site/dist") and has to say which one it found: a file opens in a viewer, a folder is
+   revealed in the explorer. Same rules as fs:resolveFiles, with two deliberate differences: a folder
+   counts, and the ceiling is higher because the renderer resolves a whole message in one call. A
+   separate channel rather than a flag on fs:resolveFiles so the terminal's reply can never change shape. */
+ipcMain.handle('fs:resolvePaths', (_e, cands: string[], base?: string) =>
+  resolveMany(cands, base, resolveEnv, { dirs: true, limit: RESOLVE_PATHS_LIMIT }));
 ipcMain.handle('fs:sortState', () => ({ master: aios.masterSort(), overrides: aios.folderSorts() }));
 ipcMain.handle('fs:setSort', (_e, folder: string, mode: string) => {
   if (typeof folder !== 'string' || !inAllowed(folder)) return { master: aios.masterSort(), overrides: aios.folderSorts() };
