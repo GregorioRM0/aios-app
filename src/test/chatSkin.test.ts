@@ -16,7 +16,9 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
+import * as ts from 'typescript';
 import { detectTuiPrompt, createPromptMonitor } from '../core/tuiPrompt';
+import { normalizeClaudeView } from '../main/aios';
 
 const read = (p: string): string => fs.readFileSync(p, 'utf8');
 const app = read('renderer/app.js');
@@ -66,17 +68,17 @@ guarded('no pane kind "chat" and no SDK chat call survives in the renderer or th
 // ── the toggle only flips a view ────────────────────────────────────────────
 
 const CREATES = /createPane\(|ptySpawn\(|panes\.set\(|new Terminal\(|homePane\(|makeTab\(/;
-guarded('the toggle creates no pane, no pty and no session: it flips a view on the same pane object',
+guarded('changing the mode creates no pane, no pty and no session: it flips a view on the same pane objects',
   (src) => {
     const s = slice(src);
-    const fns = ['chatSkinSetView', 'chatSkinToggle', 'chatSkinToggleFocused', 'chatSkinBuild', 'chatSkinLayout', 'chatSkinHandBack'].map((n) => fnBody(s, n));
+    const fns = ['chatSkinSetView', 'chatSkinApplyMode', 'chatSkinSetMode', 'chatSkinToggleMode', 'chatSkinFollowMode', 'chatSkinBuild', 'chatSkinLayout', 'chatSkinHandBack'].map((n) => fnBody(s, n));
     return fns.every((b) => b.length > 40 && !CREATES.test(b)) && !CREATES.test(s.replace(fnBody(s, 'chatSkinMaybeDefault'), ''));
   },
   (src) => src.replace('function chatSkinSetView(id, view) {', 'function chatSkinSetView(id, view) {\n  void createPane({ name: "chat" });'));
 
 test('the skin only adds fields and DOM inside p.el: it never reassigns the pane identity', () => {
   // identity = what byName / resume / the bus / restore key on. The skin may ADD p.view, p.chatSkin,
-  // p.viewBtn, p.lastPtyAt (set outside), p.csEligible, p.chatEnded; it must not rename or re-key anything.
+  // p.lastPtyAt (set outside), p.csEligible, p.chatEnded; it must not rename or re-key anything.
   for (const bad of [/\.name\s*=[^=]/, /\.confirmedName\s*=[^=]/, /\.cmd\s*=[^=]/, /panes\.delete\(/, /panes\.set\(/, /\.isSession\s*=[^=]/, /renamePane\(/]) {
     assert.doesNotMatch(skin, bad, `the skin must not touch ${bad}`);
   }
@@ -207,28 +209,142 @@ test('the pty resize path stays the terminal\'s own (the skin adds no geometry p
   assert.match(fnBody(skin, 'chatSkinHandBack'), /pushPtyGeom\(id, p\)/);
 });
 
-// ── doors: button, shortcut, menu, context menu, preference ─────────────────
+// ── doors: the setting, the shortcut, the menu item; and no button on the tab ──────────────────────────
 
-guarded('the toggle has all its doors: tab button, menu item with a free accelerator, context-menu row, Settings preference',
+/** The old per-tab switch, in every spelling it ever had in the renderer and the stylesheet. */
+const SWITCH_TRACES = /chatSkinMountToggle|chatSkinPaintToggle|chatSkinToggleFocused|\bchatSkinToggle\b|\bviewBtn\b|\btview\b/;
+guarded('the tab carries no Chat/Terminal switch: no button is built, mounted, painted or wired anywhere in the renderer',
+  (src) => !SWITCH_TRACES.test(src) && !/chatDefToggle|chatViewDefault/.test(src)
+    && !/p\.tab\.insertBefore/.test(fnBody(src, 'createPane')),   // nothing is put next to the name of a terminal tab any more
+  (src) => src.replace("  const tab = makeTab(id, name, 'term');\n  const p = { kind: 'term',", "  const tab = makeTab(id, name, 'term');\n  chatSkinMountToggle(id, { tab });\n  const p = { kind: 'term',"));
+test('the stylesheet has no rule for the old tab switch, and the check catches one that comes back', () => {
+  assert.doesNotMatch(css, SWITCH_TRACES);
+  assert.match(css + '\n.tab .tview { width: 22px; }', SWITCH_TRACES, 'control: a .tview rule would be caught');
+  assert.doesNotMatch(css, /\.tab \.tview|tview/);
+});
+
+guarded('the mode has its doors: a free accelerator and a menu item that flip the GLOBAL setting, and a Settings selector that writes it',
   (src) => {
     const accels = [...menu.matchAll(/accelerator: '([^']+)'/g)].map((m) => m[1]);
     const mine = /accelerator: '(CmdOrCtrl\+Shift\+L)', click: \(\) => intent\('toggleChatView'\)/.exec(menu)?.[1];
+    const st = fnBody(src, 'openSettingsTab');
     return !!mine && accels.filter((a) => a === mine).length === 1
-      && /case 'toggleChatView': chatSkinToggleFocused\(\); return;/.test(src)
-      && /value: 'chatView'/.test(src) && /pick === 'chatView'\) chatSkinToggle\(id\)/.test(src)
-      && /chatSkinMountToggle\(id, p\)/.test(fnBody(src, 'createPane'))
-      && /setSetting\('chatViewDefault', chatDefToggle\.checked\)/.test(src);
+      && /case 'toggleChatView': void chatSkinToggleMode\(\); return;/.test(src)
+      && /setSetting\('claudeView', mode\)/.test(fnBody(slice(src), 'chatSkinSetMode'))
+      && /chatSkinSetMode\(claudeViewSel\.value\)/.test(st) && /claudeViewSel\.className = 'tinput'/.test(st);
   },
-  (src) => src.replace("case 'toggleChatView': chatSkinToggleFocused(); return;", '/* removed */'));
+  (src) => src.replace("case 'toggleChatView': void chatSkinToggleMode(); return;", "case 'toggleChatView': chatSkinToggleFocused(); return;"));
 
-guarded('chatViewDefault opens every NEW Claude pane in chat view, restored and resumed ones included, because they all come through createPane',
+guarded('the only writer of the mode is chatSkinSetMode, so a glance at the terminal ("Show terminal", "View in terminal") can never change it',
+  (src) => {
+    const writers = [...src.matchAll(/setSetting\('claudeView'/g)].length;
+    const settingsWrite = /chatSkinSetMode\(claudeViewSel\.value\)/.test(fnBody(src, 'openSettingsTab'));
+    const glance = `${fnBody(slice(src), 'chatSkinCardBuild')}\n${/alertBtn\.addEventListener\('click'[^\n]*\n/.exec(src)?.[0] ?? ''}${/stateBtn\.addEventListener\('click'[^\n]*\n/.exec(src)?.[0] ?? ''}`;
+    return writers === 1 && settingsWrite && glance.length > 100 && !/chatSkinSetMode|chatSkinToggleMode|claudeView/.test(glance);
+  },
+  (src) => src.replace("alertBtn.addEventListener('click', () => chatSkinSetView(id, 'term'));", "alertBtn.addEventListener('click', () => chatSkinSetMode('terminal'));"));
+
+guarded('the tab menu offers a way back ONLY to a tab that stepped out of the mode, and it follows the mode rather than flipping it',
+  (src) => /chatSkinOutOfMode\(pane\)\) items\.push\(\{ label: t\(chatMode === 'chat' \? 'chat\.skin\.toChat' : 'chat\.skin\.toTerminal'\), value: 'chatView' \}\)/.test(src)
+    && /pick === 'chatView'\) chatSkinFollowMode\(id\)/.test(src)
+    && /const chatSkinOutOfMode = \(p\) => chatSkinEligible\(p\) && \(p\.view === 'chat'\) !== \(chatMode === 'chat'\);/.test(src)
+    && /chatSkinSetView\(id, chatMode === 'chat' \? 'chat' : 'term'\)/.test(fnBody(slice(src), 'chatSkinFollowMode')),
+  (src) => src.replace("if (pane.kind === 'term' && chatSkinOutOfMode(pane)) items.push", "if (pane.kind === 'term') items.push"));
+
+/** The mode block of the real source, run against stand-ins: panes, a recorder for views, a recorder for stored settings. */
+function modeHarness(src: string, stored: string | undefined = 'terminal') {
+  const s = slice(src);
+  const a = s.indexOf('let chatMode =');
+  const b = s.indexOf('/* A tab that left the mode on purpose');
+  assert.ok(a > 0 && b > a, 'the mode block was found');
+  const eligible = fnBody(s, 'chatSkinEligible');
+  assert.ok(eligible.length > 40);
+  const calls: Array<[number, string]> = [];
+  const writes: Array<[string, string]> = [];
+  const toasts: string[] = [];
+  const claude = { kind: 'term', isSession: true, view: 'term' };
+  const panes = new Map<number, Record<string, unknown>>([
+    [1, { ...claude }],                                                     // a Claude session in a terminal tab
+    [2, { kind: 'term', cmd: 'zsh', view: 'term' }],                         // a plain shell: no Claude, nothing to show
+    [3, { kind: 'file', view: 'term' }],                                     // a viewer tab
+    [4, { ...claude, exited: true }],                                        // a Claude whose pty is gone
+    [5, { kind: 'term', sessionId: 'abc', view: 'chat' }],                   // a second live Claude, already in chat
+  ]);
+  const glassShell = { shellConfig: async () => ({ claudeView: stored }), setSetting: async (k: string, v: string) => { writes.push([k, v]); } };
+  const make = new Function('panes', 'chatSkinSetView', 'paneIsClaude', 'window', 'toast', 't',
+    `${eligible}\n${s.slice(a, b)}\nreturn { chatSkinApplyMode, chatSkinSetMode, chatSkinToggleMode, mode: () => chatMode };`) as (...a: unknown[]) => {
+      chatSkinApplyMode: (m: string) => void; chatSkinSetMode: (m: string, o?: { persist?: boolean }) => Promise<void>; chatSkinToggleMode: () => Promise<void>; mode: () => string };
+  const api = make(panes, (id: number, v: string) => { calls.push([id, v]); return true; }, (cmd: unknown) => /claude/.test(String(cmd ?? '')), { glassShell }, (m: string) => toasts.push(m), (k: string) => k);
+  return { ...api, calls, writes, toasts };
+}
+guarded('changing the mode moves every open Claude session and no plain terminal, viewer or ended session',
+  (src) => {
+    const h = modeHarness(src);
+    h.chatSkinApplyMode('chat');
+    const toChat = h.calls.map(([id, v]) => `${id}:${v}`).join(',');
+    h.calls.length = 0;
+    h.chatSkinApplyMode('terminal');
+    return toChat === '1:chat,5:chat' && h.calls.map(([id, v]) => `${id}:${v}`).join(',') === '1:term,5:term';
+  },
+  (src) => src.replace("    if (!chatSkinEligible(p)) continue;   // a plain terminal (or a viewer) has no Claude behind it: it stays as it is\n", ''));
+guarded('Settings and the shortcut go through one function: it applies the mode live, THEN stores it, and a refused value changes nothing',
+  (src) => {
+    return /chatSkinApplyMode\(mode\);[\s\S]*setSetting\('claudeView', mode\)/.test(fnBody(slice(src), 'chatSkinSetMode'))
+      && /if \(mode !== 'chat' && mode !== 'terminal'\) return;/.test(fnBody(slice(src), 'chatSkinSetMode'));
+  },
+  (src) => src.replace("  if (mode !== 'chat' && mode !== 'terminal') return;\n  chatMode = mode;", '  chatMode = mode;'));
+test('the shortcut flips the stored mode (read fresh), applies it to the open Claude sessions and says so; Settings writes the choice it was given', async () => {
+  const run = async (src: string, stored: string | undefined) => {
+    const h = modeHarness(src, stored);
+    await h.chatSkinToggleMode();
+    return h;
+  };
+  for (const [stored, next, view, said] of [['terminal', 'chat', 'chat', 'chat.skin.modeNowChat'], ['chat', 'terminal', 'term', 'chat.skin.modeNowTerminal'], [undefined, 'chat', 'chat', 'chat.skin.modeNowChat']] as const) {
+    const h = await run(app, stored);
+    assert.deepEqual(h.writes, [['claudeView', next]], `stored ${stored}: the setting is written`);
+    assert.deepEqual(h.calls, [[1, view], [5, view]], `stored ${stored}: the open Claude sessions follow`);
+    assert.deepEqual(h.toasts, [said], `stored ${stored}: the new mode is announced`);
+    assert.equal(h.mode(), next);
+  }
+  // Settings: the operator's pick is written as given; a value that is neither is refused and changes nothing
+  const set = modeHarness(app);
+  await set.chatSkinSetMode('chat');
+  await set.chatSkinSetMode('bogus');
+  assert.deepEqual(set.writes, [['claudeView', 'chat']]);
+  assert.equal(set.mode(), 'chat');
+  // `persist: false` (the smoke run) applies without writing
+  const dry = modeHarness(app);
+  await dry.chatSkinSetMode('chat', { persist: false });
+  assert.deepEqual(dry.writes, []);
+  assert.deepEqual(dry.calls, [[1, 'chat'], [5, 'chat']]);
+  // controls: a shortcut that still toggles the focused tab (no stored write), or one that never applies, is caught
+  const noWrite = app.replace("  if (!opts || opts.persist !== false) await window.glassShell.setSetting('claudeView', mode);\n", '');
+  assert.notEqual(noWrite, app);
+  assert.deepEqual((await run(noWrite, 'terminal')).writes, []);
+  const noApply = app.replace('  chatSkinApplyMode(mode);\n  for (const sub of', '  for (const sub of');
+  assert.notEqual(noApply, app);
+  assert.deepEqual((await run(noApply, 'terminal')).calls, []);
+});
+
+guarded('a session that BECOMES eligible takes the mode once, on the flip; nothing else in the tick moves a tab into chat, so a glance at the terminal is left alone',
+  (src) => {
+    const tick = fnBody(slice(src), 'chatSkinTick');
+    const flip = /if \(ok !== p\.csEligible\) \{[\s\S]*?\n    \}\n/.exec(tick)?.[0] ?? '';
+    return flip.length > 100 && /if \(ok && chatMode === 'chat' && p\.view !== 'chat'\) chatSkinSetView\(id, 'chat'\);/.test(flip)
+      && [...tick.matchAll(/chatSkinSetView\(id, 'chat'\)/g)].length === 1
+      && /chatSkinSessionChanged\(id, p\);\n      \/\*/.test(flip) && ![...fnBody(slice(src), 'chatSkinSessionChanged').matchAll(/chatSkinSetView\(id, 'chat'\)/g)].length;
+  },
+  (src) => src.replace("    const cs = p.chatSkin;\n    if (p.view !== 'chat' || !cs) continue;\n    chatSkinControls(p);", "    if (chatMode === 'chat' && ok && p.view !== 'chat') chatSkinSetView(id, 'chat');\n    const cs = p.chatSkin;\n    if (p.view !== 'chat' || !cs) continue;\n    chatSkinControls(p);"));
+
+guarded('the mode opens every NEW Claude pane in its view, restored and resumed ones included, because they all come through createPane',
   (src) => {
     const dflt = fnBody(slice(src), 'chatSkinMaybeDefault');
     return /createPane/.test(fnBody(src, 'createPane')) && /chatSkinMaybeDefault\(id, p\)/.test(fnBody(src, 'createPane'))
-      && /paneIsClaude\(p\.cmd\)/.test(dflt) && /chatViewDefault === true/.test(dflt) && /chatSkinSetView\(id, 'chat'\)/.test(dflt)
+      && /paneIsClaude\(p\.cmd\)/.test(dflt) && /claudeView === 'chat'/.test(dflt) && /chatSkinSetView\(id, 'chat'\)/.test(dflt)
+      && !/chatViewDefault/.test(dflt)
       && /await createPane\(\{ name: ph\.name, cmd, cwd: ph\.cwd \|\| undefined \}\)/.test(src);   // restore/resume path: `claude --resume` via createPane
   },
-  (src) => src.replace("chatViewDefault === true", 'chatViewDefault === 1'));
+  (src) => src.replace("(await window.glassShell.shellConfig()).claudeView === 'chat'", "(await window.glassShell.shellConfig()).claudeView === 'terminal'"));
 
 // ── dialogs the chat cannot draw ────────────────────────────────────────────
 
@@ -246,8 +362,8 @@ guarded('a prompt event brings the REAL xterm forward with focus and a visible, 
 
 test('there is always a way back to the terminal, and a stalled turn offers it', () => {
   assert.match(skin, /alertBtn\.addEventListener\('click', \(\) => chatSkinSetView\(id, 'term'\)\)/, 'the notice button');
-  assert.match(skin, /p\.viewBtn = b;/, 'the tab button: the pane has no header switch any more, so this icon is the way back');
-  assert.match(fnBody(skin, 'chatSkinMountToggle'), /b\.addEventListener\('click', go\)/);
+  assert.match(skin, /stateBtn\.addEventListener\('click', \(\) => chatSkinSetView\(id, 'term'\)\)/, 'and the error card');
+  assert.match(skin, /const chatSkinOutOfMode = /, 'the tab has no icon, so the way back to the mode is the tab menu row that only a stepped-out tab gets');
   // the safety net: open turn + live pty + silent transcript -> the stalled notice
   const tick = fnBody(skin, 'chatSkinTick');
   assert.match(tick, /cs\.turnOpen && now - \(p\.lastPtyAt \|\| 0\) < CS_WORKING_MS \* 2 && quiet > CS_STALL_MS/);
@@ -281,10 +397,10 @@ test('model output never reaches the DOM as raw HTML', () => {
   for (const bad of ['SCRIPT', 'IMG', 'IFRAME', 'STYLE', 'FORM', 'SVG']) assert.doesNotMatch(tags, new RegExp(`'${bad}'`), `${bad} must not be allowed`);
   assert.match(fnBody(skin, 'chatRender'), /chatSanitize\(chatMarkdown\(\)\.parse\(/);
   assert.match(fnBody(skin, 'chatRender'), /target\.replaceChildren\(frag\)/);
-  // the only markup writes: the inert template, hljs output over textContent, the tab icon glyph, and csIcon's holder
+  // the only markup writes: the inert template, hljs output over textContent, and csIcon's holder
   // (an icon from the static ICONS table, never model text — a model-text write would still show up as a new name here)
   const direct = [...skin.matchAll(/(\w+(?:\.\w+)*)\.innerHTML\s*=/g)].map((m) => m[1]);
-  assert.deepEqual(direct.sort(), ['b', 'code', 'holder', 'tpl'], `unexpected innerHTML writes: ${direct.join(', ')}`);
+  assert.deepEqual(direct.sort(), ['code', 'holder', 'tpl'], `unexpected innerHTML writes: ${direct.join(', ')}`);
   // the operator's and the transcript's plain text go in as textContent
   assert.match(fnBody(skin, 'chatSkinUpsert'), /rec\.body\.textContent = text/);
   // links open in the system browser, never inside this window
@@ -309,7 +425,8 @@ test('every key the skin, the menu and the settings row use exists in en, es and
     ...[...skin.matchAll(/\bt\('([A-Za-z.-]+)'/g)].map((m) => m[1]),
     ...[...skin.matchAll(/label: '(chat\.[A-Za-z.]+)'/g)].map((m) => m[1]),    // CHAT_FONTS labels
     ...[...skin.matchAll(/\['[A-Za-z]+', '(chat\.usage\.[A-Za-z]+)'/g)].map((m) => m[1]),   // CHAT_USAGE_FIELDS labels
-    'menu.chatView', 'settings.chatViewDefault', 'settings.chatViewDefaultHint',
+    'menu.chatView', 'settings.claudeView', 'settings.claudeViewHint', 'settings.claudeView.chat', 'settings.claudeView.terminal',   // the Settings selector
+    'chat.skin.modeNowChat', 'chat.skin.modeNowTerminal', 'chat.skin.toChat', 'chat.skin.toTerminal',   // the shortcut's toast, the tab menu's way back
     'settings.chatFont', 'settings.chatFontHint', 'settings.chatSize', 'settings.chatSizeHint', 'chat.settings.sample',   // the Settings rows for the chat's font and size
   ]);
   // keys built at run time: 'chat.skin.prompt.' + kind, 'chat.skin.tool.' + status
@@ -360,21 +477,22 @@ test('every colour the skin uses is a token (none minted in the skin\'s own rule
 
 /** The Settings screen's own function: the font and size of the chat live there and nowhere in the conversation. */
 const settingsFn = (src: string): string => fnBody(src, 'openSettingsTab');
-guarded('the chat font and size are chosen in Settings, in the chatViewDefault section, saved under the same two keys and applied live',
+guarded('the chat font and size are chosen in Settings, in the same section as the Chat | Terminal selector (and step aside in Terminal), saved under the same two keys and applied live',
   (src) => {
     const st = settingsFn(src);
     const at = (needle: string): number => st.indexOf(needle);
-    const def = at("row(wrap, t('settings.chatViewDefault')");
+    const def = at("row(wrap, t('settings.claudeView')");
     const font = at("row(wrap, t('settings.chatFont')");
     const size = at("row(wrap, t('settings.chatSize')");
     const next = at("row(wrap, t('settings.appFont')");
-    // the same section: right after the chat-by-default toggle, before the next unrelated row
+    // the same section: right after the view selector, before the next unrelated row
     const together = def > 0 && font > def && size > font && next > size && font - def < 3500;
     const fontHandler = /chatFontSel\.addEventListener\('change'[\s\S]*?\n    \}\);/.exec(st)?.[0] ?? '';
     const sizeHandler = /chatSizeSel\.addEventListener\('change'[\s\S]*?\n    \}\);/.exec(st)?.[0] ?? '';
     return together
       && /chatPrefs\.family = chatFontSel\.value/.test(fontHandler) && /chatApplyPrefs\(\)/.test(fontHandler) && /setSetting\('chatFontFamily', chatPrefs\.family\)/.test(fontHandler)
       && /chatPrefs\.size = v/.test(sizeHandler) && /chatApplyPrefs\(\)/.test(sizeHandler) && /setSetting\('chatFontSize', v\)/.test(sizeHandler)
+      && /for \(const n of \[chatFontRow, chatSizeRow, chatSample\]\) n\.hidden = chatMode !== 'chat';/.test(st)   // only meaningful in Chat
       && /chatReadPrefs\(cfg\)/.test(st)   // seeded from the config this page was built from, not from whatever a chat view last read
       && /CHAT_FONTS\.map/.test(st) && /CHAT_SIZES\.map/.test(st);
   },
@@ -493,7 +611,7 @@ guarded('in chat view a session is still found by name/id, written to by the bus
 guarded('every route that opens a Claude session — new, resume, restore, bus, primary — goes through createPane, where the chat default is applied',
   (src) => {
     const cp = fnBody(src, 'createPane');
-    return /chatSkinMountToggle\(id, p\)/.test(cp) && /void chatSkinMaybeDefault\(id, p\)/.test(cp)
+    return /void chatSkinMaybeDefault\(id, p\)/.test(cp)
       && !/chatSkinMaybeDefault\(/.test(src.replace(cp, '').replace(skin, ''))
       && (src.match(/createPane\(\{[^}]*cmd:/g) || []).length >= 6;
   },
@@ -509,7 +627,7 @@ const gateHolds = (src: string): boolean => {
       && /\} finally \{[\s\S]*closePane\([\s\S]*rmSync\(dir[\s\S]*rmSync\(tdir/.test(g)
       && /path\.basename\(dir\) === `aios-smoke-chat-\$\{tag\}`/.test(g)
       && /path\.dirname\(tdir\) === projects/.test(g) && /isSymbolicLink\(\)/.test(g)
-      && /viewBtn\.click\(\)/.test(g) && /KeyboardEvent\('keydown', \{ key: 'Enter'/.test(g)
+      && /chatSkinSetMode\('chat', \{ persist: false \}\)/.test(g) && /chatSkinSetMode\(\$\{JSON\.stringify\(priorMode\)\}, \{ persist: false \}\)/.test(g) && !/\.click\(\); return p\.view/.test(g) && /KeyboardEvent\('keydown', \{ key: 'Enter'/.test(g)
       && /app\.exit\(ok && chat\.status !== 'failed' \? 0 : 1\)/.test(src)
       && /smokeUserData = path\.join\(os\.tmpdir\(\), 'aios-smoke-userdata'\)/.test(src);
 };
@@ -785,8 +903,7 @@ const coralTokens = (sheet: string): string[] => [...sheet.matchAll(/^\s*(--chat
   .filter(([, name, value]) => name !== '--chat-on-accent' && /--accent/.test(value)).map((m) => m[1]);
 
 test('coral is the send button and nothing else in the chat: focus, links, rings and tokens are neutral or cool', () => {
-  // the tab's Terminal/Chat icon lives on the TAB (app chrome, "identity"), not in the conversation
-  const inView = (sheet: string): string[] => coralUsers(sheet).filter((s) => !s.startsWith('.tab .tview'));
+  const inView = (sheet: string): string[] => coralUsers(sheet);
   assert.deepEqual([...new Set(inView(css))].sort(), ['.cc-send', '.cc-send:hover:not(:disabled)'], 'only the send button may use the accent');
   assert.deepEqual(coralTokens(css), [], 'no chat token is built from the accent');
   // the composer card keeps a neutral focus (a border and a faint halo), and links use their own cool token
@@ -1074,35 +1191,6 @@ test('the stylesheet carries no rule of the old header, and the stylesheet check
   assert.match(css + '\n.cs-gear { width: 30px; }', HEADER_TRACES, 'control: so would the Aa button');
   // no place left for the strip: the first child of the overlay is the log, which fills it
   assert.match(skinRules(css).find(([sel]) => sel === '.chat-log')?.[1] ?? '', /flex: 1/);
-});
-
-guarded('the tab icon is the way to switch: a labelled, pressed-aware button whose words say which view it leads to',
-  (src) => {
-    const s = slice(src);
-    const paint = fnBody(s, 'chatSkinPaintToggle');
-    const mount = fnBody(s, 'chatSkinMountToggle');
-    return /classList\.toggle\('on', on\)/.test(paint) && /setAttribute\('aria-pressed', String\(on\)\)/.test(paint)
-      && /t\(on \? 'chat\.skin\.toTerminal' : 'chat\.skin\.toChat'\)/.test(paint)
-      && /\.title = label/.test(paint) && /setAttribute\('aria-label', label\)/.test(paint)
-      && /setAttribute\('role', 'button'\)/.test(mount) && /addEventListener\('click', go\)/.test(mount);
-  },
-  (src) => src.replace("p.viewBtn.setAttribute('aria-label', label);", ''));
-
-test('the tab icon looks clickable in both themes: a hit area, a pointer, a hover fill and a distinct active chip, none of it a hex literal', () => {
-  const rules = [...css.matchAll(/^(\.tab \.tview[^{]*)\{([^}]*)\}/gm)].map((m) => [m[1].trim(), m[2]] as const);
-  const rule = (sel: string): string => rules.find(([x]) => x === sel)?.[1] ?? '';
-  const base = rule('.tab .tview');
-  assert.match(base, /cursor: pointer/);
-  const px = (re: RegExp): number => Number(re.exec(base)?.[1] ?? 0);
-  assert.ok(px(/width: (\d+)px/) >= 20 && px(/height: (\d+)px/) >= 20, 'a comfortable hit area, not the 12 px glyph');
-  assert.match(rule('.tab .tview:hover'), /background: var\(--chat-row-hover\)/);
-  assert.match(rule('.tab .tview:focus-visible'), /outline: 2px solid var\(--chat-focus\)/);
-  const on = rule('.tab .tview.on');
-  assert.match(on, /background: color-mix/);
-  assert.match(on, /box-shadow: inset 0 0 0 1px/, 'the active state is a shape (a ring), not only a colour');
-  assert.notEqual(on.replace(/\s+/g, ''), base.replace(/\s+/g, ''));
-  assert.doesNotMatch(rules.map((r) => r[1]).join('\n'), /#[0-9a-fA-F]{3,8}\b|\brgba?\(/);
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.tab \.tview \{ transition: none; \} \}/);
 });
 
 guarded('every meter answers hover AND keyboard focus with its detail card, aria-labelled, and the card is not read twice',
@@ -2785,18 +2873,29 @@ test('chat-shot fixture: every v3 scenario is shot in dark and light, wide and n
     assert.equal(shot?.theme, th);
     assert.match([shot?.js].flat().join('\n'), new RegExp(`await ${helper}\\(ctx[,)]`), `${shot?.name} goes through ${helper}`);
     if (sfx) assert.match([shot?.js].flat().join('\n'), /pane: \d+/, `${shot?.name}: a narrow PANE (the window width alone would only shrink the layout around it)`);
-    // what is judged is the pane, except where the tab icon is the subject
+    // what is judged is the pane, except where the tab strip is the subject
     if (n !== 'no-header') assert.equal((shot as { clip?: string }).clip, 'pane', `${shot?.name} is cropped to the pane`);
   }
-  // the Settings shots show the font and size rows (the workbench layout, so the tab is not hidden behind the maximised dock) and fail when the sample is not on screen
+  // the Settings shots show the view selector with the font and size rows beside it (the workbench layout, so the tab is not hidden behind the maximised dock) and fail when they are not on screen together
   for (const n of ['settings-dark', 'settings-light']) {
     assert.equal(byName(n)?.layout, 'workbench', `${n} is shot in the workbench layout`);
-    assert.match([byName(n)?.js].flat().join('\n'), /chat-pref-sample[\s\S]*the chat font sample is not visible/, `${n} checks the sample is visible`);
+    const js = [byName(n)?.js].flat().join('\n');
+    assert.match(js, /data-setting="claudeView"[\s\S]*chat-pref-sample[\s\S]*not on screen together/, `${n} checks the selector and the sample are visible`);
+    assert.match(js, /the open Claude tab is not in the mode the selector shows/, `${n} checks the page against the open tab`);
+  }
+  // the same page in Terminal mode: the font and size step aside; and the tab strip of a chat session, with no switch on it
+  for (const th of ['dark', 'light']) {
+    const t = byName(`settings-terminal-${th}`);
+    assert.equal(t?.layout, 'workbench');
+    assert.match([t?.js].flat().join('\n'), /chatSkinSetMode\('terminal'[\s\S]*still shown in Terminal mode/, `settings-terminal-${th} checks the rows stepped aside`);
+    const tab = byName(`tab-${th}`);
+    assert.equal(tab?.theme, th);
+    assert.match([tab?.js].flat().join('\n'), /the tab has a view switch again/, `tab-${th} fails if a switch comes back`);
   }
   // the helpers fail the run, they do not just take a picture
   const setup = [fixture.setup].flat().join('\n');
   assert.match(setup, /the chat view has a header again/);
-  assert.match(setup, /the tab has no pressed view icon/);
+  assert.match(setup, /the tab has a view switch again/);
   assert.match(setup, /a gap above the log/);
   assert.match(setup, /the effort menu is cut off by the pane/);
   assert.match(setup, /the effort menu overlaps the bar/);
