@@ -1903,6 +1903,17 @@ body.light .zsplit .pane.termcard.panefocus { border-color: var(--accent); box-s
 .chat-md a { color: var(--chat-link); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--chat-link) 42%, transparent);
              text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
 .chat-md a:hover { text-decoration-color: currentColor; }
+/* A path that exists, made a link by the renderer (chatLinkPaths). The house link colour, and no underline until the pointer is
+   on it: a code block can hold dozens and a permanent underline under each would read as noise. A span, never an <a>: it has no href. */
+.cs-path { color: var(--chat-link); cursor: pointer; border-radius: 3px; text-decoration: underline; text-decoration-color: transparent;
+           text-decoration-thickness: 1px; text-underline-offset: 3px; transition: text-decoration-color .12s; }
+.cs-path:hover { text-decoration-color: color-mix(in srgb, var(--chat-link) 70%, transparent); }
+.cs-path:focus-visible { outline: 2px solid var(--chat-focus); outline-offset: 1px; text-decoration-color: currentColor; }
+/* A long path is clipped with an ellipsis instead of widening the column (the tooltip has all of it, and copying still takes it whole).
+   Only in running text: in a code block the line scrolls, and in a tool row the argument clips itself. */
+.cs-path.long { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.chat-md pre .cs-path.long, .ct-arg .cs-path.long { display: inline; max-width: none; overflow: visible; }
+@media (prefers-reduced-motion: reduce) { .cs-path { transition: none; } }
 .chat-md blockquote { border-left: 3px solid var(--chat-quote-line); padding: .1em 0 .1em 1em; color: var(--subtle); }
 .chat-md blockquote > :last-child { margin-bottom: 0; }
 .chat-md code { font-family: var(--mono); font-size: .86em; background: var(--chat-code-bg); border: 1px solid var(--chat-claude-line);
