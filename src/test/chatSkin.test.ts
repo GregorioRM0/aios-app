@@ -1921,14 +1921,14 @@ class Dn {
 }
 const isProv = (n: Dn): boolean => n.classList.contains('cs-prov');
 
-interface StreamHarness { cs: Record<string, any>; handle: (ev: Record<string, unknown>) => void; p: Record<string, any>; scrolls: unknown[] } // eslint-disable-line @typescript-eslint/no-explicit-any
+interface StreamHarness { cs: Record<string, any>; handle: (ev: Record<string, unknown>) => void; p: Record<string, any>; scrolls: unknown[]; links: Array<{ node: Dn; text: string }> } // eslint-disable-line @typescript-eslint/no-explicit-any
 /** The column code (items, the provisional bubble, adoption, the event switch) from the real source, wired to stand-ins. */
 function streamHarness(src: string = app, lang: 'en' | 'es' | 'pt-br' = 'en'): StreamHarness {
   const from = src.indexOf('function chatToolInfo(');
   const to = src.indexOf('if (window.glassShell && typeof window.glassShell.onChatSkinEvent');
   assert.ok(from > 0 && to > from, 'the column block was found');
   const make = new Function('el', 't', 'chatRender', 'chatSkinMakeTool', 'chatSkinPaintTool', 'chatSkinScroll', 'chatSkinPaintJump', 'chatSkinControls', 'chatSkinPaintAlert', 'chatSkinPaintState',
-    'chatSkinCardPaint', 'chatSkinPrompt', 'chatReducedMotion', 'CS_ANIM_AFTER_MS', 'panes', 'csIcon',
+    'chatSkinCardPaint', 'chatSkinPrompt', 'chatReducedMotion', 'CS_ANIM_AFTER_MS', 'panes', 'csIcon', 'chatLinkPaths',
     `${src.slice(from, to)}\nreturn chatSkinHandleEvent;`) as (...a: unknown[]) => (ev: Record<string, unknown>) => void;
   const log = new Dn('div', 'chat-log');
   const stateEl = new Dn('div', 'cs-card'); const workEl = new Dn('div', 'cs-working');
@@ -1937,12 +1937,14 @@ function streamHarness(src: string = app, lang: 'en' | 'es' | 'pt-br' = 'en'): S
   const cs: Record<string, any> = { log, stateEl, workEl, items: new Map(), groups: new Map(), groupOpen: new Map(), stream: null, dlg: null, dlgSig: '', turnOpen: false, stalled: false, state: 'waiting', stick: true, resetAt: 0, lastEventAt: 0, lastSubmitAt: 0, pane: p }; // eslint-disable-line @typescript-eslint/no-explicit-any
   p.chatSkin = cs;
   const scrolls: unknown[] = [];
+  const links: Array<{ node: Dn; text: string }> = [];   // every block chatLinkPaths was asked to link, with the text it held at that moment
   const tr = (k: string, v?: Record<string, unknown>): string => String(loc[lang][k] ?? k).replace(/\{(\w+)\}/g, (_m, n: string) => (v && n in v ? String(v[n]) : `{${n}}`));
   const handle = make((tag: string, cls?: string, text?: string) => new Dn(tag, cls, text), tr,
     (target: Dn, text: string) => { target.textContent = text; target.renders++; },
     () => ({ node: new Dn('div', 'chat-tool'), body: null, role: 'tool', tool: {} }), () => undefined, (c: unknown) => { scrolls.push(c); }, () => undefined, () => undefined, () => undefined, () => undefined,
-    () => undefined, () => undefined, () => false, 1500, new Map([[1, p]]), (name: string) => { const d = new Dn('span', 'cs-ico'); d.attrs['data-icon'] = name; return d; });
-  return { cs, p, scrolls, handle: (ev) => handle({ paneId: 1, ...ev }) };
+    () => undefined, () => undefined, () => false, 1500, new Map([[1, p]]), (name: string) => { const d = new Dn('span', 'cs-ico'); d.attrs['data-icon'] = name; return d; },
+    (node: Dn) => { links.push({ node, text: String(node.textContent) }); });
+  return { cs, p, scrolls, links, handle: (ev) => handle({ paneId: 1, ...ev }) };
 }
 const rowsOf = (cs: StreamHarness['cs']): Dn[] => (cs.log as Dn).children.filter((c) => c.className.includes('who-claude'));
 
@@ -1968,6 +1970,27 @@ function streamRun(src: string): { provisionals: number; sameNode: boolean; stil
     finalText: rec ? String(rec.body.textContent) : '', renderedOnce: rendersBefore >= 3, ariaHiddenGone: !!provs[0] && provs[0].getAttribute('aria-hidden') === null,
   };
 }
+
+/** Paths become links on the FINISHED message only: how many times chatLinkPaths ran while the preview grew, and for what, once the real message landed. */
+function linkRun(src: string): { whileStreaming: number; afterwards: string[]; user: string[] } {
+  const { cs, handle, links } = streamHarness(src);
+  handle({ type: 'items', items: [{ uuid: 'u1', role: 'user', text: 'open src/app.ts' }] });
+  const user = links.map((l) => l.text);
+  handle({ type: 'turn', open: true });
+  handle({ type: 'stream', text: 'It is in src/app', anchor: 'it is in src/app', headCut: false });
+  handle({ type: 'stream', text: 'It is in src/app.ts, line 3', anchor: 'it is in src/app', headCut: false });
+  const whileStreaming = links.length;
+  handle({ type: 'stream', text: null, adopt: 'a1' });
+  handle({ type: 'items', items: [{ uuid: 'a1', role: 'assistant', text: 'It is in src/app.ts, line 3' }] });
+  assert.ok(cs.items.has('a1'));
+  return { whileStreaming, afterwards: links.map((l) => l.text).slice(user.length), user };
+}
+guarded('streaming: the growing preview is never linked; the finished message is, once, and so is the operator\'s own text',
+  (src) => {
+    const r = linkRun(src);
+    return r.whileStreaming === 1 /* only the operator's bubble */ && r.user.length === 1 && r.user[0] === 'open src/app.ts' && r.afterwards.length === 1 && r.afterwards[0] === 'It is in src/app.ts, line 3';
+  },
+  (src) => src.replace('if (st.text !== text) { chatRender(st.rec.body, chatSkinStreamMd(text)); st.text = text; }', 'if (st.text !== text) { chatRender(st.rec.body, chatSkinStreamMd(text)); chatLinkPaths(st.rec.body, cs); st.text = text; }'));
 
 guarded('streaming: text growing is ONE provisional bubble, and the finished message takes over that very node — same place, no second bubble, no flash of nothing',
   (src) => {

@@ -7214,6 +7214,209 @@ function chatDecorate(frag) {
   }
 }
 
+/* ── paths in the conversation become links ──────────────────────────────────────────────────────────
+   A message names files and folders all the time ("it is in ~/Projects/site/dist", "I changed src/app.ts"). In the
+   terminal ⌘-click opens them; here the same words are links, with two rules the terminal does not need:
+   · NOTHING comes from the model. The link is an element built here, AFTER chatSanitize, with its target kept in a
+     JS property (never an href, never a file: URL), so the allowlist above stays exactly as strict as it was and
+     model text can neither carry a link of its own nor point one at a file.
+   · NOTHING IS A LINK UNTIL IT EXISTS. Candidates come from the terminal's own pathCandidates (one definition of
+     what a path looks like), are asked about in ONE batch per message (fs:resolvePaths, which applies the same
+     allowed-roots check as everything else), and only the answers that exist are turned into links. The text is
+     on screen first; the links appear when the answer comes. Opening goes through openViewer / revealPath /
+     revealInOS, which validate again. */
+const CHAT_PATH_MAX = 240;      // distinct strings asked about per message: a pasted log must not become hundreds of stat calls
+const CHAT_PATH_BATCH = 200;    // what main answers in one call (RESOLVE_PATHS_LIMIT)
+const CHAT_PATH_LONG = 48;      // a path longer than this is clipped with an ellipsis instead of widening the column
+const CHAT_PATH_LINE_MAX = 2000;
+const CHAT_PATH_NEG_MS = 10000; // "does not exist" is only remembered briefly: a file the answer just wrote must not stay unlinked
+const CHAT_PATH_CACHE_MAX = 4000;
+const CHAT_PATH_SKIP_TAGS = new Set(['A', 'BUTTON', 'SCRIPT', 'STYLE', 'TEXTAREA']);
+const chatPathCache = new Map();   // `${cwd}\n${string}` → { v: { abs, dir } | null, at }
+/* What pathCandidates does not offer, because the terminal never needed it: a folder named on its own. `/tmp`,
+   `~/Desktop` and `renderer/` have no second segment and no extension, so PATH_RE passes them by; and a quoted
+   path that STARTS at a root may hold spaces (`"~/My Files"`). Still just candidates — existence decides. */
+const CHAT_ROOTED_RE = /(?:^|[\s(\[{"'`])((?:~|\.{1,2})?\/\.?[A-Za-z0-9_@+-][A-Za-z0-9._@+-]*\/?|\.?[A-Za-z0-9_@+-][A-Za-z0-9._@+-]*\/)(?=$|[\s)\]},.;:!?'"`])/g;
+const CHAT_QUOTED_ROOTED_RE = /["'`]((?:~|\.{1,2})?\/[^"'`\n]{1,200}?)["'`]/g;
+function chatPathCandidates(line) {
+  const out = pathCandidates(line);
+  const taken = (i, n) => out.some((o) => i < o.index + o.length && i + n > o.index);   // the match itself, not the words it was stretched across
+  const extra = [];
+  for (const m of line.matchAll(CHAT_QUOTED_ROOTED_RE)) {
+    const idx = m.index + 1;
+    if (!taken(idx, m[1].length)) extra.push({ value: m[1], index: idx, length: m[1].length, alts: [] });
+  }
+  for (const m of line.matchAll(CHAT_ROOTED_RE)) {
+    const idx = m.index + m[0].length - m[1].length;
+    if (!taken(idx, m[1].length) && !extra.some((o) => idx < o.index + o.length && idx + m[1].length > o.index)) extra.push({ value: m[1], index: idx, length: m[1].length, alts: [] });
+  }
+  return out.concat(extra);
+}
+/* Every candidate in a block of text, with its position in THAT text. Line by line: pathCandidates extends a match
+   across the spaces that follow it, and across a newline that would glue the first words of the next line onto a
+   path. `whole` adds the entire text as one more candidate, for a tool row whose argument IS a path (Read, Edit). */
+function chatPathScan(text, whole) {
+  const hits = [];
+  let at = 0;
+  for (const line of String(text).split('\n')) {
+    if (line.length >= 2 && line.length <= CHAT_PATH_LINE_MAX) {
+      for (const h of chatPathCandidates(line)) hits.push({ value: h.value, alts: h.alts, index: at + h.index });
+    }
+    at += line.length + 1;
+  }
+  if (whole) {
+    const v = String(text).trim();
+    if (v.length >= 2) hits.push({ value: v, alts: [], index: String(text).indexOf(v) });
+  }
+  return hits;
+}
+/* Which of the strings a candidate could be actually exists decides what is linked: the longest that does, as in the
+   terminal (a file whose name has spaces must beat the shorter prefix that happens to be a folder). Returns the pieces
+   of `text` in order, each plain or a link. Pure: `found` is a Map from a candidate string to { abs, dir } or null. */
+function chatPathSegments(text, hits, found) {
+  const links = [];
+  for (const h of hits) {
+    let best = null;
+    for (const cand of [...h.alts, h.value].sort((a, b) => b.length - a.length)) {
+      const r = found.get(cand);
+      if (r && r.abs) { best = { cand, r }; break; }
+    }
+    if (!best) continue;
+    const shown = best.cand.replace(/[)\]},.;:'"]+$/, '');   // the full stop that ends a sentence is not part of the path
+    if (!shown) continue;
+    links.push({ start: h.index, end: h.index + shown.length, abs: best.r.abs, dir: !!best.r.dir });
+  }
+  links.sort((a, b) => a.start - b.start || b.end - a.end);
+  const segs = [];
+  let pos = 0;
+  for (const l of links) {
+    if (l.start < pos) continue;   // the tail of a path with spaces also looks like a path of its own: the longer one has already won
+    if (l.start > pos) segs.push({ text: text.slice(pos, l.start) });
+    segs.push({ text: text.slice(l.start, l.end), abs: l.abs, dir: l.dir });
+    pos = l.end;
+  }
+  if (pos < text.length) segs.push({ text: text.slice(pos) });
+  return segs;
+}
+/* The text nodes worth looking at: not inside a link, a button (the code header, a tool row's own controls) or a
+   link we already made. A recursive walk rather than a TreeWalker, so it needs nothing but childNodes. */
+function chatPathTextNodes(root) {
+  const out = [];
+  const walk = (n) => {
+    for (const c of [...n.childNodes]) {
+      if (c.nodeType === 3) { if ((c.nodeValue || '').trim().length >= 2) out.push(c); continue; }
+      if (c.nodeType !== 1) continue;
+      if (CHAT_PATH_SKIP_TAGS.has(c.tagName) || c.classList.contains('cm-code-head') || c.classList.contains('cs-path')) continue;
+      walk(c);
+    }
+  };
+  walk(root);
+  return out;
+}
+/* The folder relative paths are read against: the shell's CURRENT folder, as in the terminal. Remembered for a moment
+   per pane, because a chat that is loading its history paints dozens of messages in the same tick. */
+function chatPathBase(cs) {
+  const now = Date.now();
+  if (cs.pathBase && now - cs.pathBase.at < 1500) return cs.pathBase.p;
+  const p = linkBase(cs.id, cs.pane && cs.pane.cwd).then((c) => c || '');
+  cs.pathBase = { at: now, p };
+  return p;
+}
+/* Ask main about every string not already known, in batches. A failed call is NOT remembered as "does not exist". */
+async function chatResolvePaths(cands, cwd) {
+  const now = Date.now();
+  const found = new Map();
+  const need = [];
+  for (const c of cands) {
+    const e = chatPathCache.get(cwd + '\n' + c);
+    if (e && (e.v || now - e.at < CHAT_PATH_NEG_MS)) found.set(c, e.v); else need.push(c);
+  }
+  for (let i = 0; i < need.length; i += CHAT_PATH_BATCH) {
+    const chunk = need.slice(i, i + CHAT_PATH_BATCH);
+    let res = null;
+    try { res = await window.glassShell.resolvePaths(chunk, cwd || undefined); } catch { res = null; }
+    if (!res || typeof res !== 'object') continue;
+    if (chatPathCache.size > CHAT_PATH_CACHE_MAX) chatPathCache.clear();
+    for (const c of chunk) {
+      const r = res[c];
+      const v = r && typeof r.abs === 'string' ? { abs: r.abs, dir: !!r.dir } : null;
+      chatPathCache.set(cwd + '\n' + c, { v, at: Date.now() });
+      found.set(c, v);
+    }
+  }
+  return found;
+}
+/* ⌘/Ctrl+Shift hands the thing to the desktop, as in the terminal. A plain click does what ⌘-click does THERE: a file
+   opens in a viewer, a folder is shown in the explorer. */
+function chatPathOpen(target, ev) {
+  hidePathTip();
+  if (ev.shiftKey && (ev.metaKey || ev.ctrlKey)) { void window.glassShell.revealInOS(target.abs); return; }
+  if (target.dir) { void revealPath(target.abs); return; }
+  void openViewer(target.abs);
+}
+/* One link, built from nothing the model wrote: a span (not an <a>: there is no href to give it) whose target lives in
+   a property. Inside a button (a tool row's header) it is mouse-only, because a focusable element nested in a button
+   is not valid; everywhere else it is a link for the keyboard too. */
+function chatPathMakeLink(seg, inButton) {
+  const a = el('span', 'cs-path ' + (seg.dir ? 'dir' : 'file') + (seg.text.length > CHAT_PATH_LONG ? ' long' : ''), seg.text);
+  const target = { abs: seg.abs, dir: seg.dir };
+  a.csPath = target;
+  const tip = () => seg.abs + '  ·  ' + t(seg.dir ? 'chat.path.openDir' : 'chat.path.openFile') + '  ·  ' + t(IS_WIN ? 'term.cmdShiftClickRevealWin' : 'term.cmdShiftClickReveal');
+  if (!inButton) {
+    a.setAttribute('role', 'link');
+    a.tabIndex = 0;
+    a.setAttribute('aria-label', t(seg.dir ? 'chat.path.labelDir' : 'chat.path.labelFile', { path: seg.abs }));
+    a.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault(); e.stopPropagation();
+      chatPathOpen(target, e);
+    });
+    a.addEventListener('focus', () => { const r = a.getBoundingClientRect(); showPathTip(r.left, r.top, tip()); });
+    a.addEventListener('blur', hidePathTip);
+  }
+  a.addEventListener('mouseenter', (e) => showPathTip(e.clientX, e.clientY, tip()));
+  a.addEventListener('mouseleave', hidePathTip);
+  a.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();   // never toggles the tool row it sits in
+    const sel = window.getSelection && window.getSelection();
+    if (sel && !sel.isCollapsed && String(sel).length) return;   // dragging to copy a path is not asking to open it
+    chatPathOpen(target, e);
+  });
+  return a;
+}
+/* Called on a block the chat has just painted FINAL (never on the provisional bubble that is still growing: its text
+   changes under every snapshot, and a link that vanishes with the next one is worse than none). `root` is the node
+   whose text to scan; `cs` the chat skin it lives in. Fire and forget. Safe against the node being re-rendered or
+   removed while the answer is on its way: the pieces are checked again before anything is changed. */
+function chatLinkPaths(root, cs, opts) {
+  if (!root || !cs || !window.glassShell || typeof window.glassShell.resolvePaths !== 'function') return;
+  const o = opts || {};
+  const gen = (root.csPathGen = (root.csPathGen || 0) + 1);   // a newer pass over the same node supersedes this one
+  const targets = [];
+  const strings = new Set();
+  for (const node of chatPathTextNodes(root)) {
+    const text = node.nodeValue;
+    const hits = chatPathScan(text, o.whole);
+    const mine = [];
+    for (const h of hits) {
+      for (const s of [h.value, ...h.alts]) { if (strings.size >= CHAT_PATH_MAX && !strings.has(s)) continue; strings.add(s); mine.push(s); }
+    }
+    if (mine.length) targets.push({ node, text, hits });
+  }
+  if (!targets.length) return;
+  void (async () => {
+    const cwd = await chatPathBase(cs);
+    const found = await chatResolvePaths([...strings], cwd);
+    if (root.csPathGen !== gen) return;
+    for (const tg of targets) {
+      if (!tg.node.isConnected || tg.node.nodeValue !== tg.text) continue;   // painted over, or gone, while we waited
+      const segs = chatPathSegments(tg.text, tg.hits, found);
+      if (!segs.some((s) => s.abs)) continue;
+      tg.node.replaceWith(...segs.map((s) => (s.abs ? chatPathMakeLink(s, !!o.inButton) : document.createTextNode(s.text))));
+    }
+  })().catch(() => { /* a link that did not appear is not worth a message */ });
+}
+
 /* ── preferences: font + size ───────────────────────────────────────────────
    They are CHOSEN in Settings (openSettingsTab); the chat view only applies them. */
 function chatApplyPrefs() {
@@ -8260,7 +8463,7 @@ function chatSkinPaintTool(rec, item) {
   rec.node.dataset.kind = k.kind;
   if (x.kindName !== k.ico) { x.kind.replaceChildren(csIcon(k.ico, 12)); x.kindName = k.ico; }
   x.name.textContent = name;
-  x.arg.textContent = summary;
+  if (x.argText !== summary) { x.arg.textContent = summary; x.argText = summary; x.argFresh = true; }   // only when it changed: rewriting it would throw away the links on it
   const label = t('chat.skin.tool.' + status);
   x.head.title = (name + (summary ? ' · ' + summary : '')) + ' — ' + label;
   if (x.status !== status) {
@@ -8470,14 +8673,19 @@ function chatSkinUpsert(cs, item, animate) {
   }
   const text = typeof item.text === 'string' ? item.text : '';
   if (rec.role === 'assistant') {
-    if (rec.text !== text) { chatRender(rec.body, text); rec.text = text; }
+    if (rec.text !== text) { chatRender(rec.body, text); rec.text = text; chatLinkPaths(rec.body, cs); }   // links only on the FINAL render: the provisional bubble below never gets them
     rec.node.hidden = !text.trim();   // a tool-only message leaves no empty bubble
   } else if (rec.role === 'user') {
-    if (rec.text !== text) { rec.body.textContent = text; rec.text = text; }   // textContent: the operator's text is never parsed as HTML either
+    if (rec.text !== text) { rec.body.textContent = text; rec.text = text; chatLinkPaths(rec.body, cs); }   // textContent: the operator's text is never parsed as HTML either; a path they typed links like any other
     rec.node.hidden = !text.trim();
   } else if (rec.role === 'tool') {
     rec.info = chatToolInfo(item);
     chatSkinPaintTool(rec, item);
+    const x = rec.tool;
+    if (x && x.argFresh) {   // the argument was rewritten, so it has no links: look again. Read and Edit rows ARE a path, whatever it contains
+      x.argFresh = false;
+      chatLinkPaths(x.arg, cs, { inButton: true, whole: x.kindName === 'eye' || x.kindName === 'design' });
+    }
   } else {
     rec.body.textContent = text;
     rec.node.hidden = !text.trim();
