@@ -172,7 +172,9 @@ test('INVARIANT: every test invocation uses the one portable spelling', () => {
 
      Asserted because five call sites drifting apart is invisible in review — the failure is loud in
      CI but only on the one platform that happens to run the odd one out. */
-  const want = 'node --test "out/test/*.test.js"';
+  /* 0.13.0: the spelling now carries a per-test timeout, so a hung test fails instead of holding
+     the job until GitHub's 6 h cancel (ciTimeouts.test.ts). One spelling, still. */
+  const want = 'node --test --test-timeout=120000 "out/test/*.test.js"';
   const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> };
   assert.ok(pkg.scripts.test.includes(want), `package.json test script must use: ${want}`);
   for (const f of fs.readdirSync('.github/workflows').filter((n) => n.endsWith('.yml'))) {
