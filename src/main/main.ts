@@ -5,7 +5,7 @@ import { withDefaultLocale } from './termLocale';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
 import { plainText } from '../core/plainText';
 import { askSessionName, uniqueName } from '../core/sessionName';
-import { runDir, writePrivateFile } from './privateRun';
+import { runDir } from './privateRun';   // legacy snapshot sweep only; new files go through handoffDir
 import { speakable, lastAnswer, guessLang } from '../core/speakable';
 import { answerPlain } from '../core/answerPlain';
 import { t } from '../i18n';
@@ -16,7 +16,8 @@ import { execFile } from 'child_process';
 import { pathToFileURL } from 'url';   // main builds the file:// URL itself — see shell:openPathExternal
 import { classifyForRead } from './preview';   // the fs:read gate (#39)
 import { resolveLinkTargets, revealable, statWithin } from './pathLinks';
-import { withToolDirs } from './toolPath';   // #72: Homebrew/uv on every session's PATH   // terminal links: open vs reveal
+import { withToolDirs } from './toolPath';
+import { writeHandoffFile, sweepHandoffDirs } from './handoffDir';   // #72: Homebrew/uv on every session's PATH   // terminal links: open vs reveal
 import * as pty from 'node-pty';
 import { PanelHost, setPanelLog } from './panelHost';
 import { installMenu } from './menu';
@@ -800,7 +801,7 @@ ipcMain.handle('feedback:snapshot', (_e, name: string, text: string) => {
     /* Review should-fix 12: written ALREADY REDACTED — token shapes, keys, credentials in URLs. The
        agent still scrubs; the App no longer depends on it. A private run file (privateRun), like
        every file a session is told to read. */
-    return writePrivateFile(runDir(), `aios-report-${slug}-${Date.now()}.txt`, redactSecrets(String(text ?? '').slice(0, 200_000)));
+    return writeHandoffFile(`aios-report-${slug}-${Date.now()}.txt`, redactSecrets(String(text ?? '').slice(0, 200_000)));
   } catch { return ''; }
 });
 /* Snapshots are read once, by the session the report opened. Any older than a day is an orphan
@@ -815,7 +816,7 @@ function sweepReportSnapshots(maxAgeMs = 24 * 60 * 60 * 1000): void {
     }
   } catch { /* tmp unreadable */ }
 }
-app.whenReady().then(() => sweepReportSnapshots()).catch(() => undefined);
+app.whenReady().then(() => { sweepReportSnapshots(); sweepHandoffDirs(); }).catch(() => undefined);   // older loose snapshots + handoff folders
 ipcMain.handle('shell:copyText', (_e, t: string) => { clipboard.writeText(String(t)); return true; });
 /* AI-192 — ⇧⌘C / right-click "Copy as plain text": the selection without Claude's TUI scaffolding
    (bullets, quote bars, indents, the footer) and with terminal wraps rejoined into paragraphs. */
@@ -965,7 +966,7 @@ ipcMain.handle('task:handoff', (_e, req: { prompt: string; name?: string }) => {
   const slug = (String(req?.name ?? 'task').toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'task').slice(0, 40);
   /* A private run file (privateRun). A failed write is REFUSED, never "fall back to inline": typing
      a long prompt is the mangling this handoff exists to prevent. The renderer says why. */
-  try { return taskFileInstruction(writePrivateFile(runDir(), `aios-task-${slug}.md`, prompt)); }
+  try { return taskFileInstruction(writeHandoffFile(`aios-task-${slug}.md`, prompt)); }
   catch (e) { return { error: (e as Error).message }; }
 });
 /* app#66 — the suggested session name for an Ask AIOS intent: a dated USER.md identity the intent
@@ -992,7 +993,7 @@ ipcMain.handle('designer:handoff', (_e, req: { kind: DesignerKind; fields: Desig
   });
   if (!brief) return null;
   const slug = slugify(req.fields?.name || '') || 'unit';
-  try { const file = writePrivateFile(runDir(), `aios-designer-${req.kind}-${slug}.md`, brief); return { file, prompt: taskFileInstruction(file) }; }
+  try { const file = writeHandoffFile(`aios-designer-${req.kind}-${slug}.md`, brief); return { file, prompt: taskFileInstruction(file) }; }
   catch (e) { return { error: (e as Error).message }; }
 });
 ipcMain.handle('designer:brief', (_e, req: { kind: DesignerKind; fields: DesignerFields; mode: 'create' | 'update'; templatePath?: string; targetPath?: string }) => {

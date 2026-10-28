@@ -28,7 +28,7 @@ import { MY_SURFACE } from './surface';
 import { needsPointer, pointerText, byteLength, isStalePayload, INLINE_LIMIT } from '../core/busPayload';
 import { pickBash } from '../core/bashResolve';
 import { TranscriptSince, readTranscript } from './transcriptSince';
-import { runDir, writePrivateFile } from './privateRun';
+import { writeHandoffFile } from './handoffDir';   // aios#231: one private folder per handed-over file
 import { resolveBusCwd, grantBusCwd } from './busCwd';
 
 /**
@@ -857,7 +857,7 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
          dead letter. Falling back to typing the task inline brought back the Windows apostrophe
          mangling and flooded the terminal with a long POSIX task — Glass already refused here
          (AI-66); the App now does the same. */
-      try { taskFile = writePrivateFile(runDir(), `aios-spawn-task-${req.name}.md`, req.task as string); }
+      try { taskFile = writeHandoffFile(`aios-spawn-task-${req.name}.md`, req.task as string); }
       catch (e) {
         markUndelivered(heldPath, req, `could not write the task file safely (${(e as Error).message}) — not spawned; the task is never typed inline instead`);
         return;
@@ -905,7 +905,7 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
       /* Same Windows quoting rule as spawn: PowerShell mangles POSIX-quoted apostrophes, so
          every prompt goes through a file there. */
       if (needsTaskFile(req.prompt) || (process.platform === 'win32' && req.prompt)) {
-        try { taskFile = writePrivateFile(runDir(), `aios-resume-task-${req.name}.md`, req.prompt as string); }
+        try { taskFile = writeHandoffFile(`aios-resume-task-${req.name}.md`, req.prompt as string); }
         catch (e) {
           markUndelivered(heldPath, req, `could not write the prompt file safely (${(e as Error).message}) — not resumed; the prompt is never typed inline instead`);
           return;

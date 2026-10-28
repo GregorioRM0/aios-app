@@ -70,8 +70,8 @@ test('Windows keeps its per-user temp dir', () => {
 test('App parity with Glass: a task file that cannot be written dead-letters — it is never typed inline', () => {
   const bus = fs.readFileSync('src/main/commandBus.ts', 'utf8');
   assert.doesNotMatch(bus, /taskFile = undefined/, 'the silent inline fallback is gone');
-  assert.match(bus, /writePrivateFile\(runDir\(\), `aios-spawn-task-\$\{req\.name\}\.md`[\s\S]{0,120}catch \(e\) \{\s*markUndelivered\(heldPath, req,/);
-  assert.match(bus, /writePrivateFile\(runDir\(\), `aios-resume-task-\$\{req\.name\}\.md`[\s\S]{0,120}catch \(e\) \{\s*markUndelivered\(heldPath, req,/);
+  assert.match(bus, /writeHandoffFile\(`aios-spawn-task-\$\{req\.name\}\.md`[\s\S]{0,120}catch \(e\) \{\s*markUndelivered\(heldPath, req,/);
+  assert.match(bus, /writeHandoffFile\(`aios-resume-task-\$\{req\.name\}\.md`[\s\S]{0,120}catch \(e\) \{\s*markUndelivered\(heldPath, req,/);
 });
 
 test('SWEEP: no file a session reads or runs is written under a fixed name in the shared temp dir', () => {
