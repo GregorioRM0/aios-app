@@ -364,8 +364,6 @@
   "settings.fileIconsHint": "colorful type icons vs plain",
   "settings.autoReveal": "Auto-reveal",
   "settings.autoRevealHint": "the tree follows the active tab",
-  "settings.autoOpenExports": "Open new exports",
-  "settings.autoOpenExportsHint": "a new file in 03 - export opens in a tab by itself",
   "settings.sortDefault": "Default sort",
   "settings.sortDefaultHint": "every folder without its own sort follows this; changing it clears per-folder overrides",
   "sort.title": "Sort this folder — name or last-modified",
@@ -1225,5 +1223,11 @@
   "health.job.unreadable": "unreadable status file ({why})",
   "health.askClaude": "Let Claude help with these",
   "health.askClaudeHint": "Opens a session that looks into what is not green, explains it and proposes fixes — it asks before every command",
-  "health.jobTip": "A scheduled job — it reports its result after each run"
+  "health.jobTip": "A scheduled job — it reports its result after each run",
+  "settings.openExports": "New exports",
+  "settings.openExportsHint": "a new file in 03 - export: counted on the files button, opened in a tab, or left alone. Files a pull brings never open.",
+  "openExports.badge": "Show a count (quiet)",
+  "openExports.open": "Open in a tab",
+  "openExports.off": "Off",
+  "rail.newExports": "{n} new export(s), newest {name}. Click the number to open it."
 }

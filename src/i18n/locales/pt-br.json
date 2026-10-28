@@ -364,8 +364,6 @@
   "settings.fileIconsHint": "ícones de tipo coloridos vs. simples",
   "settings.autoReveal": "Revelar automaticamente",
   "settings.autoRevealHint": "a árvore segue a aba ativa",
-  "settings.autoOpenExports": "Abrir exportações novas",
-  "settings.autoOpenExportsHint": "um arquivo novo em 03 - export abre sozinho numa aba",
   "settings.sortDefault": "Ordenação padrão",
   "settings.sortDefaultHint": "toda pasta sem ordenação própria segue esta; mudá-la limpa os ajustes por pasta",
   "sort.title": "Ordenar esta pasta — nome ou última modificação",
@@ -1225,5 +1223,11 @@
   "health.job.unreadable": "arquivo de status ilegível ({why})",
   "health.askClaude": "Deixe o Claude ajudar com isso",
   "health.askClaudeHint": "Abre uma sessão que analisa o que não está verde, explica e propõe correções; pergunta antes de cada comando",
-  "health.jobTip": "Uma tarefa agendada: ela informa o resultado após cada execução"
+  "health.jobTip": "Uma tarefa agendada: ela informa o resultado após cada execução",
+  "settings.openExports": "Exportações novas",
+  "settings.openExportsHint": "um arquivo novo em 03 - export: contado no botão de arquivos, aberto numa aba ou nada. O que um pull traz nunca abre.",
+  "openExports.badge": "Mostrar um contador (discreto)",
+  "openExports.open": "Abrir numa aba",
+  "openExports.off": "Desligado",
+  "rail.newExports": "{n} exportação(ões) nova(s), a mais recente {name}. Clique no número para abri-la."
 }

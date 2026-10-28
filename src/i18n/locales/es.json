@@ -364,8 +364,6 @@
   "settings.fileIconsHint": "iconos de tipo a color vs. simples",
   "settings.autoReveal": "Revelar automáticamente",
   "settings.autoRevealHint": "el árbol sigue la pestaña activa",
-  "settings.autoOpenExports": "Abrir exportaciones nuevas",
-  "settings.autoOpenExportsHint": "un archivo nuevo en 03 - export se abre solo en una pestaña",
   "settings.sortDefault": "Orden predeterminado",
   "settings.sortDefaultHint": "toda carpeta sin orden propio sigue este; cambiarlo borra los ajustes por carpeta",
   "sort.title": "Ordenar esta carpeta — nombre o última modificación",
@@ -1225,5 +1223,11 @@
   "health.job.unreadable": "archivo de estado ilegible ({why})",
   "health.askClaude": "Que Claude te ayude con esto",
   "health.askClaudeHint": "Abre una sesión que revisa lo que no está en verde, lo explica y propone cómo arreglarlo; pregunta antes de cada comando",
-  "health.jobTip": "Una tarea programada: reporta su resultado después de cada ejecución"
+  "health.jobTip": "Una tarea programada: reporta su resultado después de cada ejecución",
+  "settings.openExports": "Exportaciones nuevas",
+  "settings.openExportsHint": "un archivo nuevo en 03 - export: se cuenta en el botón de archivos, se abre en una pestaña o no pasa nada. Lo que trae un pull nunca se abre.",
+  "openExports.badge": "Mostrar un contador (discreto)",
+  "openExports.open": "Abrir en una pestaña",
+  "openExports.off": "Desactivado",
+  "rail.newExports": "{n} exportación(es) nueva(s), la más reciente {name}. Haz clic en el número para abrirla."
 }

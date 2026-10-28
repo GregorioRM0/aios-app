@@ -5127,6 +5127,7 @@ async function openRecents() {
 }
 
 async function openViewer(p) {
+  seenExport(p);   // AI-222: an opened export is no longer new
   for (const [id, pane] of panes) {
     if (pane.kind === 'view' && pane.path === p) { setActive(id); return; }
   }
@@ -5973,6 +5974,36 @@ document.getElementById('dragMark').innerHTML = icon('aios', 13);
 document.getElementById('railFind').innerHTML = icon('search', 15);
 document.getElementById('railFind').addEventListener('click', () => void quickOpen());
 document.getElementById('railExplorer').innerHTML = icon('folder', 15);
+/* AI-222 — NEW EXPORTS, QUIETLY. In the default `badge` mode a new file in 03 - export is not
+   opened (that took focus mid-typing); it is counted on the explorer button instead. Clicking the
+   count opens the newest; opening any of them, by any route, takes it off the count. A pulled
+   file never reaches here (main asks git first). */
+const NEW_EXPORTS = [];
+const exportBadge = Object.assign(document.createElement('span'), { className: 'ribadge go', hidden: true });
+document.getElementById('railExplorer').appendChild(exportBadge);
+exportBadge.addEventListener('click', (e) => {
+  e.stopPropagation();   // the count opens the export; the button itself still toggles the explorer
+  const newest = NEW_EXPORTS[NEW_EXPORTS.length - 1];
+  if (newest) void openViewer(newest.path);
+});
+function paintExportBadge() {
+  const n = NEW_EXPORTS.length;
+  exportBadge.hidden = !n;
+  exportBadge.textContent = String(n);
+  exportBadge.title = n ? t('rail.newExports', { n, name: NEW_EXPORTS[n - 1].name }) : '';
+}
+function noteExport(p, name) {
+  const i = NEW_EXPORTS.findIndex((x) => x.path === p);
+  if (i >= 0) NEW_EXPORTS.splice(i, 1);
+  NEW_EXPORTS.push({ path: p, name: name || xBase(p) });
+  paintExportBadge();
+}
+function seenExport(p) {
+  const i = NEW_EXPORTS.findIndex((x) => x.path === p);
+  if (i < 0) return;
+  NEW_EXPORTS.splice(i, 1);
+  paintExportBadge();
+}
 mountExplorerRefresh();
 document.getElementById('railPlugins').innerHTML = icon('box', 15);
 /* Rail tooltips — re-applied on locale change (paintRailTitles). */
@@ -6614,6 +6645,9 @@ window.glassShell.onIntent(async (m) => {
     }
     case 'openFile':
       if (m.path) void openViewer(m.path);
+      return;
+    case 'exportReady':   // AI-222: a new export in badge mode — counted, never opened, no focus taken
+      if (m.path) noteExport(m.path, m.name);
       return;
     case 'toast':
       toast(m.text);
@@ -7706,8 +7740,14 @@ function openSettingsTab() {
     row(wrap, t('settings.showHidden'), exToggle('showHidden', cfg.showHidden, () => void paintExplorer()), t('settings.showHiddenHint'));
     row(wrap, t('settings.fileIcons'), exToggle('fileIcons', cfg.fileIcons !== false, (on) => { EXPLORER.icons = on; void paintExplorer(); }), t('settings.fileIconsHint'));
     row(wrap, t('settings.autoReveal'), exToggle('autoReveal', cfg.autoReveal !== false, (on) => { EXPLORER.autoReveal = on; }), t('settings.autoRevealHint'));
-    // main reads this per export event, so nothing renderer-side to update
-    row(wrap, t('settings.autoOpenExports'), exToggle('autoOpenExports', cfg.autoOpenExports !== false, () => {}), t('settings.autoOpenExportsHint'));
+    /* AI-222 — main reads this per export event, so nothing renderer-side to update. Three rungs,
+       like attention above: a tab, a quiet count, or nothing. The default never takes focus. */
+    const expSel = document.createElement('select');
+    expSel.className = 'tinput';
+    for (const v of ['badge', 'open', 'off']) { const o = document.createElement('option'); o.textContent = t('openExports.' + v); o.value = v; expSel.appendChild(o); }
+    expSel.value = cfg.openExports || 'badge';
+    expSel.addEventListener('change', async () => { await window.glassShell.setSetting('openExports', expSel.value); toast(t('settings.saved')); });
+    row(wrap, t('settings.openExports'), expSel, t('settings.openExportsHint'));
 
     // AI-58: the MASTER default sort — app-only operators have no VS Code settings UI,
     // so the global default lives here. Setting it clears every per-folder override.

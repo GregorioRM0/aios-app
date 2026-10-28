@@ -1066,6 +1066,8 @@ body.zen #work { flex: 1; }
            border-radius: 7px; background: var(--accent); color: #0a0a0a; font-size: 8.5px; font-weight: 700;
            line-height: 13px; text-align: center; font-family: var(--mono); pointer-events: none; box-shadow: 0 0 0 2px var(--bg); }
 .ribtn.hasbadge { color: var(--accent-ink); }
+/* AI-222: the new-exports count is itself a button (opens the newest), unlike the agents count */
+.ribadge.go { pointer-events: auto; cursor: pointer; }
 body.light .ribadge { color: #fff; }
 
 /* ═══ compact density — tighten the pulse ═══ */

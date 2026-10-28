@@ -17,6 +17,7 @@ import { isRunnable, unverifiable, parsePlan, triage, diagnosticsReport, type To
 import { deriveOnboarding, type OnboardingDerived } from '../core/onboarding';
 import { FINISH_SETUP_IDS, needsFinishSetup, runFinishSetup, pluginRepairArgv, missingHooks, oneLine, type FinishSetupOutcome } from '../core/finishSetup';
 import { pickGit } from '../core/gitResolve';
+import { exportOpenMode, type ExportOpenMode } from './exportOpen';
 import { normalizeNotifyLevel, sessionKey, type NotifyLevel } from '../core/attention';
 import { isWritten, isPersonalized, missingEvidence, hasPlaceholders, type PersonalizationEvidence } from '../core/personalized';
 import personaPersonal from './personas/personal-family.json';
@@ -1321,7 +1322,7 @@ export function dailyNotePath(iso: string): string | undefined {
 
 // ── shell settings (.glass/shell.json — synced beside state.json) ───────────
 
-export interface ShellSettings { claudeCmd: string; showHints: boolean; showNudges: boolean; showMemory: boolean; theme: string; termFontSize: number; appFontSize: number; hiddenCards: string[]; showHidden: boolean; fileIcons: boolean; autoReveal: boolean; autoOpenExports: boolean; showWeekNumbers: boolean; killBehavior: 'ask' | 'kill' | 'capture'; terminalMode: 'auto' | 'ask'; caffeinate: CaffeinateMode; lidAwake: boolean; lidAsked: boolean; openNotesIn: 'rendered' | 'source'; ignorePaths: string[]; locale: LocalePref; attention: NotifyLevel; busFocus: 'stay' | 'follow'; }
+export interface ShellSettings { claudeCmd: string; showHints: boolean; showNudges: boolean; showMemory: boolean; theme: string; termFontSize: number; appFontSize: number; hiddenCards: string[]; showHidden: boolean; fileIcons: boolean; autoReveal: boolean; openExports: ExportOpenMode; showWeekNumbers: boolean; killBehavior: 'ask' | 'kill' | 'capture'; terminalMode: 'auto' | 'ask'; caffeinate: CaffeinateMode; lidAwake: boolean; lidAsked: boolean; openNotesIn: 'rendered' | 'source'; ignorePaths: string[]; locale: LocalePref; attention: NotifyLevel; busFocus: 'stay' | 'follow'; }
 
 /** Operator-defined names/globs the explorer hides AND git status ignores
  *  (no pending-commit bubble) — the desktop analog of VS Code's `files.exclude`
@@ -1359,9 +1360,9 @@ export function shellSettings(): ShellSettings {
     showHidden: raw.showHidden === true,      // default off
     fileIcons: raw.fileIcons !== false,       // default on (enhanced)
     autoReveal: raw.autoReveal !== false,     // default on
-    // a new file in 03 - export/ opens itself in a tab (the claude.ai-artifact feel); off = it
-    // only shows up in the tree. Default on: absent keeps the behaviour every install already has.
-    autoOpenExports: raw.autoOpenExports !== false,
+    // AI-222: what a NEW file in 03 - export/ does — open a tab, a quiet badge (default), or
+    // nothing. A saved autoOpenExports:false stays off. See exportOpen.ts.
+    openExports: exportOpenMode(raw),
     showWeekNumbers: raw.showWeekNumbers !== false, // default on (Glass parity)
     ignorePaths: Array.isArray(raw.ignorePaths)
       ? raw.ignorePaths.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim())

@@ -8,6 +8,12 @@ import * as path from 'path';
 import * as os from 'os';
 import { BrowserWindow, WebContents, nativeImage } from 'electron';
 import * as aios from './aios';
+import { execFile } from 'child_process';
+import { cameFromGit, type GitRun } from './exportOpen';
+/* git, run in `dir`, answering stdout or null — never throwing, never longer than 3s. */
+const gitIn = (dir: string): GitRun => (args) => new Promise((res) => {
+  execFile(aios.gitBin(), ['-C', dir, ...args], { timeout: 3000 }, (err, out) => res(err ? null : String(out)));
+});
 import { t } from '../i18n';
 import { Attention } from './attention';
 import { sessionKey } from '../core/attention';
@@ -88,20 +94,24 @@ export class PanelHost {
     if (v) {
       watch(path.join(v, '01 - calendar'), { recursive: true });
       watch(path.join(v, '00 - notes', 'context', 'observed'));
-      // exports ALSO auto-open: ask for a deck, watch the deck appear (claude.app
-      // artifacts, the shell way). Throttled; skips the boot scan.
+      /* A new export announces itself — a tab, a quiet badge, or nothing (AI-222, exportOpen.ts).
+         Throttled; skips the boot scan; and never for a file a pull or checkout put there. */
       try {
         this.watchers.push(fs.watch(path.join(v, '03 - export'), { recursive: true }, () => {
           this.scheduleRefresh();
           const now = Date.now();
           if (now - this.bootAt < 10000 || now - this.lastReveal < 8000) return;
-          // read per event, not cached: the Settings toggle applies without a restart
-          if (!aios.shellSettings().autoOpenExports) return;
+          // read per event, not cached: the Settings choice applies without a restart
+          const mode = aios.shellSettings().openExports;
+          if (mode === 'off') return;
           const newest = aios.recentOutputs(1)[0];
-          if (newest && now - newest.mtime < 6000 && /\.(html?|pdf|png|jpe?g|md)$/i.test(newest.name)) {
-            this.lastReveal = now;
-            this.intent('openFile', { path: newest.path, mode: 'auto' });
-          }
+          if (!newest || now - newest.mtime >= 6000 || !/\.(html?|pdf|png|jpe?g|md)$/i.test(newest.name)) return;
+          this.lastReveal = now;
+          void cameFromGit(newest.path, gitIn(path.dirname(newest.path))).then((pulled) => {
+            if (pulled) return;
+            if (mode === 'open') this.intent('openFile', { path: newest.path, mode: 'auto' });
+            else this.intent('exportReady', { path: newest.path, name: newest.name });
+          });
         }));
       } catch { /* absent */ }
       watch(path.join(v, '00 - notes', 'projects'));
