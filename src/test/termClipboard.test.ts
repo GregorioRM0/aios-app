@@ -16,10 +16,10 @@ import * as fs from 'node:fs';
 const app = fs.readFileSync('renderer/app.js', 'utf8');
 
 type Key = { type?: string; keyCode: number; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean; metaKey?: boolean };
-const src = /function termClipboardKey\(e, mac, hasSelection\) \{[\s\S]*?\n\}/.exec(app);
+const src = /function termClipboardKey\(e, mac, hasSelection, linux\) \{[\s\S]*?\n\}/.exec(app);
 assert.ok(src, 'termClipboardKey must be findable in renderer/app.js');
 const decide = new Function(`${src![0]} return termClipboardKey;`)() as
-  (e: Key, mac: boolean, hasSelection: boolean) => 'copy' | 'paste' | null;
+  (e: Key, mac: boolean, hasSelection: boolean, linux?: boolean) => 'copy' | 'paste' | null;
 
 const C = 67, V = 86;
 const ev = (keyCode: number, mods: Partial<Key> = {}): Key =>
@@ -43,6 +43,19 @@ test('Ctrl+V and Ctrl+Shift+V paste, selection or not', () => {
   }
 });
 
+test('Linux takes only Ctrl+Shift+C/V — plain Ctrl+V stays Claude Code\'s image paste', () => {
+  assert.equal(decide(ev(V), false, false, true), null, 'plain Ctrl+V reaches the session');
+  assert.equal(decide(ev(V), false, true, true), null, 'even over a selection');
+  assert.equal(decide(ev(C), false, true, true), null, 'plain Ctrl+C stays SIGINT, selection or not');
+  assert.equal(decide(ev(V, { shiftKey: true }), false, false, true), 'paste');
+  assert.equal(decide(ev(C, { shiftKey: true }), false, true, true), 'copy');
+  assert.equal(decide(ev(C, { shiftKey: true }), false, false, true), null, 'nothing selected → untouched');
+});
+
+test('CONTROL: Windows still pastes on plain Ctrl+V (clipboard history synthesizes it)', () => {
+  assert.equal(decide(ev(V), false, false, false), 'paste');
+});
+
 test('macOS is untouched — ⌘ keeps its own handling and Ctrl stays a control key', () => {
   assert.equal(decide(ev(V), true, false), null);
   assert.equal(decide(ev(C), true, true), null);
@@ -61,7 +74,7 @@ test('the terminal key handler consults it before the macOS-only early return', 
   const h = /term\.attachCustomKeyEventHandler\(\(e\) => \{[\s\S]*?\n {2}\}\);/.exec(app);
   assert.ok(h, 'the terminal key handler must be findable');
   const body = h[0];
-  const at = body.indexOf('termClipboardKey(e, IS_MAC, term.hasSelection())');
+  const at = body.indexOf('termClipboardKey(e, IS_MAC, term.hasSelection(), IS_LINUX)');
   const macGate = body.indexOf("if (e.type !== 'keydown' || !e.metaKey || e.altKey) return true;");
   assert.ok(at > 0, 'the handler must ask termClipboardKey');
   assert.ok(macGate > at, 'and must ask BEFORE the ⌘-only gate, which returns early for every Ctrl key');

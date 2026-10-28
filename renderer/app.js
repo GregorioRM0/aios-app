@@ -12,6 +12,7 @@
    quoting (shq/xQuote) and Windows-path handling (drive letters, backslashes, file:// URLs)
    branch on this. A plain boolean, resolved once. */
 const IS_WIN = !!(window.glassShell && window.glassShell.platform === 'win32');
+const IS_LINUX = !!(window.glassShell && window.glassShell.platform === 'linux');
 /* macOS specifically, not "not Windows" — Linux is neither, and the one place this decides is
    whether a ⌘ can stand for "shortcuts". It cannot anywhere else. */
 const IS_MAC = !!(window.glassShell && window.glassShell.platform === 'darwin');
@@ -30,9 +31,14 @@ const IS_MAC = !!(window.glassShell && window.glassShell.platform === 'darwin');
    the same field means the copy check and the SIGINT path can never disagree about which key was
    pressed, whatever the keyboard layout. AltGr arrives as Ctrl+Alt on Windows, so requiring
    !altKey keeps AltGr characters out of this. Alt+C / Alt+V are not touched — they still reach
-   the session as ESC-prefixed keys. macOS keeps its ⌘ handling and never comes through here. */
-function termClipboardKey(e, mac, hasSelection) {
+   the session as ESC-prefixed keys. macOS keeps its ⌘ handling and never comes through here.
+   LINUX TAKES ONLY THE SHIFTED PAIR. Plain Ctrl+V is how Claude Code pastes an IMAGE on Linux, so
+   claiming it would break image paste there; Ctrl+Shift+C/V is every Linux terminal's own
+   convention anyway. Windows keeps plain Ctrl+V: Claude Code's image paste there is Alt+V, and
+   clipboard history needs the synthesized Ctrl+V to land. */
+function termClipboardKey(e, mac, hasSelection, linux) {
   if (mac || e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.metaKey) return null;
+  if (linux && !e.shiftKey) return null;
   if (e.keyCode === 86) return 'paste';
   if (e.keyCode === 67 && hasSelection) return 'copy';
   return null;
@@ -3918,7 +3924,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
     if ((e.metaKey || e.ctrlKey) && ['k', 'p', 'j'].includes(e.key.toLowerCase())) return false; // app shortcuts win
     /* AI-77 — Option types the character your keyboard makes, when it makes a plain one. */
     if (e.type === 'keydown') { const ch = optionComposedChar(e); if (ch) { e.preventDefault(); window.glassShell.ptyWrite(id, ch); return false; } }   // preventDefault: no second copy via keypress
-    const clip = termClipboardKey(e, IS_MAC, term.hasSelection());
+    const clip = termClipboardKey(e, IS_MAC, term.hasSelection(), IS_LINUX);
     if (clip === 'copy') {
       // preventDefault so the keystroke stays handled: no ^C for the pty, and on Ctrl+Shift+C
       // no Run command picker opening over the copy.
