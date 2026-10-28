@@ -9426,9 +9426,21 @@ function openDesignerTab() {
 }
 
 /* Launch (or reveal) the primary session — no trailing prompt. */
+/* #80 follow-up — Start on a primary that is already open REVEALS it, and says so. When that
+   tab was already the one on screen, revealing changed nothing visible and the button read as
+   broken; the tab now pulses once, so the answer "it is this one" is always visible. A second
+   session under the same name is deliberately not opened: the bus refuses a name two sessions
+   share, which would cut off every worker that reports back to the primary. */
+function pulseTab(id) {
+  const p = panes.get(id);
+  if (!p || !p.tab) return;
+  p.tab.classList.remove('tabpulse'); void p.tab.offsetWidth;   // retrigger on a second click
+  p.tab.classList.add('tabpulse');
+  setTimeout(() => p.tab.classList.remove('tabpulse'), 1300);
+}
 function launchPrimary(primary) {
   const hit = byName(primary);
-  if (hit && !panes.get(hit[0]).exited) { setActive(hit[0]); return; }
+  if (hit && !panes.get(hit[0]).exited) { setActive(hit[0]); pulseTab(hit[0]); return; }
   void createPane({ name: primary, cmd: CLAUDE + ' --name ' + primary + ' ' + shq(RITUAL_BOOTSTRAP) });
 }
 

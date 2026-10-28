@@ -722,3 +722,13 @@ test("what's new opens once after an update, and its copy cannot describe the la
   assert.doesNotMatch(app2, /el\('(?:div|button)', 'hcard'[^\n]*whatsnew/, 'informational cards are not buttons');
   assert.match(css, /\.wncard \{/, 'they have their own card class that mirrors Home\'s tokens');
 });
+
+test('#80 follow-up: Start on an open primary reveals it and pulses its tab — never a second session', () => {
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  const fn = /function launchPrimary\(primary\) \{[\s\S]*?\n\}/.exec(app)![0];
+  assert.match(fn, /if \(hit && !panes\.get\(hit\[0\]\)\.exited\) \{ setActive\(hit\[0\]\); pulseTab\(hit\[0\]\); return; \}/);
+  assert.doesNotMatch(fn, /fresh/, 'no second primary under one name (the bus refuses shared names)');
+  const css = fs.readFileSync('renderer/theme.css', 'utf8');
+  assert.match(css, /\.tab\.tabpulse \{ animation: tabpulse/);
+  assert.match(css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)')), /\.tab\.tabpulse \{ box-shadow/, 'still visible without motion');
+});
