@@ -19,6 +19,7 @@
  * session lives IN the app grid, never a detached window, and no shell-wrapper
  * marker is involved.
  */
+import { addDirArgs } from './addDir';
 import { contract4Fields } from './contract4';
 import { normalizeVerb, type BusVerbResult } from './busVerbs';
 
@@ -209,7 +210,8 @@ export function buildResumeCmd(
   /* QUOTED, even though resumeTarget already refuses an unsafe id. The id is a FILENAME read
      off disk, and this string is typed into a live shell — one guard is a policy, two is a
      boundary. Quoting also keeps the command correct if the id format ever widens. */
-  const parts = [claudeCmd || 'claude', '--resume', shq(sessionId)];
+  /* aios#231: --add-dir first, straight after the binary — it is variadic (see core/addDir.ts). */
+  const parts = [claudeCmd || 'claude', ...addDirArgs(opts.taskFile).map(shq), '--resume', shq(sessionId)];
   for (const a of opts.extraArgs ?? []) parts.push(shq(a));   // contract 4: --effort / --settings
   const prompt = opts.taskFile ? taskFileInstruction(opts.taskFile) : opts.prompt;
   if (prompt && prompt.trim()) parts.push(shq(prompt));
@@ -222,7 +224,7 @@ export function buildSpawnCmd(
   opts: { task?: string; model?: string; taskFile?: string; extraArgs?: string[] } = {},
 ): string {
   const model = opts.model && opts.model.trim() ? opts.model.trim() : undefined;
-  const parts = [claudeCmd || 'claude'];
+  const parts = [claudeCmd || 'claude', ...addDirArgs(opts.taskFile).map(shq)];   // aios#231, variadic: first
   if (model) parts.push('--model', model);
   parts.push('--name', name);
   for (const a of opts.extraArgs ?? []) parts.push(shq(a));   // contract 4: --effort / --settings
