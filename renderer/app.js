@@ -3403,7 +3403,12 @@ function sessionNameFromTitle(title) {
    three limits: a name the operator set always wins; the topic is only a LABEL (p.name, which
    the bus and the Running list correlate on, never changes); and it is only taken after the pane
    has announced Claude, so a shell's own title (a path, user@host) can never become a label —
-   and such a title puts the pane's own name back. */
+   and such a title puts the pane's own name back.
+   A NAMED session never titles "Claude Code" — `--name x` announces "✳ x" from its first frame —
+   so for it the announcement is its handle confirmed against the live registry (the title
+   handler sets claudeTitled there). Without that, `/rename Two Words` inside a named session
+   reached the registry and the tty title but never the tab: sessionNameFromTitle rejects the
+   space, and this path was waiting for a "Claude Code" that never comes. */
 function claudeTopicLabel(id, title) {
   const p = panes.get(id);
   if (!p) return;
@@ -3415,7 +3420,13 @@ function claudeTopicLabel(id, title) {
     if (p.claudeTitled) { p.claudeTitled = false; p.topic = ''; paintTabLabel(p); }
     return;
   }
-  if (!p.claudeTitled || p.manualName || sessionNameFromTitle(raw)) return;
+  /* The session's own handle is back on the title (`/rename` to a slug, or to the launch name):
+     a topic left from an earlier rename would otherwise outlive it on the tab. */
+  if (sessionNameFromTitle(raw)) {
+    if (p.topic) { p.topic = ''; paintTabLabel(p); }
+    return;
+  }
+  if (!p.claudeTitled || p.manualName) return;
   p.topic = bare.slice(0, 60);
   paintTabLabel(p);
 }
@@ -3951,6 +3962,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
     const hit = running.find((a) => a.name === nm);
     if (!hit) return;
     p.isSession = true;
+    p.claudeTitled = true;   // a live session confirmed its handle — the named form of "Claude Code"
     p.confirmedName = nm;
     /* Record the STABLE identity too. A name is a label an operator may change at any moment
        with `/rename`; the sessionId is what the session actually IS. Liveness and endings are
