@@ -101,8 +101,14 @@ test('claim and adoptHolds, run for real: a request rewritten after the claim ne
     if (sig === 'SIGTERM') { sigterms.push(p); return true; }
     return origKill.call(process, p, sig as NodeJS.Signals);   // signal 0 liveness checks stay real
   };
-  (global as { setInterval: unknown }).setInterval = ((fn: () => void, ms: number) => origInterval(fn, ms).unref()) as typeof setInterval;
-  (realFs as { watch: unknown }).watch = ((...a: Parameters<typeof fs.watch>) => origWatch(...a).unref()) as typeof fs.watch;
+  /* CLOSE what the bus opens, never only unref it. On Windows an unref'd fs.watch still held the test
+     process open after every assertion passed: measured on a windows-latest runner, the only
+     JS-visible resources left were the two stdio pipes, and the file never exited (CI hung to the
+     6 h cancel on every push since this test landed). With everything closed it exits in ~260 ms. */
+  const intervals: ReturnType<typeof setInterval>[] = [];
+  const watchers: fs.FSWatcher[] = [];
+  (global as { setInterval: unknown }).setInterval = ((fn: () => void, ms: number) => { const t = origInterval(fn, ms).unref(); intervals.push(t); return t; }) as typeof setInterval;
+  (realFs as { watch: unknown }).watch = ((...a: Parameters<typeof fs.watch>) => { const w = origWatch(...a).unref(); watchers.push(w); return w; }) as typeof fs.watch;
   try {
     const aios = require('../main/aios') as Record<string, unknown>;
     aios.listRunningAgents = registry;
@@ -128,5 +134,8 @@ test('claim and adoptHolds, run for real: a request rewritten after the claim ne
   }
   assert.equal(sigterms.length, cases.filter((c) => c.kills).length, 'no SIGTERM beyond the controls');
   assert.ok(cases.some((c) => c.adopt && c.kills) && cases.some((c) => !c.adopt && c.kills), 'both paths reached a kill');
+  for (const t of intervals) clearInterval(t);
+  for (const w of watchers) w.close();
+  assert.ok(watchers.length > 0, 'the bus must have watched the inbox — otherwise this closed nothing');
   fs.rmSync(tmp, { recursive: true, force: true });
 });
