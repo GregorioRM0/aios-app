@@ -64,3 +64,27 @@ test('the rows are dated: the verified Claude Code version is a real version str
 test('Shift+Enter is not claimed as a newline — xterm delivers it as a plain Enter, so it sends', () => {
   for (const a of accels) assert.ok(!/Shift\+Enter/.test(a), `${a} promises Shift+Enter, which sends in this terminal`);
 });
+
+test('off macOS no row promises a plain Ctrl key the menu takes (CmdOrCtrl IS Ctrl there)', () => {
+  const menu = fs.readFileSync('src/main/menu.ts', 'utf8');
+  const taken = new Set([...menu.matchAll(/accelerator: '(?:CmdOrCtrl|Ctrl)\+([A-Z])'/g)].map((m) => m[1]));
+  assert.ok(taken.has('W'), 'the menu scan must find Ctrl+W (close tab), or it found nothing');
+  const block = /const SESSION_KEYS = \[[\s\S]*?\n\];/.exec(app)![0];
+  const rows = block.split('\n').filter((l) => l.includes('label:'));
+  for (const r of rows) {
+    if (/macOnly: true/.test(r)) continue;
+    const os = /os: \[([^\]]*)\]/.exec(r);
+    if (os && !/'win'|'linux'/.test(os[1])) continue;
+    const accel = /accel: '([^']*)'/.exec(r)![1];
+    for (const m of accel.matchAll(/(?:^|[ /])Ctrl\+([A-Z])\b/g)) {
+      assert.ok(!taken.has(m[1]), `${accel} is shown on Windows/Linux but the menu takes Ctrl+${m[1]} there`);
+    }
+  }
+});
+
+test('image paste names the key that works on each platform', () => {
+  const block = /const SESSION_KEYS = \[[\s\S]*?\n\];/.exec(app)![0];
+  assert.match(block, /sessionImage', accel: 'Ctrl\+V', os: \['mac', 'linux'\]/, 'Ctrl+V on macOS and Linux');
+  assert.match(block, /sessionImage', accel: 'Alt\+V', os: \['win'\]/, 'Alt+V on Windows, where Ctrl+V pastes text');
+  assert.match(app, /if \(k\.os && !k\.os\.includes\(/, 'renderShortcuts must honour os');
+});

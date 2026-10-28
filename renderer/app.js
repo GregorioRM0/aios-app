@@ -7010,25 +7010,30 @@ const RENDERER_KEYS = [
    NOT listed on purpose: Ctrl+J, Ctrl+K and Ctrl+P. They are real Claude Code keys, but the pane's
    key handler swallows ⌘/Ctrl + k/p/j as app shortcuts before xterm sees them, so promising them
    here would be the sheet lying about the terminal it sits next to (sessionKeys.test.ts guards
-   that). Shift+Enter is not listed either: xterm delivers it as a plain Enter, so it SENDS. */
+   that). Shift+Enter is not listed either: xterm delivers it as a plain Enter, so it SENDS.
+   OFF macOS CmdOrCtrl IS Ctrl, so every plain Ctrl+letter the menu holds (E, R, W among the rows
+   here) never reaches the session there: those rows are macOnly. Image paste differs per
+   platform, so it is two rows filtered by `os`. sessionKeys.test.ts derives the collision from
+   menu.ts, so a new menu key cannot quietly falsify a row. */
 const SESSION_KEYS_VERIFIED = '2.1.308';
 const SESSION_KEYS_DOCS = 'https://code.claude.com/docs/en/interactive-mode';
 const SESSION_KEYS = [
   { label: 'shortcut.sessionNewline', accel: 'Option+Enter / \\+Enter' },
-  { label: 'shortcut.sessionLineEdges', accel: 'Ctrl+A / Ctrl+E' },
+  { label: 'shortcut.sessionLineEdges', accel: 'Ctrl+A / Ctrl+E', macOnly: true },   // Ctrl+E is the menu's off macOS
   { label: 'shortcut.sessionLineEdgesMac', accel: '⌘← / ⌘→', macOnly: true },   // ptyWrite \x01 / \x05
   { label: 'shortcut.sessionWord', accel: 'Option+B / Option+F' },
-  { label: 'shortcut.sessionDeleteWord', accel: 'Ctrl+W' },
+  { label: 'shortcut.sessionDeleteWord', accel: 'Ctrl+W', macOnly: true },          // Ctrl+W closes the tab off macOS
   { label: 'shortcut.sessionDeleteToStart', accel: 'Ctrl+U' },
   { label: 'shortcut.sessionClearLineMac', accel: 'CmdOrCtrl+Backspace', macOnly: true }, // ptyWrite \x15
   { label: 'shortcut.sessionUndo', accel: 'Ctrl+_' },
   { label: 'shortcut.sessionYank', accel: 'Ctrl+Y' },
-  { label: 'shortcut.sessionHistory', accel: 'Ctrl+R' },
+  { label: 'shortcut.sessionHistory', accel: 'Ctrl+R', macOnly: true },             // Ctrl+R is the menu's off macOS
   { label: 'shortcut.sessionInterrupt', accel: 'Esc' },
   { label: 'shortcut.sessionRewind', accel: 'esc esc' },   // prose stays as written; lower-case to match the single `esc` glyph
   { label: 'shortcut.sessionMode', accel: 'Shift+Tab' },
   { label: 'shortcut.sessionEditor', accel: 'Ctrl+G' },
-  { label: 'shortcut.sessionImage', accel: 'Ctrl+V' },
+  { label: 'shortcut.sessionImage', accel: 'Ctrl+V', os: ['mac', 'linux'] },
+  { label: 'shortcut.sessionImage', accel: 'Alt+V', os: ['win'] },                  // Ctrl+V pastes text here; Claude Code's image key on Windows is Alt+V
   { label: 'shortcut.sessionTranscript', accel: 'Ctrl+O' },
   { label: 'shortcut.sessionCopy', accel: '/copy' },
   { label: 'shortcut.sessionHelp', accel: '?' },
@@ -7109,6 +7114,7 @@ async function renderShortcuts(wrap) {
   const sgrid = el('div', 'kgrid');
   for (const k of SESSION_KEYS) {
     if (k.macOnly && !mac) continue;
+    if (k.os && !k.os.includes(mac ? 'mac' : IS_WIN ? 'win' : 'linux')) continue;
     const row = el('div', 'krow');
     row.appendChild(el('kbd', '', prettyAccel(k.accel)));
     row.appendChild(el('span', 'klabel', t(k.label)));
