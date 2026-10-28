@@ -147,7 +147,7 @@ test('no path leaves runImmediate without disposing the held request', () => {
   /* Handing the request to runResume is a transfer of ownership, not a leak: runResume disposes
      it on every path, which this same loop checks because its body is part of `body`. */
   const disposes = (s: string) =>
-    /unlinkSync\(heldPath\)|markUndelivered\(heldPath|runResume\(win, heldPath, req\)/.test(s);
+    /unlinkSync\(heldPath\)|markUndelivered\(heldPath|runResume\(win, heldPath, req\)|launchCwd\(heldPath, req\)/.test(s);   // launchCwd dead-letters when it returns null
   let from = 0, seen = 0;
   for (;;) {
     const at = body.indexOf('return', from);
@@ -166,7 +166,9 @@ test('no path leaves runImmediate without disposing the held request', () => {
 
 test('resume reaches the SAME launcher spawn does — one extracted function, two callers', () => {
   const body = runImmediateBody();
-  assert.equal(body.match(/runSpawn\(win, heldPath, req\)/g)?.length, 2,
+  /* The fallback hands runSpawn the request with its `prompt` moved into `task` (fallbackSpawnRequest),
+     so the fresh session opens with the caller's message — still the same launcher. */
+  assert.equal(body.match(/runSpawn\(win, heldPath, (req|fallbackSpawnRequest\(req\))\)/g)?.length, 2,
     'runSpawn must be called from both the default spawn path and resume\'s opt-in fallback');
 });
 

@@ -4,7 +4,7 @@ import * as os from 'os';
 import { execFileSync } from 'child_process';
 import * as path from 'path';
 import * as aios from './aios';
-import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, type BusRequest } from '../core/commandBus';
+import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, fallbackSpawnRequest, type BusRequest } from '../core/commandBus';
 import { recordTyped } from './busSent';
 import { settingsToFile } from './advisorFile';
 import { contract4LaunchArgs, cleanFrom, advisorModelFor } from '../core/contract4';
@@ -27,6 +27,7 @@ import { MY_SURFACE } from './surface';
 import { needsPointer, pointerText, byteLength, isStalePayload, INLINE_LIMIT } from '../core/busPayload';
 import { pickBash } from '../core/bashResolve';
 import { runDir, writePrivateFile } from './privateRun';
+import { resolveBusCwd, grantBusCwd } from './busCwd';
 
 /**
  * Spawn-inbox command bus (main side) — CONTRACT 2.
@@ -781,6 +782,8 @@ async function runSend(
  * with a boolean deciding which you get.
  */
 function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
+    const where = launchCwd(heldPath, req);
+    if (!where) return;
     let taskFile: string | undefined;
     /* The worker's model is decided first: the consult instruction depends on it, and appending it
        can turn a short inline task into a multi-line one that must spill to a file.
@@ -823,8 +826,8 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
     recordTyped(taskFile ? taskFileInstruction(taskFile) : (req.task || 'Start session'), req.name, 'spawn');
     // background like every other bus path (#47): a fresh spawn was the one that still switched the
     // operator's screen, whatever busFocus said (operator-tested on 0.10.1).
-    emit(win(), 'terminal', { name: req.name, cmd, background: true });
-    log(`spawn '${req.name}'${req.task ? ' with task' : ''}${req.tier && !req.model ? ` [tier ${req.tier} → ${model ?? 'default'}]` : model ? ` [model ${model}]` : ''}${taskFile ? ' (task via file)' : ''}`);
+    emit(win(), 'terminal', { name: req.name, cmd, background: true, ...where });
+    log(`spawn '${req.name}'${req.task ? ' with task' : ''}${where.cwd ? ` in ${where.cwd}` : ''}${req.tier && !req.model ? ` [tier ${req.tier} → ${model ?? 'default'}]` : model ? ` [model ${model}]` : ''}${taskFile ? ' (task via file)' : ''}`);
 }
 
 /**
@@ -848,6 +851,8 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
       }
       log(`resume '${req.name}' — no transcript; falling back to spawn as asked`);
     } else {
+      const where = launchCwd(heldPath, req);
+      if (!where) return;
       let taskFile: string | undefined;
       /* Same Windows quoting rule as spawn: PowerShell mangles POSIX-quoted apostrophes, so
          every prompt goes through a file there. */
@@ -864,16 +869,32 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
       if (req.prompt) recordTyped(taskFile ? taskFileInstruction(taskFile) : req.prompt, req.name, 'resume', req.from);   // AI-172
       // background: the new session opens as a tab with an activity mark; the operator's
       // current tab and keyboard focus stay where they are (setting `busFocus`).
-      emit(win(), 'terminal', { name: req.name, cmd, background: true });
-      log(`resume '${req.name}' → session ${sid.slice(0, 8)}${req.prompt ? ' with prompt' : ''}${taskFile ? ' (via file)' : ''}`);
+      emit(win(), 'terminal', { name: req.name, cmd, background: true, ...where });
+      log(`resume '${req.name}' → session ${sid.slice(0, 8)}${req.prompt ? ' with prompt' : ''}${where.cwd ? ` in ${where.cwd}` : ''}${taskFile ? ' (via file)' : ''}`);
       try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
       return;
     }
-    runSpawn(win, heldPath, req);
+    /* fallbackSpawnRequest moves the resume's `prompt` into the spawn's `task` — without it the
+       fresh session opened with the generic bootstrap and the caller's message was lost. */
+    runSpawn(win, heldPath, fallbackSpawnRequest(req));
     try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
   } catch (e) {
     markUndelivered(heldPath, req, `resume '${req.name}' failed: ${String((e as Error)?.message ?? e)}`);
   }
+}
+
+/**
+ * The directory a launched session opens in: `{}` (the framework root, as before) when the request
+ * names none, `{ cwd }` when it names a valid one, or null after dead-lettering one it cannot honour
+ * — never a silent fallback, since a session started in the wrong directory looks just like one
+ * started in the right one.
+ */
+function launchCwd(heldPath: string, req: BusRequest): { cwd?: string } | null {
+  if (req.cwd === undefined) return {};
+  const r = resolveBusCwd(req.cwd);
+  if ('error' in r) { markUndelivered(heldPath, req, r.error); return null; }
+  grantBusCwd(r.cwd);
+  return { cwd: r.cwd };
 }
 
 /** spawn / kill act immediately once claimed — nothing about the target can refuse them. */
