@@ -15,7 +15,9 @@ import * as path from 'node:path';
 export function toolDirs(home: string, platform: NodeJS.Platform): string[] {
   if (platform === 'win32') return [];
   const brew = platform === 'darwin' ? ['/opt/homebrew/bin', '/usr/local/bin'] : ['/home/linuxbrew/.linuxbrew/bin', '/usr/local/bin'];
-  return [...brew, path.join(home, '.local', 'bin'), path.join(home, '.cargo', 'bin')];
+  /* POSIX separators for a POSIX platform, whatever host computes it (a Windows CI runner testing
+     the macOS answer got backslashes). */
+  return [...brew, path.posix.join(home, '.local', 'bin'), path.posix.join(home, '.cargo', 'bin')];
 }
 
 export function withToolDirs(envPath: string | undefined, home: string, platform: NodeJS.Platform,
