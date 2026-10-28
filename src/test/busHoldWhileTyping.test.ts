@@ -1,5 +1,5 @@
 /**
- * #81 — a bus message is never typed into a prompt the operator is writing (Luigi, 26 Oct:
+ * #81 — a bus message is never typed into a prompt the operator is writing (an operator, 26 Oct:
  * "sessions jump in" while he types). The pane reports its operator's keystrokes (renderer
  * noteOperatorKeys, lifted from the source here); the bus holds while operatorComposing says so,
  * inside its own readiness checks and budgets (source invariant below).
@@ -112,4 +112,17 @@ test('terminal replies (focus, cursor position, device attributes, mouse) never 
   }
   assert.equal(p.lastKeyAt, undefined, 'and they do not count as a key');
   note(p, 'x'); assert.equal(p.composing, true);
+});
+
+test('an abandoned draft stops holding after 3 min — in the pane AND the bus, the same limit', async () => {
+  /* A lone Esc, Shift-Tab or digit leaves "composing" set with no Enter to clear it. Unbounded, that
+     held the session's messages up to the queue's 24 h ceiling with no log line (0.13.0 review). */
+  const fs = await import('fs');
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  assert.equal(COMPOSE_STALE_MS, 3 * 60 * 1000);
+  assert.match(app, /const BUS_COMPOSE_STALE_MS = 3 \* 60 \* 1000;/);
+  assert.match(app, /if \(\(p\.composing && sinceKey < BUS_COMPOSE_STALE_MS\) \|\| sinceKey < 8000\) \{/, 'the pane honours the limit');
+  assert.equal(operatorComposing({ composing: true, at: 0 }, 3 * 60 * 1000 + 1), false, 'past 3 min with no key, the bus may type');
+  const bus = fs.readFileSync('src/main/commandBus.ts', 'utf8');
+  assert.match(bus, /if \(!heldForDraft\) \{ heldForDraft = true; log\(/, 'a draft hold is logged once per request');
 });

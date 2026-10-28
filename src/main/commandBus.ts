@@ -635,6 +635,7 @@ async function runSend(
   let queuedAt = claimedAt;
   try { queuedAt = queuedAtOf(JSON.parse(fs.readFileSync(heldPath, 'utf8')), claimedAt); } catch { /* keep the claim time */ }
   let firstTypedAt = 0;
+  let heldForDraft = false;   // one log line per request when a draft holds it
   let attempts = 0;   // how many times we have actually TYPED into the target
   /* Captured ONCE, before the first type, and reused by every attempt in this runSend.
      It used to be recomputed at the top of each iteration, which made a LATE delivery invisible:
@@ -716,6 +717,7 @@ async function runSend(
     /* #81: the operator is writing in that pane — hold like a busy target, never type into the draft.
        Before the first type this waits under the queue ceiling; after it, under MAX_HOLD_MS (below). */
     if (operatorComposing(composing.get(sessionKey(req.name)), Date.now())) {
+      if (!heldForDraft) { heldForDraft = true; log(`holding a message for '${req.name}': its operator is writing in that session`); }
       if (firstTypedAt && Date.now() - firstTypedAt >= MAX_HOLD_MS) {
         markUndelivered(heldPath, req, `the operator kept a draft open in '${req.name}' for ${Math.round(MAX_HOLD_MS / 60000)} min`);
         return;

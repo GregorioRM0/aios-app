@@ -18,16 +18,17 @@ export function landedBeforeRetype(typedOnce: boolean, before: number, now: numb
 }
 
 /**
- * #81 (Luigi, 26 Oct: "sessions jump in" while he types). Is the operator writing in the target's
+ * #81 (an operator saw sessions "jump in" while typing). Is the operator writing in the target's
  * pane? The renderer reports its own keystrokes: composing = keys since the last Enter / Ctrl-C; `at` = the last key. A bus message is never typed into a draft (it lands inside it), so
  * the bus treats a composing target like a busy one: it holds, through its own budgets and
  * readiness checks, and never types from anywhere else.
  */
 export const COMPOSE_QUIET_MS = 8000;
-/** A draft report older than this no longer holds the bus on its own: the pane's own check (no gap,
- *  at the moment of typing) still defers if the draft is really there. Stops a record from a closed or
- *  replaced pane blocking its name until the queue ceiling. */
-export const COMPOSE_STALE_MS = 30 * 60 * 1000;
+/** A draft with no key for this long is abandoned, not being written: a lone Esc, Shift-Tab or a digit
+ *  answering a prompt leaves "composing" set with no Enter to clear it, and at 30 min (or never, in the
+ *  pane) that held a session's messages for up to the queue's 24 h ceiling, silently. 3 min covers a
+ *  real pause mid-sentence. The pane's own check uses the same limit (renderer BUS_COMPOSE_STALE_MS). */
+export const COMPOSE_STALE_MS = 3 * 60 * 1000;
 export function operatorComposing(rec: { composing: boolean; at: number } | undefined, now: number): boolean {
   return !!rec && ((rec.composing && now - rec.at < COMPOSE_STALE_MS) || now - rec.at < COMPOSE_QUIET_MS);
 }

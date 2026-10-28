@@ -4057,11 +4057,14 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
    it lands as a newline in the composer instead of sending. That is exactly the command bus's
    `send` bug: the message arrived, but never went. A person pastes and then presses Enter,
    after the paste has closed; so do we. */
-/* #81 (26 Oct, Luigi: "sessions jump in" while he types). The pane reports whether its operator is
+/* #81 (an operator saw sessions "jump in" while typing). The pane reports whether its operator is
    writing a draft; the bus (commandBus, operatorComposing) holds its messages meanwhile. Composing =
    any key since the last Enter / Ctrl-C OUTSIDE a bracketed paste (a paste can carry line
    breaks and is still a draft; an up-arrow recalls an old prompt, so escapes count as keys). */
 const BUS_DEFERRED_TYPING = 'deferred: the operator is typing in this session';   // commandBus matches it
+/* A draft with no key for 3 min is abandoned (an Esc or a digit leaves composing set with nothing to
+   clear it); after that the bus may type. Same limit as main's COMPOSE_STALE_MS. */
+const BUS_COMPOSE_STALE_MS = 3 * 60 * 1000;
 /* Terminal-generated replies arrive through the same onData as keys: focus in/out, cursor-position and
    device-attribute reports, mode reports, OSC answers, mouse reports. None of them is the operator writing. */
 const TERM_REPLY = /\x1b\[[IO]|\x1b\[\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[\?[\d;]*\$y|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[<[\d;]+[Mm]|\x1b\[M[\s\S]{3}/g;
@@ -6580,7 +6583,8 @@ window.glassShell.onIntent(async (m) => {
       if (!p.isSession) { window.glassShell.busSendResult(m.name, false, 'that pane is no longer running the session (its Claude exited; it is a shell now)'); return; }
       /* #81: the last word is the pane's, with no gap: if its operator is writing now, say so and type
          nothing. The bus keeps the request and does not spend an attempt on it. */
-      if (p.composing || Date.now() - (p.lastKeyAt || 0) < 8000) {
+      const sinceKey = Date.now() - (p.lastKeyAt || 0);
+      if ((p.composing && sinceKey < BUS_COMPOSE_STALE_MS) || sinceKey < 8000) {
         window.glassShell.busSendResult(m.name, false, BUS_DEFERRED_TYPING);
         return;
       }
