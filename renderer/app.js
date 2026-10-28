@@ -7286,6 +7286,11 @@ function openNextStepsTab() {
         }
         sec.appendChild(row);
       }
+      /* #84, on top: the button below runs every one of these at once, so it says what each will
+         change first — the same list and backup note the setup panel shows (finishSetupEl). */
+      const changes = el('ul', 'setup-finish-list');
+      for (const w of left) changes.appendChild(el('li', '', t('finish.change.' + w.id)));
+      sec.append(el('div', 'step-sub', t('finish.intro')), changes, el('div', 'step-note', t('finish.backup')));
       const acts = el('div', 'step-acts');
       const again = btn(acts, t('finish.go'), async () => {
         again.disabled = true; again.textContent = t('finish.working');
