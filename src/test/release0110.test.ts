@@ -645,3 +645,12 @@ test('app#59: a restored tab never starts a second process on a session that is 
   assert.match(main, /return !!sid && aios\.listRunningAgents\(\)\.some\(\(a\) => a\.sessionId === sid\);/, 'main answers from the full registry, not the filtered panel list');
   for (const loc of ['en', 'es', 'pt-br']) assert.match(JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'i18n', 'locales', `${loc}.json`), 'utf8'))['restore.alreadyRunning'], /\{name\}/);
 });
+
+test('AI-217: "What\'s in it?" works from the release notes, one verification pass, code only when the notes fall short', () => {
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  const fn = /function explainRelease\(version\) \{[\s\S]*?\n\}/.exec(app)![0];
+  assert.match(fn, /Work from the release notes: https:\/\/github\.com\/The-AIOS\/aios-app\/releases\/tag\/v\$\{v\}/);
+  assert.match(fn, /ONE verification pass/);
+  assert.match(fn, /Open the source code only for a claim the notes do not explain/);
+  assert.match(fn, /03 - export\/explainers\/aios-app-\$\{v\}\.html/, 'still lands where exports are noticed');
+});

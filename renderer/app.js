@@ -3357,8 +3357,14 @@ async function reportThis(id) {
 function explainRelease(version) {
   const v = String(version || '').replace(/[^0-9a-z.\-]/gi, '');
   if (!v) return;
+  /* AI-217 — A MINUTE OR TWO, NOT TWENTY-THREE. Measured: the open brief sent the explainer into the
+     source and a page took 23 m 33 s. The release notes already say what changed and why in plain
+     words, so they are the material; the code is only for a claim the notes leave unexplained, and
+     one verification pass keeps that from becoming a tour. */
   spawnNamed('explainer', `Explain AIOS App ${v} to me as a non-technical operator: what changed and what it means for my day. `
-    + `Source: https://github.com/The-AIOS/aios-app/releases/tag/v${v} . Write it as one HTML page at "03 - export/explainers/aios-app-${v}.html" in my vault, then tell me it is there.`);
+    + `Work from the release notes: https://github.com/The-AIOS/aios-app/releases/tag/v${v} (they include the What's New text the App shows). `
+    + 'Build the page from them, then do ONE verification pass. Open the source code only for a claim the notes do not explain, and say on the page which claims you checked that way. '
+    + `Aim to finish in a minute or two. Write it as one HTML page at "03 - export/explainers/aios-app-${v}.html" in my vault, then tell me it is there.`);
 }
 
 if (window.glassShell.onUpdater) {
