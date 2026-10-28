@@ -389,7 +389,7 @@ test('AI-200: Report this and What\'s in it? open the canonical agents with a br
   assert.match(app, /run hooks\/issue-scrub\.py over everything you will include/);
   assert.match(app, /the desktop app is The-AIOS\/aios-app, the framework is The-AIOS\/aios, the editor extension is The-AIOS\/aios-glass/, 'the session picks the repo from what was reported (operator test: never assume the App)');
   assert.match(app, /do not run gh issue create, gh pr create, git push or post any comment until I approve/);
-  assert.match(app, /git push or post any comment until I approve\.', undefined, 'default'\);/, 'permission mode default, whatever the operator usually runs');
+  assert.match(app, /git push or post any comment until I approve\.', undefined, 'default'(, undefined, \[file\])?\);/, 'permission mode default, whatever the operator usually runs');
   assert.match(app, /read CONTRIBUTING\.md at the root of my AIOS folder and follow it to decide two things/, 'operator decision: issue vs pull request is deliberated against CONTRIBUTING.md');
   assert.match(app, /never in my AIOS folder/, 'a PR is built in a contribution clone, never the vault');
   assert.match(app, /if \(byName\('aios-feedback'\)\) \{ setActive\(byName\('aios-feedback'\)\[0\]\); toast\(t\('report\.alreadyOpen'\)\); return; \}/, 'a second report writes no orphan snapshot');

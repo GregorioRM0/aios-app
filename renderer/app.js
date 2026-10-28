@@ -3352,7 +3352,7 @@ async function reportThis(id) {
     + '2) whether it is best sent as an issue, or built as a pull request because you can make and test a small, clear fix. '
     + 'For a pull request, work in a separate contribution clone exactly as CONTRIBUTING.md says, never in my AIOS folder. '
     + 'Before drafting, run hooks/issue-scrub.py over everything you will include. Show me the exact repository and text (and for a pull request, the diff), '
-    + 'and do not run gh issue create, gh pr create, git push or post any comment until I approve.', undefined, 'default');
+    + 'and do not run gh issue create, gh pr create, git push or post any comment until I approve.', undefined, 'default', undefined, [file]);
 }
 function explainRelease(version) {
   const v = String(version || '').replace(/[^0-9a-z.\-]/gi, '');
@@ -6736,7 +6736,21 @@ const RITUAL_BOOTSTRAP = 'Start session';
    both from the same string, so they cannot drift. */
 const ritual = (name, slash) => ({ name, cmd: CLAUDE + ' --name ' + name + ' ' + shq(slash) });
 
-function spawnNamed(name, task, cwd, mode, model) {
+/* aios#231 — a session told to READ a run file must be allowed to read it. Under Claude Code's
+   permissions.blockReadsOutsideWorkingDirectories a worker could not open its own task file in
+   ~/.aios/run (the temp folder on Windows), so the handoff arrived as an instruction it was
+   forbidden to follow. `--add-dir <the file's folder>` makes that folder a working directory for
+   this one session. The flag is VARIADIC (`--add-dir <directories...>`): a prompt right after it
+   would be read as one more directory, so it always goes BEFORE another flag, never last.
+   TASK_FILE_RE mirrors core's taskFileInstruction (runFileReads.test.ts pins the two together). */
+const TASK_FILE_RE = /^Read (.+) and follow the instructions inside\.$/;
+const taskFileOf = (prompt) => { const m = TASK_FILE_RE.exec(String(prompt || '')); return m ? m[1] : ''; };
+function addDirArgs(...files) {
+  const dirs = new Set();
+  for (const f of files) { const s = String(f || ''); const i = xSepIdx(s); if (i > 0) dirs.add(s.slice(0, i)); }
+  return [...dirs].map((d) => ' --add-dir ' + shq(d)).join('');
+}
+function spawnNamed(name, task, cwd, mode, model, readFiles) {
   const handle = (name || '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!handle) return;
   const hit = byName(handle);
@@ -6759,7 +6773,8 @@ function spawnNamed(name, task, cwd, mode, model) {
      every other session keeps the operator's own default. Passed per-session and never written
      to settings.json — a suggestion that silently re-pins someone's model is not a suggestion. */
   void createPane({ name: handle, cwd: cwd || undefined,
-    cmd: CLAUDE + (mode ? ' --permission-mode ' + mode : '')
+    cmd: CLAUDE + addDirArgs(taskFileOf(task), ...(readFiles || []))
+      + (mode ? ' --permission-mode ' + mode : '')
       + (model ? ' --model ' + shq(model) : '')
       + ' --name ' + handle + ' ' + shq(task || RITUAL_BOOTSTRAP) });
 }
@@ -9327,7 +9342,7 @@ function openDesignerTab() {
       const h = await window.glassShell.designerHandoff({ kind: st.kind, fields, mode: st.mode, targetPath: st.targetPath || undefined }).catch(() => null);
       if (h && h.error) { toast(t('handoff.failed', { why: h.error })); return; }
       if (!h) { toast(t('designer.needName')); return; }
-      void createPane({ name: 'aios-builder', cmd: CLAUDE + ' --name aios-builder ' + shq('/aios:agent aios-builder — ' + h.prompt) });
+      void createPane({ name: 'aios-builder', cmd: CLAUDE + addDirArgs(h.file) + ' --name aios-builder ' + shq('/aios:agent aios-builder — ' + h.prompt) });
       toast(t('designer.handedOff'));
     });
     wrap.append(go, goHint);
@@ -9557,7 +9572,7 @@ async function launchAsk(ask) {
   /* Refused, not inlined, when the handoff file cannot be written safely (see task:handoff). */
   const handed = await window.glassShell.taskHandoff(prompt, name).catch((e) => ({ error: String(e && e.message || e) }));
   if (handed && typeof handed === 'object') { toast(t('handoff.failed', { why: handed.error })); return; }
-  await createPane({ name, cmd: `${CLAUDE} --name ${shq(name)} ${shq(handed)}` });
+  await createPane({ name, cmd: `${CLAUDE}${addDirArgs(taskFileOf(handed))} --name ${shq(name)} ${shq(handed)}` });
 }
 
 // A minimal choice modal (reuses the input-modal chrome + chip styling): a title

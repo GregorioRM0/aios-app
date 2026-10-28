@@ -144,9 +144,9 @@ test('a named spawn IS the identity — the session becomes the agent', () => {
   // a session adopt a bundled agent on turn one. Running a slash command in the primary
   // session tells it ABOUT the agent instead, and cannot be closed independently.
   // Signature gained optional cwd + permission mode; the identity contract is `--name`, unchanged.
-  assert.match(app, /function spawnNamed\(name, task, cwd, mode, model\)/);
+  assert.match(app, /function spawnNamed\(name, task, cwd, mode, model(, readFiles)?\)/);
   // The model clause sits between them — passed only when a caller asks for one, like the mode.
-  assert.match(app, /CLAUDE \+ \(mode \? ' --permission-mode ' \+ mode : ''\)\s*\n?\s*\+ \(model \? ' --model ' \+ shq\(model\) : ''\)\s*\n?\s*\+ ' --name ' \+ handle/);
+  assert.match(app, /CLAUDE \+ (addDirArgs\([^\n]*\)\s*\n?\s*\+ )?\(mode \? ' --permission-mode ' \+ mode : ''\)\s*\n?\s*\+ \(model \? ' --model ' \+ shq\(model\) : ''\)\s*\n?\s*\+ ' --name ' \+ handle/);
   assert.match(app, /const hit = byName\(handle\);/, 'reveal an open one rather than duplicating');
   assert.match(app, /case 'spawnNamed':/);
   // the title-bar compass uses the same path as the menu
@@ -382,7 +382,7 @@ test('the guided setup session opens in AUTO mode, and decides that here', () =>
   assert.doesNotMatch(body, /\|\| 'auto'/, "'auto' must not sit behind a config read as a fallback");
   // and the flag still only ships when a caller asks for one — other spawns inherit the
   // operator's own mode, which is correct for every session that is not first-run setup
-  assert.match(app, /CLAUDE \+ \(mode \? ' --permission-mode ' \+ mode : ''\)/);
+  assert.match(app, /CLAUDE \+ (addDirArgs\([^\n]*\)\s*\n?\s*\+ )?\(mode \? ' --permission-mode ' \+ mode : ''\)/);
 });
 
 test('the Phase 1 script is idempotent, honest, and self-proving', () => {
