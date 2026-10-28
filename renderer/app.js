@@ -646,7 +646,9 @@ function applyLayout() {
   dp.title = t(showP ? 'panel.hide' : 'panel.show');
   const rx = document.getElementById('railExplorer');
   rx.classList.toggle('on', showX);
+  const exportCount = rx.querySelector('.ribadge');   // AI-222: the new-exports count lives on this button
   rx.innerHTML = icon(showX ? 'folderOpen' : 'folder', 15); // open folder when the explorer is showing
+  if (exportCount) rx.appendChild(exportCount);
   applySplit();
   saveLayout();
   fitTerms();

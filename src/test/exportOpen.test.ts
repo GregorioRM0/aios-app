@@ -49,3 +49,12 @@ test('git runs from the vault root with fsmonitor and hooks off — never from t
   assert.match(host, /cameFromGit\(path\.relative\(v, newest\.path\), gitIn\(v\)\)/);
   assert.doesNotMatch(host, /gitIn\(path\.dirname/);
 });
+
+test('the count survives the layout redraw of the files button (found live in round 1: the redraw wiped it)', () => {
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  const at = app.indexOf("rx.innerHTML = icon(showX ? 'folderOpen' : 'folder', 15)");
+  assert.ok(at > 0, 'the layout redraws the button');
+  assert.match(app.slice(at - 200, at), /const exportCount = rx\.querySelector\('\.ribadge'\);/, 'the count is taken off first');
+  assert.match(app.slice(at, at + 200), /if \(exportCount\) rx\.appendChild\(exportCount\);/, 'and put back after');
+  assert.equal((app.match(/getElementById\('railExplorer'\)\.innerHTML =/g) || []).length, 1, 'one other redraw: the creation, before the count exists');
+});
