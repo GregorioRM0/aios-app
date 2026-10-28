@@ -27,6 +27,7 @@ import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presen
 import { MY_SURFACE } from './surface';
 import { needsPointer, pointerText, byteLength, isStalePayload, INLINE_LIMIT } from '../core/busPayload';
 import { pickBash } from '../core/bashResolve';
+import { TranscriptSince, readTranscript } from './transcriptSince';
 import { runDir, writePrivateFile } from './privateRun';
 import { resolveBusCwd, grantBusCwd } from './busCwd';
 
@@ -438,17 +439,6 @@ function heldSends(): QueuedSend[] {
   return out;
 }
 
-/** Read the target's transcript; the counting RULE is pure and lives in core/sendQueue. */
-function readTranscript(sessionId: string): string {
-  if (!sessionId) return '';
-  const base = path.join(aios.claudeConfigDir(), 'projects');
-  let dirs: string[] = [];
-  try { dirs = fs.readdirSync(base); } catch { return ''; }
-  for (const d of dirs) {
-    try { return fs.readFileSync(path.join(base, d, `${sessionId}.jsonl`), 'utf8'); } catch { continue; }
-  }
-  return '';
-}
 
 /** Move a request to `.undelivered`, recording why. Loud beats silent. */
 /**
@@ -636,6 +626,18 @@ async function runSend(
   try { queuedAt = queuedAtOf(JSON.parse(fs.readFileSync(heldPath, 'utf8')), claimedAt); } catch { /* keep the claim time */ }
   let firstTypedAt = 0;
   let heldForDraft = false;   // one log line per request when a draft holds it
+  /* AI-223: count deliveries in what was appended since this send began — never the whole file. */
+  const since = new TranscriptSince();
+  const count = (sid: string): number | null => {
+    const appended = since.read(sid);
+    return appended === null ? null : countDeliveries(appended, deliverText, needle, claimedAt);
+  };
+  /* A transcript we cannot read cannot verify anything, and re-typing on that is how one message
+     arrived three times. Typed once → done, said plainly; never typed → nothing to finish here. */
+  const finishUnverifiable = (): void => {
+    try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+    log(`delivered → '${req.name}' (typed once; its transcript could not be read, so it is not verified and will not be re-typed)`);
+  };
   let attempts = 0;   // how many times we have actually TYPED into the target
   /* Captured ONCE, before the first type, and reused by every attempt in this runSend.
      It used to be recomputed at the top of each iteration, which made a LATE delivery invisible:
@@ -686,7 +688,7 @@ async function runSend(
     }
     // idle → deliver, then prove it in the target's own transcript
     const sessionId = target ? target.sessionId : '';
-    if (baseline === undefined) baseline = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
+    if (baseline === undefined) baseline = count(sessionId) ?? 0;
     const before = baseline;
     /* THE CAP HAS TO SIT HERE, before the send — not only in the after-a-miss decision.
        A 'wait' verdict does `continue`, which re-enters this branch, so a cap enforced only
@@ -694,7 +696,8 @@ async function runSend(
        every cycle for the full hold. Caught by tracing the control flow rather than trusting
        the counter, which is the same lesson as everything else in this ticket. */
     if (attempts >= maxAttemptsFor(deliverText)) {
-      const late = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
+      const late = count(sessionId);
+      if (late === null) { finishUnverifiable(); return; }
       if (verifyVerdict(before, late) !== 'pending') {
         try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         log(`delivered → '${req.name}' (verified late)`);
@@ -709,7 +712,9 @@ async function runSend(
       continue;   // watch, never type again
     }
     /* 26 Oct: a re-type after a busy-wait must first look for the earlier copy (landedBeforeRetype). */
-    if (landedBeforeRetype(!!firstTypedAt, before, countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt))) {
+    const sofar = count(sessionId);
+    if (sofar === null && firstTypedAt) { finishUnverifiable(); return; }
+    if (landedBeforeRetype(!!firstTypedAt, before, sofar ?? before)) {
       try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
       log(`delivered → '${req.name}' (verified late, before a re-type)`);
       return;
@@ -730,6 +735,9 @@ async function runSend(
     const firstTry = !firstTypedAt;
     if (!firstTypedAt) firstTypedAt = Date.now();
     const emittedAt = Date.now();
+    /* AI-223: the request must still exist at the moment of typing. A hold deleted by hand (or
+       retired by a newer message) between attempts was typed anyway — the "re-send from memory". */
+    if (!fs.existsSync(heldPath)) return;
     recordTyped(deliverText, req.name, 'send', req.from);   // AI-172: before typing, so the label can never lose the race
     emit(win(), 'sendByName', { name: req.name, text: deliverText });
     /* If the surface says it could not deliver, stop here. Waiting out the verification window
@@ -761,7 +769,8 @@ async function runSend(
     const until = Date.now() + VERIFY_WINDOW_MS;
     while (Date.now() < until) {
       await new Promise((r) => setTimeout(r, VERIFY_TICK_MS));
-      const now = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
+      const now = count(sessionId);
+      if (now === null) { finishUnverifiable(); return; }
       const verdict = verifyVerdict(before, now);
       if (verdict === 'pending') continue;
       try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
@@ -796,7 +805,8 @@ async function runSend(
     if (miss.do === 'wait') {
       /* Out of sends, not out of hope: watch for a late arrival and never type again. A turn
          that lands after the window closed must not be sent twice. */
-      const late = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
+      const late = count(sessionId);
+      if (late === null) { finishUnverifiable(); return; }
       if (verifyVerdict(before, late) !== 'pending') {
         try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         log(`delivered → '${req.name}' (verified late)`);
