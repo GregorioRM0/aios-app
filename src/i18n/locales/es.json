@@ -1034,6 +1034,8 @@
   "conn.noCustom": "Ninguna todavía — agrega una con +",
   "setup.fullTour": "Muéstrame el recorrido completo",
   "setup.fullTourHint": "Los agentes que ya tienes, empresas y espacios compartidos, el panel del editor y un recorrido por el mapa — tu identidad y tu contexto quedan como están",
+  "setup.alreadyDone": "Ya hecho",
+  "setup.nextStepAnnounce": "Siguiente: paso {n} de {total}, {name}",
   "onboarding.tag.prereqs": "las herramientas sobre las que funciona todo",
   "onboarding.tag.login": "tu suscripción de IA",
   "onboarding.tag.github": "almacenamiento gratis y privado para el trabajo con IA",
