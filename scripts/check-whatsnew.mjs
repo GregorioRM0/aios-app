@@ -29,7 +29,7 @@
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
-const LOCALES = ['en', 'es', 'pt-br'];
+const LOCALES = ['en', 'es', 'pt-br', 'el'];
 const BODY_KEYS = ['whatsnew.sub', 'whatsnew.h1', 'whatsnew.b1', 'whatsnew.h2', 'whatsnew.b2',
   'whatsnew.h3', 'whatsnew.b3'];
 const fail = (m) => { console.error('check:whatsnew ✗ ' + m); process.exit(1); };
