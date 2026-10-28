@@ -2,7 +2,7 @@
  *
  * A worker told to read a run file is granted that file's folder with `--add-dir`. The folder
  * used to be the run dir itself, so the grant reached every other session's task, the report
- * snapshots, and run/setup — scripts the App later EXECUTES. On Windows the run dir is the whole
+ * snapshots, and run/setup — scripts a surface later EXECUTES. On Windows the run dir is the whole
  * temp folder. Granting a working directory means the session may edit there, too.
  *
  * So each handed-over file is written into a fresh private folder (0700 via runDir, a random
