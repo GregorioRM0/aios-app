@@ -1132,7 +1132,7 @@
   "whatsnew.h2": "Tus teclas, en todas partes",
   "whatsnew.b2": "En Windows, Ctrl+C copia una selección y Ctrl+V pega (en Linux, Ctrl+Shift+C / V, así Ctrl+V sigue pegando imágenes en Claude). La hoja ⌘/ ahora muestra las teclas de Claude Code, solo las que llegan a la sesión en tu computadora. ⌘⇧-clic en cualquier carpeta o archivo que imprima una sesión lo muestra en Finder o el Explorador. Y la App ahora habla griego.",
   "whatsnew.h3": "Una configuración que termina, mensajes que llegan una vez",
-  "whatsnew.b3": "La configuración conecta los skills, los comandos de AIOS, el comando spawn y los hooks por sí sola, y dice qué hace cada cambio antes de hacerlo. El siguiente paso siempre está a la vista. Las sesiones que abre la App ahora encuentran las herramientas que instaló la configuración. Los mensajes esperan mientras escribes, pero nunca más de unos minutos por un borrador que dejaste. Un mensaje a una sesión muy larga llega una sola vez, una sesión cerrada se reabre aunque su número de proceso se haya reutilizado, y un agente ya puede leer el archivo de tarea que recibe. Gracias a todos los que reportaron y construyeron esto.",
+  "whatsnew.b3": "La configuración ahora conecta por ti los skills, los comandos de AIOS, el comando spawn y los hooks, y muestra primero qué hace cada cambio. Los mensajes entre sesiones esperan mientras escribes y llegan una sola vez, incluso en sesiones muy largas. Gracias a todos los que reportaron y construyeron esto.",
   "whatsnew.more": "Notas completas en GitHub →",
   "whatsnew.skipped": "También te saltaste {versions}. Lo que cambió está en las notas de cada versión.",
   "menu.whatsnew": "Novedades",

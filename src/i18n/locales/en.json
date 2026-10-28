@@ -1132,7 +1132,7 @@
   "whatsnew.h2": "Your keys, everywhere",
   "whatsnew.b2": "On Windows, Ctrl+C copies a selection and Ctrl+V pastes (on Linux, Ctrl+Shift+C / V, so Ctrl+V still pastes images into Claude). The ⌘/ sheet now lists Claude Code's own keys, only the ones that reach the session on your computer. ⌘⇧-click any folder or file a session prints to show it in Finder or Explorer. And the App now speaks Greek.",
   "whatsnew.h3": "Setup that finishes, messages that arrive once",
-  "whatsnew.b3": "Setup wires the skills, the AIOS commands, the spawn command and the hooks itself, and says what each change does before it runs. The next step is always on screen. Sessions the App opens now find the tools setup installed. Messages wait while you type, but never more than a few minutes for a draft you left. A message to a very long session arrives once, a closed session reopens even when its old process number was reused, and an agent can now read the task file it is handed. Thanks to everyone who reported and built these.",
+  "whatsnew.b3": "Setup now wires the skills, the AIOS commands, the spawn command and the hooks for you, and shows what each change does first. Messages between sessions wait while you type and arrive once, even in very long sessions. Thanks to everyone who reported and built these.",
   "whatsnew.more": "Full release notes on GitHub →",
   "whatsnew.skipped": "You also skipped {versions}. What they changed is in the release notes.",
   "menu.whatsnew": "What's New",
