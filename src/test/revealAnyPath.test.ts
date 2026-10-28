@@ -32,64 +32,64 @@ const env: LinkEnv = {
   stat,
 };
 
-test('an allowed file still opens in the viewer — the gate the preview depends on is unchanged', () => {
+test('an allowed file still opens in the viewer — the gate the preview depends on is unchanged', async () => {
   const p = path.join(root, 'notes.md');
-  assert.deepEqual(resolveLinkTargets([p], env), { open: { [p]: p }, reveal: {} });
+  assert.deepEqual(await resolveLinkTargets([p], env), { open: { [p]: p }, reveal: {} });
 });
 
-test('a folder becomes a reveal link, inside the roots or out', () => {
+test('a folder becomes a reveal link, inside the roots or out', async () => {
   const inside = path.join(root, 'hooks');
   const out = path.join(outside, 'story');
-  const r = resolveLinkTargets([inside, out + '/'], env);
+  const r = await resolveLinkTargets([inside, out + '/'], env);
   assert.deepEqual(r.open, {}, 'the viewer never gets a folder');
   assert.equal(r.reveal[inside], inside);
   assert.equal(r.reveal[out + '/'], out, 'a trailing slash still resolves (to the normalized path)');
 });
 
-test('a file outside the roots is reveal-only: Finder may show it, the viewer may not read it', () => {
+test('a file outside the roots is reveal-only: Finder may show it, the viewer may not read it', async () => {
   const p = path.join(outside, 'story', 'chapter.mp3');
-  assert.deepEqual(resolveLinkTargets([p], env), { open: {}, reveal: { [p]: p } });
+  assert.deepEqual(await resolveLinkTargets([p], env), { open: {}, reveal: { [p]: p } });
 });
 
-test('~/ expands before the check, and :line suffixes and trailing punctuation are dropped', () => {
-  const r = resolveLinkTargets(['~/scratch/story),', '~/aios/notes.md:12'], env);
+test('~/ expands before the check, and :line suffixes and trailing punctuation are dropped', async () => {
+  const r = await resolveLinkTargets(['~/scratch/story),', '~/aios/notes.md:12'], env);
   assert.equal(r.reveal['~/scratch/story),'], path.join(outside, 'story'));
   assert.equal(r.open['~/aios/notes.md:12'], path.join(root, 'notes.md'));
 });
 
-test('a RELATIVE token never becomes reveal-only — ordinary words that name a folder stay text', () => {
+test('a RELATIVE token never becomes reveal-only — ordinary words that name a folder stay text', async () => {
   // `scratch/story` exists under the second base (tmp), outside the roots: no link.
-  assert.deepEqual(resolveLinkTargets(['scratch/story', 'hooks'], env), { open: {}, reveal: {} });
+  assert.deepEqual(await resolveLinkTargets(['scratch/story', 'hooks'], env), { open: {}, reveal: {} });
   // inside the roots a relative FILE still opens, as before
-  assert.equal(resolveLinkTargets(['notes.md'], env).open['notes.md'], path.join(root, 'notes.md'));
+  assert.equal((await resolveLinkTargets(['notes.md'], env)).open['notes.md'], path.join(root, 'notes.md'));
 });
 
-test('a path that does not exist is no link at all', () => {
-  assert.deepEqual(resolveLinkTargets([path.join(outside, 'nope.mp3'), '/no/such/dir'], env), { open: {}, reveal: {} });
+test('a path that does not exist is no link at all', async () => {
+  assert.deepEqual(await resolveLinkTargets([path.join(outside, 'nope.mp3'), '/no/such/dir'], env), { open: {}, reveal: {} });
 });
 
-test('a network path is never stat\'ed for a reveal link — hovering text must not reach a host', () => {
+test('a network path is never stat\'ed for a reveal link — hovering text must not reach a host', async () => {
   /* Windows authenticates to a UNC host on stat (an NTLM hash, from text anyone could print);
      macOS automounts /net and /Network. The stat itself is the leak, so assert it never runs. */
   const seen: string[] = [];
   const spy: LinkEnv = { ...env, stat: (abs) => { seen.push(abs); return stat(abs); } };
   const net = ['\\\\evil\\share\\x.png', '//evil/share/x', '\\\\?\\UNC\\evil\\x', '/net/evil/x', '/Network/Servers/evil',
                '/NET/evil/x', '/./net/evil/x', '/tmp/../net/evil/x'];
-  assert.deepEqual(resolveLinkTargets(net, spy), { open: {}, reveal: {} });
+  assert.deepEqual(await resolveLinkTargets(net, spy), { open: {}, reveal: {} });
   /* On POSIX a backslash string is RELATIVE and may resolve inside the roots as a local name, as
      it always did; what must never happen is a stat of the network path itself. */
   const reached = () => seen.filter((s) => net.includes(s) || /^\/(net|network)\//i.test(s));
   assert.deepEqual(reached(), [], 'no network path reached stat');
-  for (const p of net) assert.equal(revealable(p, spy.stat), null, p);
+  for (const p of net) assert.equal(await revealable(p, spy.stat), null, p);
   assert.deepEqual(reached(), []);
 });
 
-test('shell:reveal accepts any absolute path that exists, and nothing else', () => {
-  assert.equal(revealable(path.join(outside, 'story'), stat), path.join(outside, 'story'));
-  assert.equal(revealable(path.join(outside, 'story', '.', '..', 'story'), stat), path.join(outside, 'story'), 'normalized');
-  assert.equal(revealable(path.join(outside, 'nope'), stat), null);
-  assert.equal(revealable('story', stat), null, 'relative paths fall back to the roots-resolved path');
-  assert.equal(revealable(undefined, stat), null);
+test('shell:reveal accepts any absolute path that exists, and nothing else', async () => {
+  assert.equal(await revealable(path.join(outside, 'story'), stat), path.join(outside, 'story'));
+  assert.equal(await revealable(path.join(outside, 'story', '.', '..', 'story'), stat), path.join(outside, 'story'), 'normalized');
+  assert.equal(await revealable(path.join(outside, 'nope'), stat), null);
+  assert.equal(await revealable('story', stat), null, 'relative paths fall back to the roots-resolved path');
+  assert.equal(await revealable(undefined, stat), null);
 });
 
 const app = fs.readFileSync('renderer/app.js', 'utf8');
@@ -114,4 +114,21 @@ test('every locale names the reveal-only gesture, with the right keys per platfo
     assert.match(j['term.cmdClickRevealWin'], /^Ctrl\+/, `${loc} term.cmdClickRevealWin`);
     assert.doesNotMatch(j['term.cmdClickRevealWin'], /⌘|⇧|Finder/, `${loc} Windows string names no macOS keys`);
   }
+});
+
+test('a stat that never answers is no link, and does not hold the others up', async () => {
+  const { statWithin } = await import('../main/pathLinks');
+  const hung = statWithin(50, (abs) => (abs.includes('hung') ? new Promise(() => {}) : fs.promises.stat(abs)));
+  const p = path.join(outside, 'story');
+  const t0 = Date.now();
+  const r = await resolveLinkTargets(['/Volumes/hung/x', '/Volumes/hung/y', p], { ...env, stat: hung });
+  assert.deepEqual(r, { open: {}, reveal: { [p]: p } });
+  assert.ok(Date.now() - t0 < 400, 'two hung paths cost one timeout, in parallel');
+  assert.equal(await revealable('/Volumes/hung/z', hung), null);
+});
+
+test('the main process never stats a hovered path synchronously', () => {
+  const main = fs.readFileSync('src/main/main.ts', 'utf8');
+  assert.match(main, /const statOrNull = statWithin\(\);/);
+  assert.doesNotMatch(fs.readFileSync('src/main/pathLinks.ts', 'utf8'), /statSync/);
 });

@@ -12,6 +12,7 @@
  * Reveal-only targets must be written ABSOLUTE (or `~/…`). A relative token resolved against
  * the home folder would turn ordinary words that happen to name a folder into links.
  * Pure over the filesystem it is handed, so it is tested against real files. */
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 /* Reveal-only paths are stat'ed on HOVER, from text anyone could have printed, so a stat must
@@ -32,7 +33,23 @@ export interface LinkEnv {
   /** Folders a relative candidate is resolved against, in order (pane cwd, framework, home). */
   bases: string[];
   home: string;
-  stat: (abs: string) => { isFile(): boolean; isDirectory(): boolean } | null;
+  stat: (abs: string) => StatLike | null | Promise<StatLike | null>;
+}
+
+type StatLike = { isFile(): boolean; isDirectory(): boolean };
+
+/* A stat that answers within `ms` or not at all. These stats run on HOVER over text anyone could
+   have printed, in the main process. A synchronous stat of a sleeping external disk, a stale
+   network mount or an iCloud placeholder blocks that process — every window freezes while the
+   operator only moved the mouse. Asynchronous, the slow stat waits on a worker thread instead,
+   and past `ms` the answer is "no link", which is what a path nobody can reach should be. */
+export const STAT_TIMEOUT_MS = 1500;
+export function statWithin(ms: number = STAT_TIMEOUT_MS,
+  statp: (abs: string) => Promise<StatLike> = (abs) => fs.promises.stat(abs)): (abs: string) => Promise<StatLike | null> {
+  return (abs) => new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    statp(abs).then((st) => resolve(st), () => resolve(null)).finally(() => clearTimeout(timer));
+  });
 }
 
 export interface LinkTargets {
@@ -48,30 +65,32 @@ export function normalizeCandidate(c: string, home: string): string {
   return v;
 }
 
-export function resolveLinkTargets(cands: unknown, env: LinkEnv): LinkTargets {
+export async function resolveLinkTargets(cands: unknown, env: LinkEnv): Promise<LinkTargets> {
   const out: LinkTargets = { open: {}, reveal: {} };
-  for (const c of (Array.isArray(cands) ? cands : []).slice(0, 24)) {
+  /* Candidates resolve in PARALLEL: one unreachable path waits out its timeout once, beside the
+     others, rather than once per token in turn. */
+  await Promise.all((Array.isArray(cands) ? cands : []).slice(0, 24).map(async (c) => {
     try {
       const v = normalizeCandidate(String(c), env.home);
-      if (!v) continue;
+      if (!v) return;
       const absolute = path.isAbsolute(v);
       const tries = absolute ? [v] : env.bases.map((b) => path.resolve(b, v));
       for (const abs of tries) {
         if (!env.allowed(abs)) continue;
-        const st = env.stat(abs);
+        const st = await env.stat(abs);
         if (st && st.isFile()) { out.open[c] = abs; break; }
       }
       const local = out.open[c] || !absolute ? null : localAbsolute(v);
-      if (!local) continue;
-      const st = env.stat(local);
+      if (!local) return;
+      const st = await env.stat(local);
       if (st && (st.isFile() || st.isDirectory())) out.reveal[c] = local;
     } catch { /* skip */ }
-  }
+  }));
   return out;
 }
 
 /** What `shell:reveal` may show: the normalized form of a local absolute path that exists. */
-export function revealable(p: unknown, stat: LinkEnv['stat']): string | null {
+export async function revealable(p: unknown, stat: LinkEnv['stat']): Promise<string | null> {
   const local = typeof p === 'string' ? localAbsolute(p) : null;
-  return local && stat(local) !== null ? local : null;
+  return local && (await stat(local)) !== null ? local : null;
 }
