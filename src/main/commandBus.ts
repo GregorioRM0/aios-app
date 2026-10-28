@@ -22,6 +22,7 @@ import {
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
   queueTurn, stampAge, withQueuedAt, queuedAtOf, isQueuedDelivery, supersedes, type QueuedSend,
 } from '../core/sendQueue';
+import { landedBeforeRetype, operatorComposing } from './retypeGuard';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
 import { MY_SURFACE } from './surface';
 import { needsPointer, pointerText, byteLength, isStalePayload, INLINE_LIMIT } from '../core/busPayload';
@@ -343,6 +344,12 @@ const alive = (pid: number): boolean => {
    to see it" from "there was nothing here to deliver to". A pane that is gone, or that is no
    longer running the session, is knowable IMMEDIATELY — and knowing it early is what stops a
    request burning its whole release budget before anyone finds out. */
+/* #81 — what each pane's operator is doing, by session name (renderer → bus:composing). */
+const composing = new Map<string, { composing: boolean; at: number }>();
+const DEFERRED_TYPING = 'deferred: the operator is typing in this session';   // renderer BUS_DEFERRED_TYPING
+ipcMain.on('bus:composing', (_e, v: { name: string; composing: boolean }) => {
+  if (v && v.name) composing.set(sessionKey(v.name), { composing: !!v.composing, at: Date.now() });
+});
 const sendVerdicts = new Map<string, { ok: boolean; reason: string; at: number }>();
 ipcMain.on('bus:sendResult', (_e, v: { name: string; ok: boolean; reason: string }) => {
   if (v && v.name) sendVerdicts.set(v.name, { ok: !!v.ok, reason: String(v.reason || ''), at: Date.now() });
@@ -700,7 +707,25 @@ async function runSend(
       if (!fs.existsSync(heldPath)) return;
       continue;   // watch, never type again
     }
+    /* 26 Oct: a re-type after a busy-wait must first look for the earlier copy (landedBeforeRetype). */
+    if (landedBeforeRetype(!!firstTypedAt, before, countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt))) {
+      try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+      log(`delivered → '${req.name}' (verified late, before a re-type)`);
+      return;
+    }
+    /* #81: the operator is writing in that pane — hold like a busy target, never type into the draft.
+       Before the first type this waits under the queue ceiling; after it, under MAX_HOLD_MS (below). */
+    if (operatorComposing(composing.get(sessionKey(req.name)), Date.now())) {
+      if (firstTypedAt && Date.now() - firstTypedAt >= MAX_HOLD_MS) {
+        markUndelivered(heldPath, req, `the operator kept a draft open in '${req.name}' for ${Math.round(MAX_HOLD_MS / 60000)} min`);
+        return;
+      }
+      if (!fs.existsSync(heldPath)) return;
+      await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
+      continue;
+    }
     attempts++;
+    const firstTry = !firstTypedAt;
     if (!firstTypedAt) firstTypedAt = Date.now();
     const emittedAt = Date.now();
     recordTyped(deliverText, req.name, 'send', req.from);   // AI-172: before typing, so the label can never lose the race
@@ -715,6 +740,17 @@ async function runSend(
        spent both sibling releases, and killed a brief the other App could have delivered.
        So: hand it back first, and only retire when the release budget is genuinely gone. */
     const sendResult = await awaitSendVerdict(req.name, emittedAt);
+    if (sendResult && !sendResult.ok && sendResult.reason === DEFERRED_TYPING) {
+      /* #81: the pane typed nothing because its operator is writing. Not a failure and not an
+         attempt: give the attempt back, keep the request, and wait for the draft to be sent. */
+      attempts--;
+      if (firstTry) firstTypedAt = 0;
+      const prev = composing.get(sessionKey(req.name));   // keep the pane's own draft state: this is a timed hold
+      composing.set(sessionKey(req.name), { composing: !!prev && prev.composing, at: Date.now() });
+      if (!fs.existsSync(heldPath)) return;
+      await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
+      continue;
+    }
     if (sendResult && !sendResult.ok) {
       if (releaseForSibling(heldPath, req, sendResult.reason)) return;   // let another surface try
       markUndelivered(heldPath, req, sendResult.reason);
@@ -951,7 +987,10 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
          `{"action":"send"}` would take. */
       const live = targetByName(req.name);
       if (live) {
-        emit(win(), 'focusByName', { name: req.name });
+        /* Background, like every other bus reveal. A worker that finishes reports to its
+           coordinator with exactly this request, so without the flag every finished worker pulled
+           the operator's screen onto the coordinator's tab, mid-sentence. */
+        emit(win(), 'focusByName', { name: req.name, background: true });
         log(`resume '${req.name}' — already running, revealing and delivering${req.effort || req.advisor ? ' (effort/advisor NOT applied: a running session cannot change them)' : ''}`);
         if (req.prompt) void runSend(win, heldPath, { ...req, action: 'send' }, Date.now());
         else try { fs.unlinkSync(heldPath); } catch { /* already gone */ }

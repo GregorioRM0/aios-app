@@ -3975,8 +3975,8 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
   }
   // drop a file/folder onto THIS terminal → insert its quoted path (not the active one:
   // the pane under the pointer is the one the operator meant)
-  attachDropZone(el, (paths) => { window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' '); setActive(id); });
-  term.onData((d) => window.glassShell.ptyWrite(id, d));
+  attachDropZone(el, (paths) => { noteOperatorKeys(p, 'drop'); window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' '); setActive(id); });   // #81: a dropped path is a draft
+  term.onData((d) => { noteOperatorKeys(p, d); window.glassShell.ptyWrite(id, d); });
   attachPathLinks(term, cwd, id);
   /* AI-64: the session tells us its own name through the tty title. */
   /* Titles CONFIRM a session; only the REGISTRY can declare one over.
@@ -4057,6 +4057,40 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
    it lands as a newline in the composer instead of sending. That is exactly the command bus's
    `send` bug: the message arrived, but never went. A person pastes and then presses Enter,
    after the paste has closed; so do we. */
+/* #81 (26 Oct, Luigi: "sessions jump in" while he types). The pane reports whether its operator is
+   writing a draft; the bus (commandBus, operatorComposing) holds its messages meanwhile. Composing =
+   any key since the last Enter / Ctrl-C OUTSIDE a bracketed paste (a paste can carry line
+   breaks and is still a draft; an up-arrow recalls an old prompt, so escapes count as keys). */
+const BUS_DEFERRED_TYPING = 'deferred: the operator is typing in this session';   // commandBus matches it
+/* Terminal-generated replies arrive through the same onData as keys: focus in/out, cursor-position and
+   device-attribute reports, mode reports, OSC answers, mouse reports. None of them is the operator writing. */
+const TERM_REPLY = /\x1b\[[IO]|\x1b\[\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[\?[\d;]*\$y|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[<[\d;]+[Mm]|\x1b\[M[\s\S]{3}/g;
+function noteOperatorKeys(p, d) {
+  if (!p || typeof d !== 'string' || !d) return;
+  d = d.replace(TERM_REPLY, '');
+  if (!d) return;                                    // only the terminal answering: the draft is unchanged
+  p.lastKeyAt = Date.now();
+  let rest = '';
+  for (let k = 0; k < d.length;) {
+    if (d.startsWith('\x1b[200~', k)) { p.inPaste = true; k += 6; continue; }
+    if (d.startsWith('\x1b[201~', k)) { p.inPaste = false; k += 6; continue; }
+    if (!p.inPaste) rest += d[k];
+    k++;
+  }
+  const was = !!p.composing;
+  if (p.inPaste) p.composing = true;
+  else {
+    rest = rest.replace(/\x1b[\r\n]/g, '\n');                   // ESC-Enter is a new line in the draft, not a send
+    const last = Math.max(rest.lastIndexOf('\r'), rest.lastIndexOf('\x03'));   // not Ctrl-U: it may clear only to the cursor
+    p.composing = last < 0 ? true : last < rest.length - 1;   // text after the last send/clear is a new draft
+  }
+  const now = Date.now();
+  if (p.name && (p.composing !== was || now - (p.composingSentAt || 0) > 2000)) {
+    p.composingSentAt = now;
+    window.glassShell.busComposing(p.name, p.composing);
+  }
+}
+
 function submitToPty(id, text) {
   if (!text) return;
   window.glassShell.ptyWrite(id, text);
@@ -4200,7 +4234,7 @@ window.glassShell.onPtyData((m) => {
 });
 window.glassShell.onPtyExit((m) => {
   const p = panes.get(m.id);
-  if (p && p.kind === 'term') { p.exited = true; p.term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n'); paintRunning(); }
+  if (p && p.kind === 'term') { p.exited = true; if (p.composing && p.name) { p.composing = false; window.glassShell.busComposing(p.name, false); } p.term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n'); paintRunning(); }   // #81: an ended pane holds no draft
   /* A guided connect/add session just closed — re-read rather than waiting for focus or the poll.
      Same shape as the Health card's fix panes: run the check that found the problem to prove the
      fix, never trust that the work happened. */
@@ -6394,6 +6428,7 @@ attachDropZone(document.getElementById('tpanes'), (paths, isDir) => {
   const id = active.term;
   if (id != null && panes.get(id) && !panes.get(id).exited) {
     // several files from Finder arrive as one drop — insert them all, space separated
+    noteOperatorKeys(panes.get(id), 'drop');   // #81: a dropped path is a draft
     window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' ');
     setActive(id);
     return;
@@ -6543,6 +6578,12 @@ window.glassShell.onIntent(async (m) => {
       const p = hit ? panes.get(hit[0]) : null;
       if (!p || p.exited) { window.glassShell.busSendResult(m.name, false, 'no pane by that name in this surface'); return; }
       if (!p.isSession) { window.glassShell.busSendResult(m.name, false, 'that pane is no longer running the session (its Claude exited; it is a shell now)'); return; }
+      /* #81: the last word is the pane's, with no gap: if its operator is writing now, say so and type
+         nothing. The bus keeps the request and does not spend an attempt on it. */
+      if (p.composing || Date.now() - (p.lastKeyAt || 0) < 8000) {
+        window.glassShell.busSendResult(m.name, false, BUS_DEFERRED_TYPING);
+        return;
+      }
       submitToPty(hit[0], m.text);
       // a bus send is agent-to-agent: deliver it in the background unless the operator chose 'follow'
       if (BUS_FOCUS === 'follow') setActive(hit[0]); else markActivity(hit[0]);
