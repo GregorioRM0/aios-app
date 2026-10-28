@@ -10,9 +10,16 @@ import { BrowserWindow, WebContents, nativeImage } from 'electron';
 import * as aios from './aios';
 import { execFile } from 'child_process';
 import { cameFromGit, type GitRun } from './exportOpen';
-/* git, run in `dir`, answering stdout or null — never throwing, never longer than 3s. */
-const gitIn = (dir: string): GitRun => (args) => new Promise((res) => {
-  execFile(aios.gitBin(), ['-C', dir, ...args], { timeout: 3000 }, (err, out) => res(err ? null : String(out)));
+/* git, run from the VAULT ROOT, answering stdout or null — never throwing, never longer than 3s.
+   Never from the export's own folder: 03 - export can hold a repo a session cloned there, and a
+   repo's own config can name a command git runs on `status` (core.fsmonitor). From the vault root
+   git reads only the operator's repo; fsmonitor and hooks are off regardless, and discovery stops
+   above the framework root. A file inside a nested repo is simply "not from git" here. */
+const gitIn = (vault: string): GitRun => (args) => new Promise((res) => {
+  const ceiling = path.dirname(aios.frameworkRoot() || vault);
+  execFile(aios.gitBin(), ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=' + os.devNull, '-C', vault, ...args],
+    { timeout: 3000, env: { ...process.env, GIT_CEILING_DIRECTORIES: ceiling, GIT_CONFIG_NOSYSTEM: '1' } },
+    (err, out) => res(err ? null : String(out)));
 });
 import { t } from '../i18n';
 import { Attention } from './attention';
@@ -107,7 +114,7 @@ export class PanelHost {
           const newest = aios.recentOutputs(1)[0];
           if (!newest || now - newest.mtime >= 6000 || !/\.(html?|pdf|png|jpe?g|md)$/i.test(newest.name)) return;
           this.lastReveal = now;
-          void cameFromGit(newest.path, gitIn(path.dirname(newest.path))).then((pulled) => {
+          void cameFromGit(path.relative(v, newest.path), gitIn(v)).then((pulled) => {
             if (pulled) return;
             if (mode === 'open') this.intent('openFile', { path: newest.path, mode: 'auto' });
             else this.intent('exportReady', { path: newest.path, name: newest.name });

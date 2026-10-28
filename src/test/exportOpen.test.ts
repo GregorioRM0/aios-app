@@ -41,3 +41,11 @@ test('the watcher asks git before it opens or badges anything, and honours off',
   assert.ok(ask > 0 && ask < w.indexOf("'openFile'") && ask < w.indexOf("'exportReady'"), 'git is asked first');
   assert.match(w, /if \(pulled\) return;/);
 });
+
+test('git runs from the vault root with fsmonitor and hooks off — never from the export\'s own folder', () => {
+  const host = fs.readFileSync('src/main/panelHost.ts', 'utf8');
+  assert.match(host, /'-c', 'core\.fsmonitor=false', '-c', 'core\.hooksPath=' \+ os\.devNull, '-C', vault/);
+  assert.match(host, /GIT_CEILING_DIRECTORIES: ceiling/);
+  assert.match(host, /cameFromGit\(path\.relative\(v, newest\.path\), gitIn\(v\)\)/);
+  assert.doesNotMatch(host, /gitIn\(path\.dirname/);
+});
