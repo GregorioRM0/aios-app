@@ -15,7 +15,8 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { pathToFileURL } from 'url';   // main builds the file:// URL itself — see shell:openPathExternal
 import { classifyForRead } from './preview';   // the fs:read gate (#39)
-import { resolveLinkTargets, revealable, statWithin } from './pathLinks';   // terminal links: open vs reveal
+import { resolveLinkTargets, revealable, statWithin } from './pathLinks';
+import { withToolDirs } from './toolPath';   // #72: Homebrew/uv on every session's PATH   // terminal links: open vs reveal
 import * as pty from 'node-pty';
 import { PanelHost, setPanelLog } from './panelHost';
 import { installMenu } from './menu';
@@ -101,6 +102,8 @@ function termEnv(cmd?: string, name?: string): Record<string, string> {
   delete env.CLAUDE_CODE_CHILD_SESSION;
   env.CLAUDE_CODE_FORCE_SESSION_PERSIST = '1';
   env.AIOS_GLASS_TERM = '1';
+  /* #72 — the folders a login shell adds (Homebrew, ~/.local/bin), so `uv` and friends resolve. */
+  if (process.platform !== 'win32') env.PATH = withToolDirs(env.PATH, os.homedir(), process.platform, (d) => fs.existsSync(d));
   /* WINDOWS ONLY — give a session's output a scrollback the operator can actually reach.
      REPORTED: a Windows operator could not scroll a Claude session at all — she saw one
      screenful and a long answer was unreadable past it. It fails in Windows Terminal too, so it
