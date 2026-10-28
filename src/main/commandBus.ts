@@ -14,6 +14,7 @@ import { ResumeIndex } from './resumeIndex';
 import { supersededName, supersededBody, SUPERSEDED_SUFFIX, SUPERSEDED_KEEP_MS } from '../core/supersede';
 import { resolveSessionName, resolveFormerName, sessionKey } from '../core/nameMatch';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
+import { decideKill, KILL_EXPECT_CAPABILITY } from '../core/killGuard';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
@@ -219,7 +220,7 @@ function healPresence(appVersion: string): void {
     if (presenceVerdict(rec, root, pidAlive) === 'leave') return;   // healthy — someone alive owns it
     if (rec?.pid === root && readPresence() !== undefined) return;  // already ours; do not churn the file
     fs.mkdirSync(path.dirname(presenceFile()), { recursive: true });
-    const body = { surface: MY_SURFACE, pid: root, at: Date.now(), version: appVersion };
+    const body = presenceBody(root, appVersion);
     fs.writeFileSync(presenceFile(), JSON.stringify(body, null, 2) + '\n');
     log(`presence re-claimed: ${MY_SURFACE} root pid ${root} (record named ${rec?.pid === undefined ? 'nobody' : `dead pid ${rec.pid}`})`);
   } catch { /* non-fatal — the next tick tries again */ }
@@ -250,6 +251,13 @@ function healPresence(appVersion: string): void {
  * the other assigns. So the incumbent is left alone while it is alive, and healPresence below
  * closes the remaining orderings (and the crash case, which has no retract at all).
  */
+/* The presence record both writers (announce and heal) emit. `capabilities` lets a writer confirm,
+   against a LIVE pid, what this surface honours beyond the contract — `kill-expect`
+   (core/killGuard): a surface without it ignores `expect` and kills unconditionally. */
+function presenceBody(root: number, appVersion: string): Record<string, unknown> {
+  return { surface: MY_SURFACE, pid: root, at: Date.now(), version: appVersion, capabilities: [KILL_EXPECT_CAPABILITY] };
+}
+
 function announcePresence(appVersion: string): void {
   /* PACKAGED BUILDS ONLY, and this is not tidiness — it prevents a dev instance from corrupting
    * the record the real App depends on. Observed 2026-08-14: a dev App launched from a terminal
@@ -275,7 +283,7 @@ function announcePresence(appVersion: string): void {
       log(`presence left to pid ${rec?.pid} — it is still running, and ours (${root}) must not displace a live surface`);
       return;
     }
-    const body = { surface: MY_SURFACE, pid: root, at: Date.now(), version: appVersion };
+    const body = presenceBody(root, appVersion);
     fs.writeFileSync(path.join(dir, `${MY_SURFACE}.json`), JSON.stringify(body, null, 2) + '\n');
     log(`announced presence: ${MY_SURFACE} root pid ${root}${root === process.pid ? '' : ` (self ${process.pid})`}`);
   } catch (e) {
@@ -879,7 +887,7 @@ function contract4Args(req: BusRequest): { args: string[] } | { error: string } 
   return { args: settingsToFile(contract4LaunchArgs({ effort: req.effort, advisorModel: advisorModelFor(req.advisor, req.advisorRung) })) };
 }
 
-function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
+function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest, body: Record<string, unknown>): void {
   try {
     if (req.fieldError) {
       /* Contract 4: a field we cannot honour is dead-lettered NAMING it, never silently dropped —
@@ -902,6 +910,14 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
       let t = targetByName(req.name);
       const renamed = t ? undefined : resolveFormerName(req.name, aios.listRunningAgents());
       if (!t && renamed) t = targetByName(renamed);
+      /* A conditional kill (core/killGuard): the writer said what it saw, and a session that no
+         longer matches is left running. Checked here, immediately before the SIGTERM, which
+         narrows the window between the writer's check and the kill (it does not remove it).
+         The guard comes from `body`, the request as claimed; the held file is re-read only to
+         confirm it did not change, so a rewrite without `expect` cannot turn into a plain kill.
+         decideKill refuses on ANY failure, re-reading the request included. */
+      const verdict = decideKill(body, () => fs.readFileSync(heldPath, 'utf8'), t, () => (t ? readTranscript(t.sessionId) : ''));
+      if (!verdict.kill) { markUndelivered(heldPath, req, verdict.reason); return; }
       if (t) { try { process.kill(t.pid, 'SIGTERM'); } catch { /* already gone */ } }
       emit(win(), 'closeByName', { name: t ? t.name : req.name });
       log(`kill '${req.name}'${t ? `${renamed ? ` → renamed '${t.name}'` : ''} (pid ${t.pid})`
@@ -943,7 +959,7 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
  * RENAME out of the watch glob, stamping who holds it. Returns undefined when we
  * deliberately left it alone.
  */
-function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number } | undefined {
+function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number; body: Record<string, unknown> } | undefined {
   let raw: string;
   try { raw = fs.readFileSync(fsPath, 'utf8'); } catch { return undefined; } // gone / mid-write
   let ageMs = 0;
@@ -981,7 +997,7 @@ function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number 
     fs.writeFileSync(fsPath, JSON.stringify(body, null, 2) + '\n');
     fs.renameSync(fsPath, heldPath);   // atomic: exactly one surface can win
   } catch { return undefined; }        // lost the race, or it vanished — either is fine
-  return { heldPath, req, at };
+  return { heldPath, req, at, body: bodyForTried };
 }
 
 /** Set by initCommandBus so the parse-grace re-check can reach the same pipeline. */
@@ -1000,7 +1016,7 @@ function consume(win: () => BrowserWindow | undefined, fsPath: string): void {
   if (!held0) return;
   const held = { ...held0, req: withRealName(held0.req) };
   if (held.req.action === 'send') void runSend(win, held.heldPath, held.req, held.at);
-  else runImmediate(win, held.heldPath, held.req);
+  else runImmediate(win, held.heldPath, held.req, held.body);
 }
 
 /** Recover `.holding` files left by a crash — but never steal a live sibling's hold. */
@@ -1046,7 +1062,7 @@ function adoptHolds(win: () => BrowserWindow | undefined, dir: string): void {
     try { fs.writeFileSync(p, JSON.stringify(body, null, 2) + '\n'); } catch { /* keep going */ }
     const real = withRealName(req);
     if (real.action === 'send') void runSend(win, p, real, Date.now());
-    else runImmediate(win, p, real);
+    else runImmediate(win, p, real, body);
   }
 }
 

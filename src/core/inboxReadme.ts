@@ -107,6 +107,20 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
 
     { "action": "kill", "name": "designer" }
 
+- **Conditional kill** (\`expect\`, AIOS App): say what you saw when you decided the session was done, and the App checks it immediately before killing. That reduces the risk of killing a session someone just wrote to; it does not remove it. If the session changed since, it is **left running** and the request is dead-lettered naming why (\`kill refused …\`). Keys, each optional but at least one:
+  - \`sessionId\` — the registry's.
+  - \`status\` — normally \`idle\`.
+  - \`idleSince\` — the timestamp of the last user/assistant record you saw, copied as the transcript has it: full date and time with \`Z\` or an offset, at most milliseconds.
+
+  The App also refuses when it cannot verify:
+  - an unknown key or an unusable value;
+  - a request it cannot re-read;
+  - with \`idleSince\`, a transcript that is unreadable, has a line that is not JSON, ends mid-line, has a turn without a valid timestamp, or has no turn at all.
+
+  **Check support first.** Glass and older Apps ignore \`expect\` and kill unconditionally. The App lists \`"kill-expect"\` under \`capabilities\` in \`~/.aios/surfaces/app.json\`, valid only while that file's \`pid\` is running. Send a conditional kill only when you see it, and address it with \`"surface": "app"\` so no other surface takes it.
+
+      { "action": "kill", "name": "designer", "surface": "app", "expect": { "sessionId": "<uuid>", "status": "idle", "idleSince": "2026-01-01T09:00:00.000Z" } }
+
 **Contract 4 — optional fields** (verbs unchanged; a contract-3 request behaves exactly as before):
 
 - \`from\` (send, resume) — the registry name of the session that wrote the request. A claim, never an identity: it is recorded with the delivery so the receiver can see who sent it, and an unusable value is ignored.
