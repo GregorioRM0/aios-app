@@ -108,7 +108,7 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
 
     { "action": "kill", "name": "designer" }
 
-- **Conditional kill** (\`expect\`, AIOS App): say what you saw when you decided the session was done, and the App checks it immediately before killing. That reduces the risk of killing a session someone just wrote to; it does not remove it. If the session changed since, it is **left running** and the request is dead-lettered naming why (\`kill refused …\`). Keys, each optional but at least one:
+- **Conditional kill** (\`expect\`, AIOS App): say what you saw when you decided the session was done, and the App checks it immediately before killing. That reduces the risk of killing a session someone just wrote to; it does not remove it. If the session changed since, it is **left running** and the request is archived with the reason in \`_archive/<name>-<time>.refused.json\` (\`_refused.reason\`, kept a week). That is the guard working, so it is not a dead letter. A malformed \`expect\`, or a request rewritten after it was claimed, is still dead-lettered (\`kill refused …\`). Keys, each optional but at least one:
   - \`sessionId\` — the registry's.
   - \`status\` — normally \`idle\`.
   - \`idleSince\` — the timestamp of the last user/assistant record you saw, copied as the transcript has it: full date and time with \`Z\` or an offset, at most milliseconds.

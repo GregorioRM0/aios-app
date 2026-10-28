@@ -66,7 +66,10 @@ test('the dispatcher sends the SIGTERM only after decideKill, and has no other p
   const guard = branch.indexOf('decideKill(');
   const sigterm = branch.indexOf("process.kill(t.pid, 'SIGTERM')");
   assert.ok(guard > 0 && sigterm > guard, 'decideKill runs before the SIGTERM');
-  assert.match(branch.slice(guard, sigterm), /if \(!verdict\.kill\) \{ markUndelivered\([^)]*\); return; \}/, 'a refusal dead-letters and returns');
+  const refusal = branch.slice(guard, sigterm);
+  assert.match(refusal, /if \(!verdict\.kill\) \{[\s\S]*?return;\s*\}/, 'a refusal returns before the SIGTERM');
+  assert.match(refusal, /if \(verdict\.byExpect\) \{[^\n]*archiveRefusedKill\(heldPath, verdict\.reason\); \}\s*else markUndelivered\(heldPath, req, verdict\.reason\);/,
+    '#70: refused by expect → archived; any other refusal → dead letter');
   assert.equal((src.match(/process\.kill\(t\.pid, 'SIGTERM'\)/g) || []).length, 1, 'one SIGTERM site');
   assert.doesNotMatch(branch, /catch \{ \/\* parsed once already \*\/ \}/, 'the swallowed re-read is gone');
 });
@@ -246,4 +249,14 @@ test('the inbox README tells writers to check the capability and pin the surface
   assert.match(src, /"kill-expect"/);
   assert.match(src, /"surface": "app"/);
   assert.match(src, /reduces the risk/);
+});
+
+test('#70: only a refusal BY EXPECT is marked for archiving — malformed and rewritten stay dead letters', () => {
+  const busy = { status: 'busy', sessionId: SID };
+  const byExpect = decideKill(GUARDED, held(GUARDED), busy, () => transcript) as { byExpect?: boolean };
+  assert.equal(byExpect.byExpect, true, 'the session moved on: the guard worked');
+  const rewritten = decideKill(GUARDED, held({}), busy, () => transcript) as { byExpect?: boolean };
+  assert.equal(rewritten.byExpect, undefined, 'a rewritten request is a real problem');
+  const unreadable = decideKill(GUARDED, () => '', busy, () => transcript) as { byExpect?: boolean };
+  assert.equal(unreadable.byExpect, undefined);
 });

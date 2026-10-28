@@ -169,7 +169,10 @@ export function lastTurnAt(transcript: string): LastTurn {
   return { ok: true, at: last };
 }
 
-export type KillVerdict = { kill: true } | { kill: false; reason: string };
+/* `byExpect`: refused because the session no longer matches what the writer saw. That is the guard
+   doing its job, not a lost message, so the bus archives it rather than dead-lettering it (a dead
+   letter is surfaced by /today as work still owed). Every other refusal stays a dead letter. */
+export type KillVerdict = { kill: true } | { kill: false; reason: string; byExpect?: boolean };
 
 /**
  * Decide, at the moment of the kill, whether the target still matches what the writer saw.
@@ -218,5 +221,5 @@ export function decideKill(
   const same = heldUnchanged(original, readHeld);
   if (!same.ok) return { kill: false, reason: `kill refused — ${same.reason}; nothing was killed` };
   const v = killVerdict(ex.expect, target, transcript);
-  return v.kill ? v : { kill: false, reason: `kill refused by expect — ${v.reason}; the session was left running` };
+  return v.kill ? v : { kill: false, byExpect: true, reason: `kill refused by expect — ${v.reason}; the session was left running` };
 }

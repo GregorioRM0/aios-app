@@ -564,6 +564,25 @@ function archiveSuperseded(heldPath: string, by: string): void {
   } catch { try { fs.unlinkSync(heldPath); } catch { /* already gone */ } }
 }
 
+/* #70 — a kill its own `expect` refused. Kept beside superseded messages (same week-long keep), so
+   the writer can still read why, and out of the live inbox, so nothing reads it as owed. */
+const REFUSED_SUFFIX = '.refused.json';
+function archiveRefusedKill(heldPath: string, reason: string): void {
+  try {
+    const dir = path.join(path.dirname(heldPath), '_archive');
+    fs.mkdirSync(dir, { recursive: true });
+    const body = JSON.parse(fs.readFileSync(heldPath, 'utf8')) as Record<string, unknown>;
+    body._refused = { reason, at: Date.now(), surface: MY_SURFACE };
+    const base = path.basename(heldPath).replace(/\.json.*$/, '');
+    fs.writeFileSync(path.join(dir, `${base}-${Date.now()}${REFUSED_SUFFIX}`), JSON.stringify(body, null, 2) + '\n');
+    fs.unlinkSync(heldPath);
+    for (const n of fs.readdirSync(dir)) {
+      if (!n.endsWith(REFUSED_SUFFIX)) continue;
+      try { if (Date.now() - fs.statSync(path.join(dir, n)).mtimeMs > SUPERSEDED_KEEP_MS) fs.unlinkSync(path.join(dir, n)); } catch { /* gone */ }
+    }
+  } catch { markUndelivered(heldPath, null, reason); }   // could not archive: the dead letter still records it
+}
+
 /** Hand a claim back for a sibling surface/window to try, bounded by `_releases`. */
 function releaseForSibling(heldPath: string, req: BusRequest, reason: string): boolean {
   if (!shouldReleaseForSibling(req.releases ?? 0, MAX_RELEASES)) return false;
@@ -1013,7 +1032,13 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
          confirm it did not change, so a rewrite without `expect` cannot turn into a plain kill.
          decideKill refuses on ANY failure, re-reading the request included. */
       const verdict = decideKill(body, () => fs.readFileSync(heldPath, 'utf8'), t, () => (t ? readTranscript(t.sessionId) : ''));
-      if (!verdict.kill) { markUndelivered(heldPath, req, verdict.reason); return; }
+      if (!verdict.kill) {
+        /* #70, on top: a kill refused because the session moved on is the guard working — archived
+           with its reason, not dead-lettered as work still owed. Malformed or rewritten → dead letter. */
+        if (verdict.byExpect) { log(`kill '${req.name}' — ${verdict.reason} (archived)`); archiveRefusedKill(heldPath, verdict.reason); }
+        else markUndelivered(heldPath, req, verdict.reason);
+        return;
+      }
       if (t) { try { process.kill(t.pid, 'SIGTERM'); } catch { /* already gone */ } }
       emit(win(), 'closeByName', { name: t ? t.name : req.name });
       log(`kill '${req.name}'${t ? `${renamed ? ` → renamed '${t.name}'` : ''} (pid ${t.pid})`
