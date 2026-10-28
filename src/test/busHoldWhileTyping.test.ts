@@ -55,7 +55,7 @@ test('text after the last Enter in one chunk is a new draft', () => {
 
 test('the bus holds while composing or within the quiet window, and not otherwise', () => {
   assert.equal(operatorComposing(undefined, 0), false);
-  assert.equal(operatorComposing({ composing: true, at: 0 }, 10 * 60_000), true);
+  assert.equal(operatorComposing({ composing: true, at: 0 }, 2 * 60_000), true, "a draft paused 2 min still holds (the 3-min cutoff is pinned below)");
   assert.equal(operatorComposing({ composing: false, at: 0 }, COMPOSE_QUIET_MS - 1), true);
   assert.equal(operatorComposing({ composing: false, at: 0 }, COMPOSE_QUIET_MS), false);
 });
