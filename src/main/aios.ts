@@ -17,6 +17,8 @@ import { isRunnable, unverifiable, parsePlan, triage, diagnosticsReport, type To
 import { deriveOnboarding, type OnboardingDerived } from '../core/onboarding';
 import { FINISH_SETUP_IDS, needsFinishSetup, runFinishSetup, pluginRepairArgv, missingHooks, oneLine, type FinishSetupOutcome } from '../core/finishSetup';
 import { pickGit } from '../core/gitResolve';
+import { recordedStart, sameProcessStart } from '../core/procStart';
+import { processStartMs, cachedStartMs } from './procStartProbe';
 import { exportOpenMode, type ExportOpenMode } from './exportOpen';
 import { normalizeNotifyLevel, sessionKey, type NotifyLevel } from '../core/attention';
 import { isWritten, isPersonalized, missingEvidence, hasPlaceholders, type PersonalizationEvidence } from '../core/personalized';
@@ -406,10 +408,21 @@ export function listRunningAgents(): RunningAgent[] {
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return []; }
   const out: RunningAgent[] = [];
   for (const f of files) {
-    let d: { pid?: number; name?: string; status?: string; sessionId?: string; cwd?: string; startedAt?: number; updatedAt?: number; waitingFor?: string; statusUpdatedAt?: number; kind?: string; entrypoint?: string; formerNames?: unknown };
+    let d: { pid?: number; name?: string; status?: string; sessionId?: string; cwd?: string; startedAt?: number; updatedAt?: number; waitingFor?: string; statusUpdatedAt?: number; kind?: string; entrypoint?: string; formerNames?: unknown; procStart?: unknown; procStartFt?: unknown };
     try { d = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
     const pid = Number(d?.pid ?? path.basename(f, '.json'));
     if (!Number.isInteger(pid) || pid <= 0 || !isAlive(pid)) continue;
+    /* #78 — A REUSED PID IS NOT THE SESSION. The registry file outlives its process, and once the
+       OS hands that pid to something else (Windows does so quickly) the entry read as a live
+       session and `resume` had nothing to reopen. The entry records when ITS process started; a
+       cached start time that disagrees means the pid belongs to another process now. Never
+       waits: an uncached pid starts a probe and keeps the old answer until the next poll. */
+    const recorded = recordedStart(d);
+    if (recorded !== undefined) {
+      const actual = cachedStartMs(pid);
+      if (actual === undefined) void processStartMs(pid);
+      else if (!sameProcessStart(recorded, actual)) continue;
+    }
     out.push({
       pid,
       name: String(d?.name ?? '').trim() || '(unnamed)',
@@ -524,6 +537,14 @@ export function sessionScope(): SessionScope {
   const scope: SessionScope = { paneSessionIds, primaries: primaryNames(), busNames, roots, caseInsensitive: process.platform !== 'linux' };
   scopeCache = { at: Date.now(), key, scope };
   return scope;
+}
+
+/** #78, awaited: is the registry entry for `pid` still that process? Unknown → true (old behaviour). */
+export async function registryPidIsSession(pid: number): Promise<boolean> {
+  let d: { procStart?: unknown; procStartFt?: unknown } = {};
+  try { d = JSON.parse(fs.readFileSync(path.join(claudeConfigDir(), 'sessions', `${pid}.json`), 'utf8')); } catch { return true; }
+  const recorded = recordedStart(d);
+  return recorded === undefined ? true : sameProcessStart(recorded, await processStartMs(pid));
 }
 
 function isAlive(pid: number): boolean {

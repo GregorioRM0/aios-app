@@ -130,7 +130,7 @@ function fnBody(name: string): string {
  *  `resume` it hands off to (split out so the name lookup can read transcripts without blocking
  *  the bus). Read together because the seams below span both. */
 function runImmediateBody(): string {
-  const body = fnBody('runImmediate') + '\n' + fnBody('runResume');
+  const body = fnBody('runImmediate') + '\n' + fnBody('resumeOrReveal') + '\n' + fnBody('runResume');
   // Controls: the stripper must have stripped, and must not have eaten the code.
   assert.doesNotMatch(body, /ALREADY AWAKE/, 'the comment stripper did not strip');
   assert.match(body, /req\.action === 'resume'/, 'the comment stripper ate the code');
@@ -147,7 +147,7 @@ test('no path leaves runImmediate without disposing the held request', () => {
   /* Handing the request to runResume is a transfer of ownership, not a leak: runResume disposes
      it on every path, which this same loop checks because its body is part of `body`. */
   const disposes = (s: string) =>
-    /unlinkSync\(heldPath\)|markUndelivered\(heldPath|runResume\(win, heldPath, req\)|launchCwd\(heldPath, req\)/.test(s);   // launchCwd dead-letters when it returns null
+    /unlinkSync\(heldPath\)|markUndelivered\(heldPath|runResume\(win, heldPath, req\)|resumeOrReveal\(win, heldPath, req\)|runSend\(win, heldPath|launchCwd\(heldPath, req\)/.test(s);   // launchCwd dead-letters when it returns null
   let from = 0, seen = 0;
   for (;;) {
     const at = body.indexOf('return', from);

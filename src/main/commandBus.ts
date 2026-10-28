@@ -883,6 +883,33 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
  * hands it off and keeps claiming other requests. The request file stays held until this lands,
  * exactly as a deferred `send` does, so nothing is lost if the lookup takes a while on a cold index.
  */
+/** `resume`: reveal-and-deliver when the session is really running, else reopen it (#78). */
+async function resumeOrReveal(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): Promise<void> {
+  /* ALREADY AWAKE → reveal and deliver, never reopen. The caller asked for a specific
+     someone; that someone is already running, so resuming would create a SECOND process for
+     one identity — the duplication this verb exists to avoid, arrived at from the other
+     side. The prompt still has to land, so this routes through the same send path a
+     `{"action":"send"}` would take. */
+  let live = targetByName(req.name);
+  /* #78: a registry entry whose pid now belongs to another process is NOT running — awaited
+     here, because this is the decision that used to swallow a resume whole. */
+  if (live && !(await aios.registryPidIsSession(live.pid))) {
+    log(`resume '${req.name}' — registry pid ${live.pid} now belongs to another process; reopening`);
+    live = undefined;
+  }
+  if (live) {
+    /* Background, like every other bus reveal. A worker that finishes reports to its
+       coordinator with exactly this request, so without the flag every finished worker pulled
+       the operator's screen onto the coordinator's tab, mid-sentence. */
+    emit(win(), 'focusByName', { name: req.name, background: true });
+    log(`resume '${req.name}' — already running, revealing and delivering${req.effort || req.advisor ? ' (effort/advisor NOT applied: a running session cannot change them)' : ''}`);
+    if (req.prompt) void runSend(win, heldPath, { ...req, action: 'send' }, Date.now());
+    else try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+    return;
+  }
+  await runResume(win, heldPath, req);
+}
+
 async function runResume(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): Promise<void> {
   try {
     const sid = await resumeIdFor(req.name, process.env.CLAUDE_CODE_SESSION_ID);
@@ -992,24 +1019,8 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
       log(`kill '${req.name}'${t ? `${renamed ? ` → renamed '${t.name}'` : ''} (pid ${t.pid})`
         : ' — no live session has that name or was renamed from it; closed any pane of that name'}`);
     } else if (req.action === 'resume') {
-      /* ALREADY AWAKE → reveal and deliver, never reopen. The caller asked for a specific
-         someone; that someone is already running, so resuming would create a SECOND process for
-         one identity — the duplication this verb exists to avoid, arrived at from the other
-         side. The prompt still has to land, so this routes through the same send path a
-         `{"action":"send"}` would take. */
-      const live = targetByName(req.name);
-      if (live) {
-        /* Background, like every other bus reveal. A worker that finishes reports to its
-           coordinator with exactly this request, so without the flag every finished worker pulled
-           the operator's screen onto the coordinator's tab, mid-sentence. */
-        emit(win(), 'focusByName', { name: req.name, background: true });
-        log(`resume '${req.name}' — already running, revealing and delivering${req.effort || req.advisor ? ' (effort/advisor NOT applied: a running session cannot change them)' : ''}`);
-        if (req.prompt) void runSend(win, heldPath, { ...req, action: 'send' }, Date.now());
-        else try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
-        return;
-      }
-      void runResume(win, heldPath, req);
-      return;              // runResume owns the held file from here
+      void resumeOrReveal(win, heldPath, req);
+      return;              // resumeOrReveal owns the held file from here
     } else if (targetByName(req.name)) {
       /* Never duplicate — but never steal the screen either. An agent's request is not the operator
          asking to look somewhere: the pane is marked, and the operator chooses when to switch. */
