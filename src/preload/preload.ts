@@ -95,6 +95,11 @@ contextBridge.exposeInMainWorld('glassShell', {
   setupCheck: (): Promise<{ id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[]> => ipcRenderer.invoke('setup:check'),
   // doctor: run a check's headless repair, then re-run the same check as proof
   doctorRepair: (id: string): Promise<{ id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean } | null> => ipcRenderer.invoke('doctor:repair', id),
+  /* Finish setup: skills → plugin → spawn → hooks, run by the App and re-checked; stops at the first
+     that does not come back green (`stoppedAt`), leaving the rest as they were. */
+  finishSetup: (): Promise<{ results: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; canRepair: boolean }[]; ok: boolean; stoppedAt?: string; reason?: string }> => ipcRenderer.invoke('doctor:finishSetup'),
+  // the wiring still missing, each with ONE pasteable line (no `!`, no wrap) — the Next steps fallback
+  wiringLeft: (): Promise<{ id: string; label: string; message: string; cmd?: string }[]> => ipcRenderer.invoke('doctor:wiringLeft'),
   // the Health card's rows (framework · vault · account · skills · claude · gh)
   /* "Having issues?" — the triage entry. Returns the next ACTION per failing check (run a
      command / open the vendor page / send a report), never a screen of findings. */
@@ -112,7 +117,7 @@ contextBridge.exposeInMainWorld('glassShell', {
   connectorsDelete: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('connectors:delete', id),
   connectorsAddCustom: (input: string, service?: string): Promise<ConnResult & { id?: string }> => ipcRenderer.invoke('connectors:addCustom', input, service),
   // the Onboarding flow: sequenced onboarding stepper (steps + which one is active)
-  onboardingState: (): Promise<{ steps: { id: string; done: boolean; state: 'done' | 'active' | 'locked'; required: string[]; optional: string[]; skipped?: boolean; checks: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[] }[]; current: number }> => ipcRenderer.invoke('onboarding:state'),
+  onboardingState: (): Promise<{ steps: { id: string; done: boolean; state: 'done' | 'active' | 'locked'; required: string[]; optional: string[]; skipped?: boolean; checks: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[] }[]; current: number; finishPending?: string[] }> => ipcRenderer.invoke('onboarding:state'),
   onboardingSkip: (id: string): Promise<unknown> => ipcRenderer.invoke('onboarding:skip', id),
   // PAT lane of the GitHub step — stored via git's credential helper, never echoed
   onboardingStorePat: (pat: string): Promise<'verified' | 'unverified' | 'failed'> => ipcRenderer.invoke('onboarding:storePat', pat),

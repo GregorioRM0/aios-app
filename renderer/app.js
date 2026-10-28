@@ -6993,12 +6993,7 @@ function openHomeTab() {
       grid.appendChild(c);
     };
     const iso = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
-    card('sun', t('home.planDay'), t('home.planDayHint'), async () => {
-      // dual-use: open today's note if it already exists, else run /aios:today to create it
-      const existing = await window.glassShell.resolveNote(iso());
-      if (existing) window.glassShell.panelSend({ type: 'openDay', date: iso() });
-      else void runWhere('/aios:today', 'today');
-    });
+    card('sun', t('home.planDay'), t('home.planDayHint'), () => void planMyDay());
     card('sparkles', t('home.ask'), t('home.askHint'), () => { window.glassShell.panelSend({ type: 'cmd', command: 'aios.askAios', args: [] }); });
     card('md', t('home.todayNote'), t('home.todayNoteHint'), () => { window.glassShell.panelSend({ type: 'openDay', date: iso() }); });
     card('moon', t('home.closeDay'), t('home.closeDayHint'), () => void createPane(ritual('close-day', '/aios:close-day')));
@@ -7013,6 +7008,98 @@ function openHomeTab() {
     // (no "all shortcuts" link — Home renders the complete set; the same sheet is
     //  still reachable from Help → Keyboard shortcuts and ⌘/)
   });
+}
+
+/** Plan my day, dual-use: open today's note if it already exists, else run /aios:today to create
+ *  it. One function, so Home and the Next steps page cannot drift into two meanings of the button. */
+async function planMyDay() {
+  const d = new Date();
+  const iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const existing = await window.glassShell.resolveNote(iso);
+  if (existing) window.glassShell.panelSend({ type: 'openDay', date: iso });
+  else void runWhere('/aios:today', 'today');
+}
+
+/* ── Next steps — what to do once the AIOS is installed ─────────────────────────────────────
+   Opens on its own the moment the setup stepper reaches done, and from the done screen after.
+   It answers the question every newcomer asks right then ("…and now what?") in four plain
+   sections, and — ONLY when some wiring is still missing — puts each remaining command at the top
+   as ONE physical line with a Copy button. That fallback exists because of how first installs
+   stalled: a command hard-wrapped by the terminal arrived as two commands, and `!`-prefixed lines
+   were pasted into a PowerShell where `!` means nothing. The lines come from the doctor
+   (wiringLeft), already flattened and `!`-free, in the dialect of the shell they will be typed in. */
+function openNextStepsTab() {
+  openToolTab('::nextsteps', t('nextSteps.title'), async (body) => {
+    const wrap = el('div', 'tool nextsteps');
+    body.appendChild(wrap);
+    wrap.appendChild(el('div', 'tbig', t('nextSteps.title')));
+    wrap.appendChild(el('div', 'tsub', t('nextSteps.lead')));
+    const section = (cls, title, text) => {
+      const sec = el('section', 'ns-sect' + (cls ? ' ' + cls : ''));
+      sec.appendChild(el('h2', 'ns-t', title));
+      if (text) sec.appendChild(el('p', 'ns-b', text));
+      wrap.appendChild(sec);
+      return sec;
+    };
+    const btn = (parent, label, fn, primary) => {
+      const b = el('button', 'vbtn' + (primary ? ' primary' : ''), label);
+      b.addEventListener('click', fn);
+      parent.appendChild(b);
+      return b;
+    };
+
+    // What is still not wired comes FIRST when there is any — it is the only part that blocks.
+    let left = [];
+    try { left = await window.glassShell.wiringLeft(); } catch { left = []; }
+    if (left.length) {
+      const sec = section('ns-left', t('nextSteps.leftTitle'), t('nextSteps.leftBody'));
+      sec.appendChild(el('p', 'ns-b', IS_WIN ? t('nextSteps.leftHowWin') : t('nextSteps.leftHowPosix')));
+      for (const w of left) {
+        const row = el('div', 'ns-cmdrow');
+        row.appendChild(el('div', 'ns-cmdlab', w.label + ' — ' + w.message));
+        if (w.cmd) {
+          const line = el('div', 'ns-cmdline');
+          // nowrap + horizontal scroll: what is SHOWN is one line too, so nobody retypes a wrap
+          line.appendChild(el('code', 'ns-cmd', w.cmd));
+          btn(line, t('nextSteps.copy'), () => {
+            void window.glassShell.copyText(w.cmd);
+            toast(t('nextSteps.copied'));
+          });
+          row.appendChild(line);
+        } else {
+          // the label line above already says what is wrong; this only says no line can fix it
+          row.appendChild(el('div', 'step-note', t('nextSteps.noCmd')));
+        }
+        sec.appendChild(row);
+      }
+      const acts = el('div', 'step-acts');
+      const again = btn(acts, t('finish.go'), async () => {
+        again.disabled = true; again.textContent = t('finish.working');
+        try { await window.glassShell.finishSetup(); } catch { /* the rebuild below shows what is left */ }
+        openNextStepsTab();   // already open → rebuilds in place with what is left now
+      }, true);
+      sec.appendChild(acts);
+    }
+
+    const tour = section('', t('nextSteps.tourTitle'), t('nextSteps.tourBody'));
+    const tourActs = el('div', 'step-acts');
+    btn(tourActs, t('setup.fullTour'), () => void createPane(
+      ritual('cold-start', '/aios:cold-start-interview show me the full tour')), true);
+    tour.appendChild(tourActs);
+
+    const rhythm = section('', t('nextSteps.rhythmTitle'), t('nextSteps.rhythmBody'));
+    const rActs = el('div', 'step-acts');
+    btn(rActs, t('home.planDay'), () => void planMyDay());
+    btn(rActs, t('home.closeDay'), () => void createPane(ritual('close-day', '/aios:close-day')));
+    rhythm.appendChild(rActs);
+
+    section('', t('nextSteps.keepOpenTitle'), t('nextSteps.keepOpenBody'));
+
+    const phone = section('', t('nextSteps.phoneTitle'), t('nextSteps.phoneBody'));
+    const pActs = el('div', 'step-acts');
+    btn(pActs, t('nextSteps.phoneGo'), () => openSettingsTab());
+    phone.appendChild(pActs);
+  }, { rebuild: true });
 }
 
 /* ── tool tabs: Settings + Setup (synthetic viewer panes) ─────────────────── */
@@ -7033,6 +7120,7 @@ const TOOL_TAB_ICONS = {
   '::shortcuts': IS_MAC ? 'cmdKey' : 'keyboard',     // exactly what the title-bar button shows
   '::settings': 'gear',
   '::setup': 'wrench',
+  '::nextsteps': 'rocket',
   '::plugins': 'plug',
   '::designer': 'design',
 };
@@ -7776,7 +7864,11 @@ function openSetupTab() {
     head.appendChild(recheck);
 
     let prevDone = null;   // step ids done on the previous paint → animate fresh completions once
-    let prevCurrent = null;   // the active step on the previous paint → bring a NEW next step into view once
+    /* The active step index on the previous paint. TWO readers, one variable (#85 and #84 each
+       added one): bring a NEW next step into view once, and open Next steps once when the install
+       "just finished". The finished-check must read it BEFORE the focus block updates it. */
+    let prevCurrent = null;
+    let finishPending = [];   // wiring ids Finish setup would fix now (empty → no panel)
     let painting = false;
     /* THE ONE CONVERSATION WORTH THE BEST MODEL — and the PRIMARY button is the one that has to
        act on that, which is where the first version of this went wrong.
@@ -7869,6 +7961,12 @@ function openSetupTab() {
          interview closes on "Welcome to The AIOS" and anything firing after that goodbye is the
          post-setup defect Front A just removed three instances of. Asking for it here would
          re-add a fourth from a different repo. */
+      /* THE WIRING IS THE APP'S. This session runs in auto mode, whose classifier refuses exactly the
+         four installs SETUP.md asks of it (skills, plugin, the spawn wrapper in the shell profile, the
+         hooks in settings.json) — with no dialog, so a refused session falls back to handing over `!`
+         lines to paste, which is where first installs stalled. The App runs those four itself behind
+         a consented click (Finish setup), so a refusal here points there instead of at a terminal. */
+      + 'The App wires the skills, the plugin, the spawn wrapper and the hooks itself. If any of those is refused here, do not hand me commands to paste; tell me to press Finish setup in the App. '
       + 'Work through it with me interactively.', cwd, 'auto', model);
     };
 
@@ -7895,6 +7993,55 @@ function openSetupTab() {
       return b;
     };
     const cmdHint = (parent, cmd) => { if (cmd) parent.appendChild(el('div', 'step-cmd', '$ ' + cmd)); };
+
+    /* ── Finish setup — the App wires what the setup session is not allowed to ──────────────────
+       The setup session runs in auto mode, and auto mode refuses the four installs SETUP.md asks of
+       it (skills, plugin, the spawn wrapper, the hooks) without showing a dialog — so it used to end
+       by handing the operator `!` lines to paste. The App runs those same installers itself, after
+       a click on a button whose text names every change. Shown only when the framework exists and
+       something is still amber (`st.finishPending`, decided in main by core/finishSetup.ts), so an
+       operator whose machine is already wired never sees it.
+       The last run's outcome lives HERE, outside the DOM: the run ends in a repaint, and a message
+       written into the panel would be wiped by the very repaint that proves the result. */
+    let lastFinish = null;
+    let finishing = false;
+    function finishSetupEl(pending) {
+      const box = el('div', 'setup-finish');
+      box.appendChild(el('div', 'setup-finish-t', t('finish.title')));
+      box.appendChild(el('div', 'step-sub', t('finish.intro')));
+      const ul = el('ul', 'setup-finish-list');
+      for (const id of pending) ul.appendChild(el('li', '', t('finish.change.' + id)));
+      box.appendChild(ul);
+      box.appendChild(el('div', 'step-note', t('finish.backup')));
+      const acts = el('div', 'step-acts');
+      const go = el('button', 'vbtn primary', finishing ? t('finish.working') : t('finish.go'));
+      go.disabled = finishing;
+      const out = el('div', 'setup-finish-out');
+      out.setAttribute('role', 'status');
+      out.setAttribute('aria-live', 'polite');
+      if (lastFinish && !lastFinish.ok) {
+        const at = (lastFinish.results || []).find((x) => x.id === lastFinish.stoppedAt);
+        out.appendChild(el('div', 'step-note', t('finish.stopped', { what: at ? at.label : (lastFinish.stoppedAt || '?'), why: lastFinish.reason || '' })));
+        const more = el('button', 'vbtn', t('finish.seeNext'));
+        more.addEventListener('click', () => openNextStepsTab());
+        out.appendChild(more);
+      }
+      go.addEventListener('click', async () => {
+        if (finishing) return;
+        finishing = true;
+        go.disabled = true; go.textContent = t('finish.working');
+        let r = null;
+        try { r = await window.glassShell.finishSetup(); } catch { r = null; }
+        finishing = false;
+        lastFinish = r || { ok: false, results: [], reason: '' };
+        if (r && r.ok) toast(t('finish.done'));
+        void paint(true);
+      });
+      acts.appendChild(go);
+      box.appendChild(acts);
+      box.appendChild(out);
+      return box;
+    }
 
     /* quickstart-vs-advanced: ONE primary action per step; the alternate lane
        lives behind the "Advanced" disclosure. Buttons exist only on the ACTIVE
@@ -8078,6 +8225,7 @@ function openSetupTab() {
         rows.appendChild(r);
       }
       bd.appendChild(rows);
+      if (s.id === 'firstrun' && finishPending.length) bd.appendChild(finishSetupEl(finishPending));
       const acts = el('div', 'step-acts');
       const adv = document.createElement('details'); adv.className = 'step-adv';
       /* ADVANCED IS EARNED, NOT OFFERED. Each step's Advanced holds a real alternate lane — per-tool
@@ -8202,12 +8350,19 @@ function openSetupTab() {
          tour` is the trigger phrase the interview promises twice in its own copy (Step 0 and Step
          11's close), so passing it turns a guess into an instruction — and the operator arrives at
          the branch that was actually advertised to them. */
+      const next = el('button', 'vbtn', t('nextSteps.open'));
+      next.addEventListener('click', () => openNextStepsTab());
+      row2.appendChild(next);
       const deepen = el('button', 'vbtn', t('setup.fullTour'));
       deepen.title = t('setup.fullTourHint');
       deepen.addEventListener('click', () => void createPane(
         ritual('cold-start', '/aios:cold-start-interview show me the full tour')));
       row2.appendChild(deepen);
       d.appendChild(row2);
+      /* The interview can make the stepper "done" while the wiring is still amber — exactly the run
+         where the session was refused and the App has not been asked yet. So the done screen offers
+         Finish setup too; otherwise the only place to find it would be a step that no longer renders. */
+      if (finishPending.length) d.appendChild(finishSetupEl(finishPending));
       return d;
     }
 
@@ -8226,6 +8381,7 @@ function openSetupTab() {
         (x.checks || []).map((c) => [c.id, c.status, c.message])]),
       current: st.current,
       tried: [...stepTried].sort(),
+      finish: [st.finishPending || [], lastFinish && lastFinish.stoppedAt, lastFinish && lastFinish.reason, finishing],
       model: modelWorthSuggesting() ? [modelRec && modelRec.value, modelPinned, modelPinLabel] : null,
     });
     let lastSig = '';
@@ -8256,6 +8412,7 @@ function openSetupTab() {
       const sig = renderSig(st);
       if (!force && sig === lastSig && list.childElementCount) return;
       lastSig = sig;
+      finishPending = Array.isArray(st.finishPending) ? st.finishPending : [];
       /* A repaint that discards where the operator was is its own defect, so carry both across:
          the scroll offset, and which Advanced sections were open. */
       const scroller = list.closest('.vbody') || list.parentElement;
@@ -8293,10 +8450,18 @@ function openSetupTab() {
          defect the scroll restore above exists to prevent. Focus is never taken from someone
          typing — a terminal (xterm's textarea), an input or an editor — because the setup session
          is a terminal the operator is talking to while this tab polls beside it. */
+      /* THE INSTALL JUST FINISHED → open Next steps, once. Only on a TRANSITION seen by this tab
+         (prevCurrent is null on the first paint), so an operator who opens Setup on an AIOS that
+         was finished last week is not handed the page again; the done screen keeps a button for it.
+         Computed HERE, before the block below moves prevCurrent on. */
+      const justFinished = prevCurrent !== null && prevCurrent < st.steps.length && st.current >= st.steps.length;
       if (st.current !== prevCurrent) {
         const done = st.current >= st.steps.length;
         const target = done ? list.querySelector('.onboarding-done') : list.querySelector('.step.active');
-        const action = target && (target.querySelector('.step-acts button.primary') || target.querySelector('.step-acts button'));
+        /* The step's OWN buttons: the Finish setup panel (#84) sits inside the step with its own
+           .step-acts and primary button, and must not take the focus meant for the step. */
+        const ownActs = target ? [...target.querySelectorAll('.step-acts')].filter((a) => !a.closest('.setup-finish')) : [];
+        const action = ownActs.map((a) => a.querySelector('button.primary') || a.querySelector('button')).find(Boolean) || null;
         if (target && scroller) {
           scroller.scrollTop = 0;
           (action || target).scrollIntoView({ block: 'nearest' });
@@ -8312,6 +8477,8 @@ function openSetupTab() {
         prevCurrent = st.current;
       }
       prevDone = new Set(st.steps.filter((s) => s.done).map((s) => s.id));
+      prevCurrent = st.current;
+      if (justFinished) openNextStepsTab();
     }
 
     recheck.addEventListener('click', () => void paint(true));
