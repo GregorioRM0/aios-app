@@ -1230,9 +1230,9 @@
   "openExports.open": "Open in a tab",
   "openExports.off": "Off",
   "exports.title": "New exports ({n})",
-  "exports.sub": "Tick the ones to open. Everything listed is then marked seen.",
+  "exports.sub": "Tick the ones to open. The rest stay counted until you open them or mark them seen.",
   "exports.filter": "Filter by name or folder…",
   "exports.confirm": "Open",
-  "exports.markSeen": "Mark all as seen, open nothing",
+  "exports.markSeen": "Mark all as seen",
   "rail.newExports": "{n} new export(s), newest {name}. Click the number to choose which to open."
 }

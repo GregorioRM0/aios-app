@@ -1478,6 +1478,9 @@ body.light .hljs-title, body.light .hljs-type { color: #2f6fd0; }
 .malt { align-self: flex-start; background: transparent; border: 1px solid var(--line); color: var(--subtle);
         border-radius: 7px; padding: 4px 10px; font-size: 11px; cursor: pointer; margin: 8px 0 2px; }
 .malt:hover { border-color: var(--accent); color: var(--ink); }
+.mbtns { display: flex; align-items: center; gap: 8px; }
+.vbtn.malt-foot { color: var(--ink); padding: 6px 12px; }
+.vbtn.malt-foot:hover { border-color: var(--accent); }
 /* A value INHERITED from Claude's default rather than chosen by the operator. NOT dimmed — opacity
    on a ticked box read as "disabled" to a real operator, who saw a working setting and thought it
    was greyed out. A chip after the control carries the meaning instead. */

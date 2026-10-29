@@ -1230,9 +1230,9 @@
   "openExports.open": "Abrir numa aba",
   "openExports.off": "Desligado",
   "exports.title": "Exportações novas ({n})",
-  "exports.sub": "Marque as que quer abrir. Depois, tudo o que está na lista fica como visto.",
+  "exports.sub": "Marque as que quer abrir. As outras continuam contadas até você abri-las ou marcá-las como vistas.",
   "exports.filter": "Filtrar por nome ou pasta…",
   "exports.confirm": "Abrir",
-  "exports.markSeen": "Marcar tudo como visto, sem abrir nada",
+  "exports.markSeen": "Marcar tudo como visto",
   "rail.newExports": "{n} exportação(ões) nova(s), a mais recente {name}. Clique no número para escolher quais abrir."
 }

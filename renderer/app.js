@@ -5994,9 +5994,8 @@ exportBadge.addEventListener('click', (e) => {
   void pickExports();
 });
 /* One new export opens on click. Several open a list, the Resume one: nothing pre-ticked, tick
-   what to open, and confirming marks the whole list seen. Twenty exports are one click and a
-   choice, never twenty tabs, and the count never has to be worked off a file at a time.
-   Esc leaves the count as it was. */
+   what to open. Twenty exports are one click and a choice, never twenty tabs; what is left
+   unopened stays counted, and "Mark all as seen" clears the rest. Esc changes nothing. */
 async function pickExports() {
   if (NEW_EXPORTS.length === 1) { void openViewer(NEW_EXPORTS[0].path); return; }
   if (!NEW_EXPORTS.length) return;
@@ -6009,12 +6008,15 @@ async function pickExports() {
     hint: t('exports.sub'),
     placeholder: t('exports.filter'),
     confirmLabel: t('exports.confirm'),
-    allowEmpty: true,
     altAction: { label: t('exports.markSeen') },
+    altInFoot: true,
   });
   if (!chosen) return;
-  if (!chosen.alt) for (const p of chosen) void openViewer(p);
-  for (const it of items) seenExport(it.value);
+  /* Only what is opened leaves the count: an unticked file is still new. Clearing everything is
+     the explicit "Mark all as seen" (release round: the count vanishing with a file unopened read
+     as a bug). */
+  if (chosen.alt) { for (const it of items) seenExport(it.value); return; }
+  for (const p of chosen) { seenExport(p); void openViewer(p); }
 }
 function paintExportBadge() {
   const n = NEW_EXPORTS.length;
@@ -6412,9 +6414,15 @@ document.getElementById('railSettings').addEventListener('click', () => openSett
 // whole preset, so clicking it took the panel down with it.) From a panel-less layout it
 // also returns you to Full, since that's the only place an explorer can show.
 document.getElementById('railExplorer').addEventListener('click', () => {
+  /* While new exports are counted, the whole button opens their list: the count is the urgent
+     thing and the badge alone is a small target. The ⌘⌥G B chord still toggles the explorer. */
+  if (NEW_EXPORTS.length) { void pickExports(); return; }
+  toggleExplorer();
+});
+function toggleExplorer() {
   if (!hasExplorer()) { preset = lastPanelPreset; xOn = true; } else { xOn = !xOn; }  // from Zen, come back
   applyLayout();
-});
+}
 // The panel is always visible (collapsing it made it hard to get back). The layout
 // preset menu lives in the TITLE BAR (#36) — ⌘1–4 switch presets (native menu accelerators).
 document.getElementById('railLayout').addEventListener('click', (e) => {
@@ -8855,14 +8863,14 @@ async function addMarketplaceFlow() {
    and any other "pick several, then act" flow, so popups read the same everywhere.
    items: [{label, desc?, icon?, value, picked?, dot?}] → resolves an array of values
    (or null on cancel). */
-function checkModal(title, items, { placeholder, hint, confirmLabel, allowEmpty, altAction } = {}) {
+function checkModal(title, items, { placeholder, hint, confirmLabel, allowEmpty, altAction, altInFoot } = {}) {
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
     wrap.className = 'modal-wrap';
     claimModal(wrap, () => done(null));
     wrap.innerHTML = `<div class="modal"><div class="mtitle"></div><div class="msub"></div>
       <input id="checkInput" /><div class="plist"></div>
-      <div class="mfoot"><span class="mhint"></span><button class="vbtn primary mgo"></button></div></div>`;
+      <div class="mfoot"><span class="mhint"></span><span class="mbtns"><button class="vbtn primary mgo"></button></span></div></div>`;
     wrap.querySelector('.mtitle').textContent = title;
     wrap.querySelector('.msub').textContent = hint || '';
     /* An ALTERNATIVE ROUTE, not an item in the list. "Use Claude's own picker instead" was a row
@@ -8875,7 +8883,11 @@ function checkModal(title, items, { placeholder, hint, confirmLabel, allowEmpty,
       alt.textContent = altAction.label;
       if (altAction.hint) alt.title = altAction.hint;
       alt.addEventListener('click', () => { wrap.remove(); resolve({ alt: true }); });
-      wrap.querySelector('.modal').insertBefore(alt, wrap.querySelector('#checkInput'));
+      /* altInFoot: when the alternative is a FINAL answer to the same question (new exports'
+         "Mark all as seen"), it sits beside the confirm button as a real button; above the
+         filter it read as a hint and was missed (release round, 2026-10-28). */
+      if (altInFoot) { alt.className = 'vbtn malt-foot'; wrap.querySelector('.mbtns').insertBefore(alt, wrap.querySelector('.mgo')); }
+      else wrap.querySelector('.modal').insertBefore(alt, wrap.querySelector('#checkInput'));
     }
     wrap.querySelector('.mhint').textContent = t('modal.checkHint');
     const go = wrap.querySelector('.mgo');
@@ -9610,7 +9622,7 @@ function handleChord(e) {
     case 'KeyH': openHomeTab(); return true; // Home is a TAB, not a layout (it used to cycle presets)
     case 'KeyY': window.glassShell.panelSend({ type: 'openDay', date: iso() }); return true;
     case 'KeyG': send('aios.goWithAgents'); return true;
-    case 'KeyB': document.getElementById('railExplorer').click(); return true; // files (Glass parity)
+    case 'KeyB': toggleExplorer(); return true; // files (Glass parity) — always the toggle, even while exports are counted
     case 'Comma': openSettingsTab(); return true;
     case 'Digit8': void openPalette(); return true; // * (shift+8)
     default: return false;

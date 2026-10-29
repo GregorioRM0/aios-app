@@ -67,7 +67,13 @@ test('several new exports open a list, never a tab each, and confirming clears t
   assert.match(fn, /checkModal\(t\('exports\.title'/, 'several open the Resume-style list');
   assert.match(fn, /picked: false/, 'nothing is pre-ticked');
   assert.match(fn, /if \(!chosen\) return;/, 'Esc keeps the count');
-  assert.match(fn, /for \(const it of items\) seenExport\(it\.value\);/, 'confirming marks the whole list seen');
+  assert.match(fn, /if \(chosen\.alt\) \{ for \(const it of items\) seenExport\(it\.value\); return; \}/, 'Mark all as seen clears the list');
+  assert.match(fn, /for \(const p of chosen\) \{ seenExport\(p\); void openViewer\(p\); \}/, 'Open clears only what it opens');
+  assert.doesNotMatch(fn, /allowEmpty: true/, 'Open needs at least one tick');
+  assert.match(fn, /altInFoot: true/, 'Mark all as seen is a footer button beside Open');
+  const rail = app.slice(app.indexOf("getElementById('railExplorer').addEventListener('click'"), app.indexOf('function toggleExplorer()'));
+  assert.match(rail, /if \(NEW_EXPORTS\.length\) \{ void pickExports\(\); return; \}/, 'while counted, the whole button opens the list');
+  assert.match(app, /case 'KeyB': toggleExplorer\(\);/, 'the chord always toggles the explorer');
   const click = app.slice(app.indexOf("exportBadge.addEventListener('click'"), app.indexOf('async function pickExports()'));
   assert.match(click, /void pickExports\(\);/);
   assert.doesNotMatch(click, /openViewer/, 'the count never opens the newest directly any more');
