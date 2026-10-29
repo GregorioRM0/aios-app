@@ -85,8 +85,20 @@ test('a dropped path counts as a draft', () => {
 
 test('a deferral is a timed hold: it never latches a draft the pane did not report', () => {
   const branch = bus.slice(bus.indexOf('sendResult.reason === DEFERRED_TYPING'), bus.indexOf('if (releaseForSibling'));
-  assert.match(branch, /composing: !!prev && prev\.composing, at: Date\.now\(\)/);
+  assert.match(branch, /composing: !!prev && prev\.composing, at: prev && prev\.composing \? prev\.at : Date\.now\(\)/);
   assert.doesNotMatch(branch, /composing: true/);
+});
+
+test('a deferral never restarts a reported draft\'s clock — the hold is 3 min, not 6 (0.13.0 round)', () => {
+  const branch = bus.slice(bus.indexOf('sendResult.reason === DEFERRED_TYPING'), bus.indexOf('if (releaseForSibling'));
+  assert.doesNotMatch(branch, /prev\.composing, at: Date\.now\(\) \}/);
+});
+
+test('a stale draft is stashed (Ctrl+S) before the message is typed, never glued to it (0.13.0 round)', () => {
+  const send = /case 'sendByName': \{[\s\S]*?\n    \}/.exec(app)?.[0] ?? '';
+  const stash = send.indexOf("if (p.composing) { window.glassShell.ptyWrite(hit[0], '\\x13');");
+  assert.ok(stash > 0, 'the stash is sent when the pane holds a draft');
+  assert.ok(stash > send.indexOf('BUS_DEFERRED_TYPING') && stash < send.indexOf('submitToPty'), 'after the hold, before the type');
 });
 
 test('ESC-Enter (a new line inside the draft) does not end it', () => {

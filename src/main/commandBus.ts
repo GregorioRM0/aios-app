@@ -775,7 +775,11 @@ async function runSend(
       attempts--;
       if (firstTry) firstTypedAt = 0;
       const prev = composing.get(sessionKey(req.name));   // keep the pane's own draft state: this is a timed hold
-      composing.set(sessionKey(req.name), { composing: !!prev && prev.composing, at: Date.now() });
+      /* A reported draft keeps ITS clock. The pane reports at most every 2 s, so its last key can be
+         up to 2 s newer than prev.at; restarting at now turned a 3 min hold into 6 (measured in the
+         0.13.0 round). Keeping prev.at re-asks every HOLD_TICK_MS until the pane's own limit passes.
+         With no reported draft (the pane deferred on a key just pressed), hold briefly from now. */
+      composing.set(sessionKey(req.name), { composing: !!prev && prev.composing, at: prev && prev.composing ? prev.at : Date.now() });
       if (!fs.existsSync(heldPath)) return;
       await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
       continue;

@@ -6663,6 +6663,12 @@ window.glassShell.onIntent(async (m) => {
         window.glassShell.busSendResult(m.name, false, BUS_DEFERRED_TYPING);
         return;
       }
+      /* A draft left untouched past the limit is set aside, never glued to the message: Ctrl+S is
+         Claude Code's prompt stash, which empties the box and puts the draft back after the next
+         send. Measured in the 0.13.0 round on Claude Code 2.1.312: without it, "hello draft" was
+         submitted as the message's first words; with it, the message went alone and the draft came
+         back. On an empty box Ctrl+S does nothing, so a stale flag (a lone Esc) is harmless. */
+      if (p.composing) { window.glassShell.ptyWrite(hit[0], '\x13'); await new Promise((r) => setTimeout(r, 300)); }
       submitToPty(hit[0], m.text);
       // a bus send is agent-to-agent: deliver it in the background unless the operator chose 'follow'
       if (BUS_FOCUS === 'follow') setActive(hit[0]); else markActivity(hit[0]);
