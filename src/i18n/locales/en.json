@@ -1134,7 +1134,7 @@
   "whatsnew.h3": "Setup finishes on its own",
   "whatsnew.b3": "No more lines to paste at the end. Setup links the skills, installs the AIOS commands, and adds the spawn command and the hooks for you, and it lists each change before making it. Everything it touches is backed up first. The next step is always on screen.",
   "whatsnew.h4": "Messages between sessions arrive once",
-  "whatsnew.b4": "A message to a session you are typing in waits until you finish, instead of landing in the middle of your words. And a message to a very long session is delivered once, not repeated.",
+  "whatsnew.b4": "A message to a session you are typing in waits until you pause, then goes on its own, and your draft comes back. And a message to a very long session is delivered once, not repeated.",
   "whatsnew.more": "Full release notes on GitHub →",
   "whatsnew.skipped": "You also skipped {versions}. What they changed is in the release notes.",
   "menu.whatsnew": "What's New",

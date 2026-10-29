@@ -1134,7 +1134,7 @@
   "whatsnew.h3": "La configuración termina por sí sola",
   "whatsnew.b3": "Ya no hay líneas que pegar al final. La configuración enlaza los skills, instala los comandos de AIOS y agrega el comando spawn y los hooks por ti, y muestra cada cambio antes de hacerlo. Todo lo que toca se respalda primero. El siguiente paso siempre está a la vista.",
   "whatsnew.h4": "Los mensajes entre sesiones llegan una vez",
-  "whatsnew.b4": "Un mensaje para una sesión en la que estás escribiendo espera a que termines, en vez de caer a mitad de tus palabras. Y un mensaje a una sesión muy larga se entrega una vez, sin repetirse.",
+  "whatsnew.b4": "Un mensaje para una sesión en la que estás escribiendo espera a que hagas una pausa, luego entra solo y tu borrador vuelve. Y un mensaje a una sesión muy larga se entrega una vez, sin repetirse.",
   "whatsnew.more": "Notas completas en GitHub →",
   "whatsnew.skipped": "También te saltaste {versions}. Lo que cambió está en las notas de cada versión.",
   "menu.whatsnew": "Novedades",
