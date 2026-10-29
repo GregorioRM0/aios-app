@@ -261,9 +261,9 @@ test('framework, vault, personalization pass on a complete fixture', async () =>
   assert.equal(by('personalized').status, 'pass');
 });
 
-test('computeHealth: the six Health rows, in display order', async () => {
+test('computeHealth: the nine Health rows, in display order (the four wiring rows together)', async () => {
   const rows = await aios.computeHealth();
-  assert.deepEqual(rows.map((r) => r.id), ['framework', 'vault', 'account', 'skills', 'claude', 'gh']);
+  assert.deepEqual(rows.map((r) => r.id), ['framework', 'vault', 'account', 'skills', 'plugin', 'spawn', 'hooks', 'claude', 'gh']);
   for (const r of rows) assert.ok(['pass', 'warn', 'fail'].includes(r.status));
 });
 

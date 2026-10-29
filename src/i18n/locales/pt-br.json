@@ -1225,6 +1225,7 @@
   "health.job.unreadable": "arquivo de status ilegível ({why})",
   "health.askClaude": "Deixe o Claude ajudar com isso",
   "health.askClaudeHint": "Abre uma sessão que analisa o que não está verde, explica e propõe correções; pergunta antes de cada comando",
+  "health.finishSetupHint": "Abre a configuração, que mostra cada mudança antes de fazê-la",
   "health.jobTip": "Uma tarefa agendada: ela informa o resultado após cada execução",
   "settings.openExports": "Exportações novas",
   "settings.openExportsHint": "um arquivo novo em 03 - export: contado no botão de pasta, aberto numa aba ou nada. O que um pull traz nunca abre.",

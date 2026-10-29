@@ -2510,7 +2510,7 @@ export async function wiringLeft(): Promise<{ id: string; label: string; message
 /** AI-18 Health card (ported from aios-glass computeHealth, doctor-backed):
  *  the ongoing "is my AIOS wired?" readout — Setup is day one, this is every
  *  day after. Order = display order on the pulse card. */
-export const HEALTH_IDS = ['framework', 'vault', 'account', 'skills', 'claude', 'gh'] as const;
+export const HEALTH_IDS = ['framework', 'vault', 'account', 'skills', 'plugin', 'spawn', 'hooks', 'claude', 'gh'] as const;   // the four wiring rows sit together (release round: wiring lost after setup had no visible prompt)
 
 /** #27 — scheduled-job health from canonical's status files ($AIOS_HEALTH_DIR or ~/.aios/health).
  *  Read only; the jobs themselves (hooks/aios-health.py) write them. No directory → no rows. */

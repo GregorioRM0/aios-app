@@ -1225,6 +1225,7 @@
   "health.job.unreadable": "unreadable status file ({why})",
   "health.askClaude": "Let Claude help with these",
   "health.askClaudeHint": "Opens a session that looks into what is not green, explains it and proposes fixes — it asks before every command",
+  "health.finishSetupHint": "Opens Setup, which lists each change before making it",
   "health.jobTip": "A scheduled job — it reports its result after each run",
   "settings.openExports": "New exports",
   "settings.openExportsHint": "a new file in 03 - export: counted on the folder button, opened in a tab, or left alone. Files a pull brings never open.",

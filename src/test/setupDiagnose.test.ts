@@ -381,3 +381,14 @@ test('the false green actually un-ticks the step — the consequence, not just t
   // the normal path is untouched: a working Claude still completes the step
   assert.equal(stepOf({ ...base, claude: 'pass', account: 'pass' }, 'login').done, true);
 });
+
+test('the done screen puts Finish setup ABOVE its buttons, and the Health card offers it (release round)', () => {
+  const fs = require('fs') as typeof import('fs');
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  const done = app.slice(app.indexOf('function onboardingDoneEl()'), app.indexOf('function onboardingDoneEl()') + 4000);
+  const fin = done.indexOf('if (finishPending.length) d.appendChild(finishSetupEl(finishPending));');
+  assert.ok(fin > 0 && fin < done.indexOf('d.appendChild(row2);'), 'Finish setup comes before Enter AIOS');
+  const health = app.slice(app.indexOf('async function refreshHealth()'), app.indexOf('async function openHealthHelp('));
+  assert.match(health, /if \(notGreen\.some\(\(c\) => \['skills', 'plugin', 'spawn', 'hooks'\]\.includes\(c\.id\)\)\) \{/);
+  assert.match(health, /fin\.addEventListener\('click', \(\) => openSetupTab\(\)\);/, 'it opens Setup, where every change is named first');
+});

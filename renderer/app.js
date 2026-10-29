@@ -1142,6 +1142,16 @@ async function refreshHealth() {
      github-help pattern). One session, not one per row: problems are often related. */
   const notGreen = rows.filter((c) => c.status !== 'pass');
   const badJobs = jobs.filter((j) => j.status !== 'ok' && j.status !== 'waiting');
+  /* Wiring lost after setup (a reinstall, a hand-edited settings file) had no visible way back: the
+     wrench ships hidden and Finish setup lived only in Setup. When any of the four is amber the card
+     offers it, and the click opens Setup, where the box names every change before it makes one. */
+  if (notGreen.some((c) => ['skills', 'plugin', 'spawn', 'hooks'].includes(c.id))) {
+    const fin = el('button', 'phhelp', t('finish.go'));
+    fin.type = 'button';
+    fin.title = t('health.finishSetupHint');
+    fin.addEventListener('click', () => openSetupTab());
+    H.appendChild(fin);
+  }
   if (notGreen.length || badJobs.length) {
     const help = el('button', 'phhelp', t('health.askClaude'));
     help.type = 'button';
@@ -8635,11 +8645,13 @@ function openSetupTab() {
       deepen.addEventListener('click', () => void createPane(
         ritual('cold-start', '/aios:cold-start-interview show me the full tour')));
       row2.appendChild(deepen);
-      d.appendChild(row2);
       /* The interview can make the stepper "done" while the wiring is still amber — exactly the run
          where the session was refused and the App has not been asked yet. So the done screen offers
-         Finish setup too; otherwise the only place to find it would be a step that no longer renders. */
+         Finish setup too; otherwise the only place to find it would be a step that no longer renders.
+         ABOVE the buttons: below them, a newcomer clicks Enter AIOS and never scrolls to it, which is
+         the stall Finish setup exists to end (release round, 2026-10-28). */
       if (finishPending.length) d.appendChild(finishSetupEl(finishPending));
+      d.appendChild(row2);
       return d;
     }
 
