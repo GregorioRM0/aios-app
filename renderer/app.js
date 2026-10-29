@@ -5999,6 +5999,12 @@ exportBadge.addEventListener('click', (e) => {
    tabs; what is left unopened stays counted, and "Mark all as seen" clears it. Esc changes nothing. */
 async function pickExports() {
   if (!NEW_EXPORTS.length) return;
+  /* A file deleted or moved since it was counted leaves the count here, before it can be ticked and
+     fail to open (release round). One batched existence check; if it cannot answer, keep them all. */
+  let found = null;
+  try { found = await window.glassShell.resolveFiles(NEW_EXPORTS.map((x) => x.path)); } catch { found = null; }
+  if (found && found.open) for (const x of NEW_EXPORTS.slice()) if (!found.open[x.path]) seenExport(x.path);
+  if (!NEW_EXPORTS.length) return;
   const items = NEW_EXPORTS.slice().reverse().map((x) => {
     const sub = (x.path.split(/[\\/]03 - export[\\/]/)[1] || '').replace(/\\/g, '/');   // Windows paths too
     const dir = sub.includes('/') ? sub.slice(0, sub.lastIndexOf('/')) : '';

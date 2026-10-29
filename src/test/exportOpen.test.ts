@@ -65,6 +65,9 @@ test('several new exports open a list, never a tab each, and confirming clears t
   assert.ok(fn.length > 100, 'pickExports exists');
   assert.doesNotMatch(fn, /NEW_EXPORTS\.length === 1/, 'one export opens the list too, never a tab straight from the folder icon');
   assert.match(fn, /checkModal\(t\('exports\.title'/, 'several open the Resume-style list');
+  const prune = fn.indexOf('resolveFiles(NEW_EXPORTS.map');
+  assert.ok(prune > 0 && prune < fn.indexOf('checkModal('), 'files that no longer exist leave the count before the list opens');
+  assert.match(fn, /if \(found && found\.open\) for \(const x of NEW_EXPORTS\.slice\(\)\) if \(!found\.open\[x\.path\]\) seenExport\(x\.path\);/, 'and a failed check keeps them all');
   assert.match(fn, /picked: false/, 'nothing is pre-ticked');
   assert.match(fn, /if \(!chosen\) return;/, 'Esc keeps the count');
   assert.match(fn, /if \(chosen\.alt\) \{ for \(const it of items\) seenExport\(it\.value\); return; \}/, 'Mark all as seen clears the list');
