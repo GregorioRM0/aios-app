@@ -58,3 +58,21 @@ test('the count survives the layout redraw of the files button (found live in ro
   assert.match(app.slice(at, at + 200), /if \(exportCount\) rx\.appendChild\(exportCount\);/, 'and put back after');
   assert.equal((app.match(/getElementById\('railExplorer'\)\.innerHTML =/g) || []).length, 1, 'one other redraw: the creation, before the count exists');
 });
+
+test('several new exports open a list, never a tab each, and confirming clears the count (round 1 UX)', () => {
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  const fn = app.slice(app.indexOf('async function pickExports()'), app.indexOf('function paintExportBadge()'));
+  assert.ok(fn.length > 100, 'pickExports exists');
+  assert.match(fn, /NEW_EXPORTS\.length === 1\) \{ void openViewer/, 'one export still opens on click');
+  assert.match(fn, /checkModal\(t\('exports\.title'/, 'several open the Resume-style list');
+  assert.match(fn, /picked: false/, 'nothing is pre-ticked');
+  assert.match(fn, /if \(!chosen\) return;/, 'Esc keeps the count');
+  assert.match(fn, /for \(const it of items\) seenExport\(it\.value\);/, 'confirming marks the whole list seen');
+  const click = app.slice(app.indexOf("exportBadge.addEventListener('click'"), app.indexOf('async function pickExports()'));
+  assert.match(click, /void pickExports\(\);/);
+  assert.doesNotMatch(click, /openViewer/, 'the count never opens the newest directly any more');
+  for (const loc of ['en', 'es', 'pt-br', 'el']) {
+    const j = JSON.parse(fs.readFileSync(`src/i18n/locales/${loc}.json`, 'utf8'));
+    for (const k of ['exports.title', 'exports.sub', 'exports.filter', 'exports.confirm', 'exports.markSeen']) assert.ok(j[k], `${loc} has ${k}`);
+  }
+});

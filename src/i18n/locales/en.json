@@ -1229,5 +1229,10 @@
   "openExports.badge": "Show a count (quiet)",
   "openExports.open": "Open in a tab",
   "openExports.off": "Off",
-  "rail.newExports": "{n} new export(s), newest {name}. Click the number to open it."
+  "exports.title": "New exports ({n})",
+  "exports.sub": "Tick the ones to open. Everything listed is then marked seen.",
+  "exports.filter": "Filter by name or folder…",
+  "exports.confirm": "Open",
+  "exports.markSeen": "Mark all as seen, open nothing",
+  "rail.newExports": "{n} new export(s), newest {name}. Click the number to choose which to open."
 }

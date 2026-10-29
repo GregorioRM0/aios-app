@@ -5991,9 +5991,31 @@ const exportBadge = Object.assign(document.createElement('span'), { className: '
 document.getElementById('railExplorer').appendChild(exportBadge);
 exportBadge.addEventListener('click', (e) => {
   e.stopPropagation();   // the count opens the export; the button itself still toggles the explorer
-  const newest = NEW_EXPORTS[NEW_EXPORTS.length - 1];
-  if (newest) void openViewer(newest.path);
+  void pickExports();
 });
+/* One new export opens on click. Several open a list, the Resume one: nothing pre-ticked, tick
+   what to open, and confirming marks the whole list seen. Twenty exports are one click and a
+   choice, never twenty tabs, and the count never has to be worked off a file at a time.
+   Esc leaves the count as it was. */
+async function pickExports() {
+  if (NEW_EXPORTS.length === 1) { void openViewer(NEW_EXPORTS[0].path); return; }
+  if (!NEW_EXPORTS.length) return;
+  const items = NEW_EXPORTS.slice().reverse().map((x) => {
+    const sub = (x.path.split(/[\\/]03 - export[\\/]/)[1] || '').replace(/\\/g, '/');   // Windows paths too
+    const dir = sub.includes('/') ? sub.slice(0, sub.lastIndexOf('/')) : '';
+    return { label: x.name, desc: [agoLabel(x.at), dir].filter(Boolean).join(' · '), icon: 'file', value: x.path, picked: false, hay: sub || x.name };
+  });
+  const chosen = await checkModal(t('exports.title', { n: items.length }), items, {
+    hint: t('exports.sub'),
+    placeholder: t('exports.filter'),
+    confirmLabel: t('exports.confirm'),
+    allowEmpty: true,
+    altAction: { label: t('exports.markSeen') },
+  });
+  if (!chosen) return;
+  if (!chosen.alt) for (const p of chosen) void openViewer(p);
+  for (const it of items) seenExport(it.value);
+}
 function paintExportBadge() {
   const n = NEW_EXPORTS.length;
   exportBadge.hidden = !n;
@@ -6003,7 +6025,7 @@ function paintExportBadge() {
 function noteExport(p, name) {
   const i = NEW_EXPORTS.findIndex((x) => x.path === p);
   if (i >= 0) NEW_EXPORTS.splice(i, 1);
-  NEW_EXPORTS.push({ path: p, name: name || xBase(p) });
+  NEW_EXPORTS.push({ path: p, name: name || xBase(p), at: Date.now() });
   paintExportBadge();
 }
 function seenExport(p) {
