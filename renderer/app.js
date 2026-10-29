@@ -6659,7 +6659,8 @@ window.glassShell.onIntent(async (m) => {
       /* #81: the last word is the pane's, with no gap: if its operator is writing now, say so and type
          nothing. The bus keeps the request and does not spend an attempt on it. */
       const sinceKey = Date.now() - (p.lastKeyAt || 0);
-      if ((p.composing && sinceKey < BUS_COMPOSE_STALE_MS) || sinceKey < 8000) {
+      const staleMs = Number(m.staleMs) > 0 ? Number(m.staleMs) : BUS_COMPOSE_STALE_MS;   // the bus decides by the target's Claude Code
+      if ((p.composing && sinceKey < staleMs) || sinceKey < 8000) {
         window.glassShell.busSendResult(m.name, false, BUS_DEFERRED_TYPING);
         return;
       }
@@ -6667,8 +6668,9 @@ window.glassShell.onIntent(async (m) => {
          Claude Code's prompt stash, which empties the box and puts the draft back after the next
          send. Measured in the 0.13.0 round on Claude Code 2.1.312: without it, "hello draft" was
          submitted as the message's first words; with it, the message went alone and the draft came
-         back. On an empty box Ctrl+S does nothing, so a stale flag (a lone Esc) is harmless. */
-      if (p.composing) { window.glassShell.ptyWrite(hit[0], '\x13'); await new Promise((r) => setTimeout(r, 300)); }
+         back. On an empty box Ctrl+S does nothing, so a stale flag (a lone Esc) is harmless. Only when
+         the bus says the target's Claude Code has the stash (m.stash); otherwise the old 3 min limit. */
+      if (p.composing && m.stash) { window.glassShell.ptyWrite(hit[0], '\x13'); await new Promise((r) => setTimeout(r, 300)); }
       submitToPty(hit[0], m.text);
       // a bus send is agent-to-agent: deliver it in the background unless the operator chose 'follow'
       if (BUS_FOCUS === 'follow') setActive(hit[0]); else markActivity(hit[0]);

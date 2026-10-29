@@ -29,6 +29,23 @@ export const COMPOSE_QUIET_MS = 8000;
  *  pane) that held a session's messages for up to the queue's 24 h ceiling, silently. 3 min covers a
  *  real pause mid-sentence. The pane's own check uses the same limit (renderer BUS_COMPOSE_STALE_MS). */
 export const COMPOSE_STALE_MS = 3 * 60 * 1000;
-export function operatorComposing(rec: { composing: boolean; at: number } | undefined, now: number): boolean {
-  return !!rec && ((rec.composing && now - rec.at < COMPOSE_STALE_MS) || now - rec.at < COMPOSE_QUIET_MS);
+/** With Claude Code's prompt stash (Ctrl+S) the pane sets a draft aside before typing and Claude puts
+ *  it back after the send, so a draft is never glued to a message. The only reason left to wait is
+ *  not pulling the box away mid-sentence: 10 s without a key. Measured in the 0.13.0 round on 2.1.312.
+ *  The stash predates 2.1.19 in Claude Code's changelog; 2.1.69 fixed it being cleared by a submit
+ *  while Claude works, which is this exact path, so that is the floor. Below it, or with no version
+ *  in the registry: no Ctrl+S and the 3 min limit, as before. */
+export const COMPOSE_STALE_STASH_MS = 10_000;
+export const STASH_MIN_VERSION = '2.1.69';
+export function hasPromptStash(version: string | undefined): boolean {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(version || '').trim());
+  if (!m) return false;
+  const v = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const min = STASH_MIN_VERSION.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (v[i] !== min[i]) return v[i] > min[i];
+  return true;
+}
+export const composeStaleMs = (stash: boolean): number => (stash ? COMPOSE_STALE_STASH_MS : COMPOSE_STALE_MS);
+export function operatorComposing(rec: { composing: boolean; at: number } | undefined, now: number, staleMs: number = COMPOSE_STALE_MS): boolean {
+  return !!rec && ((rec.composing && now - rec.at < staleMs) || now - rec.at < COMPOSE_QUIET_MS);
 }

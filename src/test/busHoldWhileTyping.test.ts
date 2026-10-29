@@ -61,7 +61,7 @@ test('the bus holds while composing or within the quiet window, and not otherwis
 });
 
 test('the hold sits in the bus loop, before every type, and gives up under the hold budget', () => {
-  const at = bus.indexOf('if (operatorComposing(composing.get(sessionKey(req.name)), Date.now()))');
+  const at = bus.indexOf('if (operatorComposing(composing.get(sessionKey(req.name)), Date.now(), composeStaleMs(stash)))');
   assert.ok(at > 0, 'runSend checks composing');
   assert.ok(at < bus.indexOf("emit(win(), 'sendByName'"), 'before it types');
   assert.match(bus.slice(at, at + 600), /MAX_HOLD_MS[\s\S]*markUndelivered/);
@@ -96,7 +96,7 @@ test('a deferral never restarts a reported draft\'s clock — the hold is 3 min,
 
 test('a stale draft is stashed (Ctrl+S) before the message is typed, never glued to it (0.13.0 round)', () => {
   const send = /case 'sendByName': \{[\s\S]*?\n    \}/.exec(app)?.[0] ?? '';
-  const stash = send.indexOf("if (p.composing) { window.glassShell.ptyWrite(hit[0], '\\x13');");
+  const stash = send.indexOf("if (p.composing && m.stash) { window.glassShell.ptyWrite(hit[0], '\\x13');");
   assert.ok(stash > 0, 'the stash is sent when the pane holds a draft');
   assert.ok(stash > send.indexOf('BUS_DEFERRED_TYPING') && stash < send.indexOf('submitToPty'), 'after the hold, before the type');
 });
@@ -133,8 +133,27 @@ test('an abandoned draft stops holding after 3 min — in the pane AND the bus, 
   const app = fs.readFileSync('renderer/app.js', 'utf8');
   assert.equal(COMPOSE_STALE_MS, 3 * 60 * 1000);
   assert.match(app, /const BUS_COMPOSE_STALE_MS = 3 \* 60 \* 1000;/);
-  assert.match(app, /if \(\(p\.composing && sinceKey < BUS_COMPOSE_STALE_MS\) \|\| sinceKey < 8000\) \{/, 'the pane honours the limit');
+  assert.match(app, /const staleMs = Number\(m\.staleMs\) > 0 \? Number\(m\.staleMs\) : BUS_COMPOSE_STALE_MS;/, 'the pane falls back to 3 min');
+  assert.match(app, /if \(\(p\.composing && sinceKey < staleMs\) \|\| sinceKey < 8000\) \{/, 'the pane honours the limit the bus sends');
   assert.equal(operatorComposing({ composing: true, at: 0 }, 3 * 60 * 1000 + 1), false, 'past 3 min with no key, the bus may type');
   const bus = fs.readFileSync('src/main/commandBus.ts', 'utf8');
   assert.match(bus, /if \(!heldForDraft\) \{ heldForDraft = true; log\(/, 'a draft hold is logged once per request');
+});
+
+test('with the prompt stash the draft limit is 10 s; without it (or no version) 3 min and no Ctrl+S', async () => {
+  const g = await import('../main/retypeGuard');
+  assert.equal(g.hasPromptStash('2.1.312'), true);
+  assert.equal(g.hasPromptStash('2.1.69'), true);
+  assert.equal(g.hasPromptStash('2.1.68'), false);
+  assert.equal(g.hasPromptStash('2.0.99'), false);
+  assert.equal(g.hasPromptStash('3.0.0'), true);
+  assert.equal(g.hasPromptStash(undefined), false);
+  assert.equal(g.hasPromptStash('garbage'), false);
+  assert.equal(g.composeStaleMs(true), 10_000);
+  assert.equal(g.composeStaleMs(false), 3 * 60 * 1000);
+  assert.equal(g.operatorComposing({ composing: true, at: 0 }, 9_999, g.composeStaleMs(true)), true, 'still writing at 9.9 s');
+  assert.equal(g.operatorComposing({ composing: true, at: 0 }, 10_000, g.composeStaleMs(true)), false, 'set aside at 10 s');
+  assert.equal(g.operatorComposing({ composing: true, at: 0 }, 10_000), true, 'the default is still 3 min');
+  assert.match(bus, /const stash = hasPromptStash\(target\?\.version\);/);
+  assert.match(bus, /emit\(win\(\), 'sendByName', \{ name: req\.name, text: deliverText, stash, staleMs: composeStaleMs\(stash\) \}\);/);
 });

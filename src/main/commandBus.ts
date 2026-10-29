@@ -22,7 +22,7 @@ import {
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
   queueTurn, stampAge, withQueuedAt, queuedAtOf, isQueuedDelivery, supersedes, type QueuedSend,
 } from '../core/sendQueue';
-import { landedBeforeRetype, operatorComposing } from './retypeGuard';
+import { landedBeforeRetype, operatorComposing, hasPromptStash, composeStaleMs } from './retypeGuard';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
 import { MY_SURFACE } from './surface';
 import { needsPointer, pointerText, byteLength, isStalePayload, INLINE_LIMIT } from '../core/busPayload';
@@ -323,7 +323,7 @@ function emit(win: BrowserWindow | undefined, kind: string, payload: Record<stri
 }
 
 /** Live session by sanitized name, from the authoritative registry. */
-function targetByName(name: string): SendTarget | undefined {
+function targetByName(name: string): (SendTarget & { version?: string }) | undefined {
   /* Exact first, else the ONE live session whose name cleans to the same handle (core/nameMatch,
      app#58's idea): `--name Market-desk` is reachable as `market-desk`. Ambiguous → none. */
   const all = aios.listRunningAgents();
@@ -333,6 +333,7 @@ function targetByName(name: string): SendTarget | undefined {
   return {
     name: hit.name, pid: hit.pid,
     status: String(hit.status || ''), sessionId: String(hit.sessionId || ''),
+    ...(hit.version ? { version: hit.version } : {}),
   };
 }
 
@@ -740,7 +741,8 @@ async function runSend(
     }
     /* #81: the operator is writing in that pane — hold like a busy target, never type into the draft.
        Before the first type this waits under the queue ceiling; after it, under MAX_HOLD_MS (below). */
-    if (operatorComposing(composing.get(sessionKey(req.name)), Date.now())) {
+    const stash = hasPromptStash(target?.version);   // the target's own Claude Code decides the draft limit
+    if (operatorComposing(composing.get(sessionKey(req.name)), Date.now(), composeStaleMs(stash))) {
       if (!heldForDraft) { heldForDraft = true; log(`holding a message for '${req.name}': its operator is writing in that session`); }
       if (firstTypedAt && Date.now() - firstTypedAt >= MAX_HOLD_MS) {
         markUndelivered(heldPath, req, `the operator kept a draft open in '${req.name}' for ${Math.round(MAX_HOLD_MS / 60000)} min`);
@@ -758,7 +760,7 @@ async function runSend(
        retired by a newer message) between attempts was typed anyway — the "re-send from memory". */
     if (!fs.existsSync(heldPath)) return;
     recordTyped(deliverText, req.name, 'send', req.from);   // AI-172: before typing, so the label can never lose the race
-    emit(win(), 'sendByName', { name: req.name, text: deliverText });
+    emit(win(), 'sendByName', { name: req.name, text: deliverText, stash, staleMs: composeStaleMs(stash) });
     /* If the surface says it could not deliver, stop here. Waiting out the verification window
        on a message that was never typed is how one request consumed its entire sibling-release
        budget and then retired — 20 minutes after the fact, with nobody watching. */

@@ -387,7 +387,7 @@ export function countNotes(kind: 'declared' | 'observed' | 'projects'): number {
    which is why it is invisible on a machine whose sessions are all idle — that absence is the
    field working, not the field missing. `statusUpdatedAt` is when the CURRENT status was
    entered, so it answers "blocked longest" without us having to remember anything. */
-export interface RunningAgent { pid: number; name: string; status: string; sessionId: string; cwd: string; startedAt: number; updatedAt: number; waitingFor?: string; statusUpdatedAt?: number; kind: string; entrypoint: string; formerNames?: string[]; }
+export interface RunningAgent { pid: number; name: string; status: string; sessionId: string; cwd: string; startedAt: number; updatedAt: number; waitingFor?: string; statusUpdatedAt?: number; kind: string; entrypoint: string; formerNames?: string[]; version?: string; }
 
 /** app#65: `formerNames` as the registry writes it — strings, or `{ name }` objects; anything else ignored. */
 export function formerNamesOf(v: unknown): string[] {
@@ -408,7 +408,7 @@ export function listRunningAgents(): RunningAgent[] {
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return []; }
   const out: RunningAgent[] = [];
   for (const f of files) {
-    let d: { pid?: number; name?: string; status?: string; sessionId?: string; cwd?: string; startedAt?: number; updatedAt?: number; waitingFor?: string; statusUpdatedAt?: number; kind?: string; entrypoint?: string; formerNames?: unknown; procStart?: unknown; procStartFt?: unknown };
+    let d: { pid?: number; name?: string; status?: string; sessionId?: string; cwd?: string; startedAt?: number; updatedAt?: number; waitingFor?: string; statusUpdatedAt?: number; kind?: string; entrypoint?: string; formerNames?: unknown; procStart?: unknown; procStartFt?: unknown; version?: unknown };
     try { d = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
     const pid = Number(d?.pid ?? path.basename(f, '.json'));
     if (!Number.isInteger(pid) || pid <= 0 || !isAlive(pid)) continue;
@@ -437,6 +437,7 @@ export function listRunningAgents(): RunningAgent[] {
       kind: String(d?.kind ?? '').trim() || 'interactive',
       entrypoint: String(d?.entrypoint ?? '').trim(),
       ...(formerNamesOf(d?.formerNames).length ? { formerNames: formerNamesOf(d?.formerNames) } : {}),
+      ...(typeof d?.version === 'string' && d.version.trim() ? { version: (d.version as string).trim() } : {}),   // the Claude Code running it
     });
   }
   const seen = new Set<number>();
