@@ -16,8 +16,17 @@ const aios = fs.readFileSync('src/main/aios.ts', 'utf8');
 const css = fs.readFileSync('renderer/theme.css', 'utf8');
 
 test('the bus marks its spawns and reveals as background', () => {
-  assert.match(bus, /emit\(win\(\), 'terminal', \{ name: req\.name, cmd, background: true \}\)/);
+  assert.match(bus, /emit\(win\(\), 'terminal', \{ name: req\.name, cmd, background: true(, \.\.\.where)? \}\)/);
   assert.match(bus, /emit\(win\(\), 'focusByName', \{ name: req\.name, background: true \}\)/);
+});
+
+test('a resume aimed at a session that is already running reveals it in the background', () => {
+  /* A finished worker reports to its coordinator with `resume`. The coordinator is live, so this
+     branch reveals and delivers; it was the one bus reveal still sent without the flag. */
+  const live = /if \(live\) \{[\s\S]*?revealing and delivering/.exec(bus)?.[0] ?? '';
+  assert.ok(live, 'the resume-to-a-live-session branch exists');
+  assert.match(live, /emit\(win\(\), 'focusByName', \{ name: req\.name, background: true \}\)/);
+  assert.doesNotMatch(bus, /emit\(win\(\), 'focusByName', \{ name: req\.name \}\)/, 'no bus reveal without the flag');
 });
 
 test("default is 'stay'; only an explicit 'follow' restores switching", () => {
@@ -34,7 +43,7 @@ test('a background pane is sized, then the view is handed back in the same pass'
   const geom = create.indexOf('pushPtyGeom(id, p);');
   const back = create.indexOf('if (snap) { restoreFocus(snap, id); markActivity(id); }');
   assert.ok(geom > 0 && back > geom, 'restore after pushPtyGeom, never before');
-  assert.match(app, /case 'terminal':\n\s+await createPane\(\{ name: m\.name \|\| 'terminal', cmd: m\.cmd, background: busBackground\(m\) \}\);/);
+  assert.match(app, /case 'terminal':\n(\s+\/\/[^\n]*\n)?\s+await createPane\(\{ name: m\.name \|\| 'terminal', cmd: m\.cmd, (cwd: [^\n]*?, )?background: busBackground\(m\) \}\);/);
 });
 
 test('a bus send types in the background; the operator\'s own navigation still switches', () => {

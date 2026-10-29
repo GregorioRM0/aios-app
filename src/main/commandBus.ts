@@ -4,7 +4,7 @@ import * as os from 'os';
 import { execFileSync } from 'child_process';
 import * as path from 'path';
 import * as aios from './aios';
-import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, type BusRequest } from '../core/commandBus';
+import { parseRequest, buildSpawnCmd, buildResumeCmd, needsTaskFile, taskFileInstruction, fallbackSpawnRequest, type BusRequest } from '../core/commandBus';
 import { recordTyped } from './busSent';
 import { settingsToFile } from './advisorFile';
 import { contract4LaunchArgs, cleanFrom, advisorModelFor } from '../core/contract4';
@@ -14,6 +14,7 @@ import { ResumeIndex } from './resumeIndex';
 import { supersededName, supersededBody, SUPERSEDED_SUFFIX, SUPERSEDED_KEEP_MS } from '../core/supersede';
 import { resolveSessionName, resolveFormerName, sessionKey } from '../core/nameMatch';
 import { buildInboxReadme, shouldWrite } from '../core/inboxReadme';
+import { decideKill, KILL_EXPECT_CAPABILITY } from '../core/killGuard';
 import {
   INBOX_CONTRACT, HOLD_SUFFIX, holdPathFor, undeliveredPathFor, TIMINGS, decideAfterVerifyMiss,
   isHoldPath, decideSend, safeNeedle, claimVerdict, canAdoptHold, parseClaim,
@@ -21,11 +22,14 @@ import {
   triedBy, withTried, fulfillerId, processTreeRoot, type SendTarget,
   queueTurn, stampAge, withQueuedAt, queuedAtOf, isQueuedDelivery, supersedes, type QueuedSend,
 } from '../core/sendQueue';
+import { landedBeforeRetype, operatorComposing, hasPromptStash, composeStaleMs } from './retypeGuard';
 import { parsePresenceRecord, presenceVerdict, mayRetract } from '../core/presence';
 import { MY_SURFACE } from './surface';
 import { needsPointer, pointerText, byteLength, isStalePayload, INLINE_LIMIT } from '../core/busPayload';
 import { pickBash } from '../core/bashResolve';
-import { runDir, writePrivateFile } from './privateRun';
+import { TranscriptSince, readTranscript } from './transcriptSince';
+import { writeHandoffFile } from './handoffDir';   // aios#231: one private folder per handed-over file
+import { resolveBusCwd, grantBusCwd } from './busCwd';
 
 /**
  * Spawn-inbox command bus (main side) — CONTRACT 2.
@@ -219,7 +223,7 @@ function healPresence(appVersion: string): void {
     if (presenceVerdict(rec, root, pidAlive) === 'leave') return;   // healthy — someone alive owns it
     if (rec?.pid === root && readPresence() !== undefined) return;  // already ours; do not churn the file
     fs.mkdirSync(path.dirname(presenceFile()), { recursive: true });
-    const body = { surface: MY_SURFACE, pid: root, at: Date.now(), version: appVersion };
+    const body = presenceBody(root, appVersion);
     fs.writeFileSync(presenceFile(), JSON.stringify(body, null, 2) + '\n');
     log(`presence re-claimed: ${MY_SURFACE} root pid ${root} (record named ${rec?.pid === undefined ? 'nobody' : `dead pid ${rec.pid}`})`);
   } catch { /* non-fatal — the next tick tries again */ }
@@ -250,6 +254,13 @@ function healPresence(appVersion: string): void {
  * the other assigns. So the incumbent is left alone while it is alive, and healPresence below
  * closes the remaining orderings (and the crash case, which has no retract at all).
  */
+/* The presence record both writers (announce and heal) emit. `capabilities` lets a writer confirm,
+   against a LIVE pid, what this surface honours beyond the contract — `kill-expect`
+   (core/killGuard): a surface without it ignores `expect` and kills unconditionally. */
+function presenceBody(root: number, appVersion: string): Record<string, unknown> {
+  return { surface: MY_SURFACE, pid: root, at: Date.now(), version: appVersion, capabilities: [KILL_EXPECT_CAPABILITY] };
+}
+
 function announcePresence(appVersion: string): void {
   /* PACKAGED BUILDS ONLY, and this is not tidiness — it prevents a dev instance from corrupting
    * the record the real App depends on. Observed 2026-08-14: a dev App launched from a terminal
@@ -275,7 +286,7 @@ function announcePresence(appVersion: string): void {
       log(`presence left to pid ${rec?.pid} — it is still running, and ours (${root}) must not displace a live surface`);
       return;
     }
-    const body = { surface: MY_SURFACE, pid: root, at: Date.now(), version: appVersion };
+    const body = presenceBody(root, appVersion);
     fs.writeFileSync(path.join(dir, `${MY_SURFACE}.json`), JSON.stringify(body, null, 2) + '\n');
     log(`announced presence: ${MY_SURFACE} root pid ${root}${root === process.pid ? '' : ` (self ${process.pid})`}`);
   } catch (e) {
@@ -312,7 +323,7 @@ function emit(win: BrowserWindow | undefined, kind: string, payload: Record<stri
 }
 
 /** Live session by sanitized name, from the authoritative registry. */
-function targetByName(name: string): SendTarget | undefined {
+function targetByName(name: string): (SendTarget & { version?: string }) | undefined {
   /* Exact first, else the ONE live session whose name cleans to the same handle (core/nameMatch,
      app#58's idea): `--name Market-desk` is reachable as `market-desk`. Ambiguous → none. */
   const all = aios.listRunningAgents();
@@ -322,6 +333,7 @@ function targetByName(name: string): SendTarget | undefined {
   return {
     name: hit.name, pid: hit.pid,
     status: String(hit.status || ''), sessionId: String(hit.sessionId || ''),
+    ...(hit.version ? { version: hit.version } : {}),
   };
 }
 
@@ -334,6 +346,12 @@ const alive = (pid: number): boolean => {
    to see it" from "there was nothing here to deliver to". A pane that is gone, or that is no
    longer running the session, is knowable IMMEDIATELY — and knowing it early is what stops a
    request burning its whole release budget before anyone finds out. */
+/* #81 — what each pane's operator is doing, by session name (renderer → bus:composing). */
+const composing = new Map<string, { composing: boolean; at: number }>();
+const DEFERRED_TYPING = 'deferred: the operator is typing in this session';   // renderer BUS_DEFERRED_TYPING
+ipcMain.on('bus:composing', (_e, v: { name: string; composing: boolean }) => {
+  if (v && v.name) composing.set(sessionKey(v.name), { composing: !!v.composing, at: Date.now() });
+});
 const sendVerdicts = new Map<string, { ok: boolean; reason: string; at: number }>();
 ipcMain.on('bus:sendResult', (_e, v: { name: string; ok: boolean; reason: string }) => {
   if (v && v.name) sendVerdicts.set(v.name, { ok: !!v.ok, reason: String(v.reason || ''), at: Date.now() });
@@ -422,17 +440,6 @@ function heldSends(): QueuedSend[] {
   return out;
 }
 
-/** Read the target's transcript; the counting RULE is pure and lives in core/sendQueue. */
-function readTranscript(sessionId: string): string {
-  if (!sessionId) return '';
-  const base = path.join(aios.claudeConfigDir(), 'projects');
-  let dirs: string[] = [];
-  try { dirs = fs.readdirSync(base); } catch { return ''; }
-  for (const d of dirs) {
-    try { return fs.readFileSync(path.join(base, d, `${sessionId}.jsonl`), 'utf8'); } catch { continue; }
-  }
-  return '';
-}
 
 /** Move a request to `.undelivered`, recording why. Loud beats silent. */
 /**
@@ -558,6 +565,25 @@ function archiveSuperseded(heldPath: string, by: string): void {
   } catch { try { fs.unlinkSync(heldPath); } catch { /* already gone */ } }
 }
 
+/* #70 — a kill its own `expect` refused. Kept beside superseded messages (same week-long keep), so
+   the writer can still read why, and out of the live inbox, so nothing reads it as owed. */
+const REFUSED_SUFFIX = '.refused.json';
+function archiveRefusedKill(heldPath: string, reason: string): void {
+  try {
+    const dir = path.join(path.dirname(heldPath), '_archive');
+    fs.mkdirSync(dir, { recursive: true });
+    const body = JSON.parse(fs.readFileSync(heldPath, 'utf8')) as Record<string, unknown>;
+    body._refused = { reason, at: Date.now(), surface: MY_SURFACE };
+    const base = path.basename(heldPath).replace(/\.json.*$/, '');
+    fs.writeFileSync(path.join(dir, `${base}-${Date.now()}${REFUSED_SUFFIX}`), JSON.stringify(body, null, 2) + '\n');
+    fs.unlinkSync(heldPath);
+    for (const n of fs.readdirSync(dir)) {
+      if (!n.endsWith(REFUSED_SUFFIX)) continue;
+      try { if (Date.now() - fs.statSync(path.join(dir, n)).mtimeMs > SUPERSEDED_KEEP_MS) fs.unlinkSync(path.join(dir, n)); } catch { /* gone */ }
+    }
+  } catch { markUndelivered(heldPath, null, reason); }   // could not archive: the dead letter still records it
+}
+
 /** Hand a claim back for a sibling surface/window to try, bounded by `_releases`. */
 function releaseForSibling(heldPath: string, req: BusRequest, reason: string): boolean {
   if (!shouldReleaseForSibling(req.releases ?? 0, MAX_RELEASES)) return false;
@@ -619,6 +645,19 @@ async function runSend(
   let queuedAt = claimedAt;
   try { queuedAt = queuedAtOf(JSON.parse(fs.readFileSync(heldPath, 'utf8')), claimedAt); } catch { /* keep the claim time */ }
   let firstTypedAt = 0;
+  let heldForDraft = false;   // one log line per request when a draft holds it
+  /* AI-223: count deliveries in what was appended since this send began — never the whole file. */
+  const since = new TranscriptSince();
+  const count = (sid: string): number | null => {
+    const appended = since.read(sid);
+    return appended === null ? null : countDeliveries(appended, deliverText, needle, claimedAt);
+  };
+  /* A transcript we cannot read cannot verify anything, and re-typing on that is how one message
+     arrived three times. Typed once → done, said plainly; never typed → nothing to finish here. */
+  const finishUnverifiable = (): void => {
+    try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+    log(`delivered → '${req.name}' (typed once; its transcript could not be read, so it is not verified and will not be re-typed)`);
+  };
   let attempts = 0;   // how many times we have actually TYPED into the target
   /* Captured ONCE, before the first type, and reused by every attempt in this runSend.
      It used to be recomputed at the top of each iteration, which made a LATE delivery invisible:
@@ -669,7 +708,7 @@ async function runSend(
     }
     // idle → deliver, then prove it in the target's own transcript
     const sessionId = target ? target.sessionId : '';
-    if (baseline === undefined) baseline = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
+    if (baseline === undefined) baseline = count(sessionId) ?? 0;
     const before = baseline;
     /* THE CAP HAS TO SIT HERE, before the send — not only in the after-a-miss decision.
        A 'wait' verdict does `continue`, which re-enters this branch, so a cap enforced only
@@ -677,7 +716,8 @@ async function runSend(
        every cycle for the full hold. Caught by tracing the control flow rather than trusting
        the counter, which is the same lesson as everything else in this ticket. */
     if (attempts >= maxAttemptsFor(deliverText)) {
-      const late = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
+      const late = count(sessionId);
+      if (late === null) { finishUnverifiable(); return; }
       if (verifyVerdict(before, late) !== 'pending') {
         try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         log(`delivered → '${req.name}' (verified late)`);
@@ -691,11 +731,36 @@ async function runSend(
       if (!fs.existsSync(heldPath)) return;
       continue;   // watch, never type again
     }
+    /* 26 Oct: a re-type after a busy-wait must first look for the earlier copy (landedBeforeRetype). */
+    const sofar = count(sessionId);
+    if (sofar === null && firstTypedAt) { finishUnverifiable(); return; }
+    if (landedBeforeRetype(!!firstTypedAt, before, sofar ?? before)) {
+      try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+      log(`delivered → '${req.name}' (verified late, before a re-type)`);
+      return;
+    }
+    /* #81: the operator is writing in that pane — hold like a busy target, never type into the draft.
+       Before the first type this waits under the queue ceiling; after it, under MAX_HOLD_MS (below). */
+    const stash = hasPromptStash(target?.version);   // the target's own Claude Code decides the draft limit
+    if (operatorComposing(composing.get(sessionKey(req.name)), Date.now(), composeStaleMs(stash))) {
+      if (!heldForDraft) { heldForDraft = true; log(`holding a message for '${req.name}': its operator is writing in that session`); }
+      if (firstTypedAt && Date.now() - firstTypedAt >= MAX_HOLD_MS) {
+        markUndelivered(heldPath, req, `the operator kept a draft open in '${req.name}' for ${Math.round(MAX_HOLD_MS / 60000)} min`);
+        return;
+      }
+      if (!fs.existsSync(heldPath)) return;
+      await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
+      continue;
+    }
     attempts++;
+    const firstTry = !firstTypedAt;
     if (!firstTypedAt) firstTypedAt = Date.now();
     const emittedAt = Date.now();
+    /* AI-223: the request must still exist at the moment of typing. A hold deleted by hand (or
+       retired by a newer message) between attempts was typed anyway — the "re-send from memory". */
+    if (!fs.existsSync(heldPath)) return;
     recordTyped(deliverText, req.name, 'send', req.from);   // AI-172: before typing, so the label can never lose the race
-    emit(win(), 'sendByName', { name: req.name, text: deliverText });
+    emit(win(), 'sendByName', { name: req.name, text: deliverText, stash, staleMs: composeStaleMs(stash) });
     /* If the surface says it could not deliver, stop here. Waiting out the verification window
        on a message that was never typed is how one request consumed its entire sibling-release
        budget and then retired — 20 minutes after the fact, with nobody watching. */
@@ -706,6 +771,21 @@ async function runSend(
        spent both sibling releases, and killed a brief the other App could have delivered.
        So: hand it back first, and only retire when the release budget is genuinely gone. */
     const sendResult = await awaitSendVerdict(req.name, emittedAt);
+    if (sendResult && !sendResult.ok && sendResult.reason === DEFERRED_TYPING) {
+      /* #81: the pane typed nothing because its operator is writing. Not a failure and not an
+         attempt: give the attempt back, keep the request, and wait for the draft to be sent. */
+      attempts--;
+      if (firstTry) firstTypedAt = 0;
+      const prev = composing.get(sessionKey(req.name));   // keep the pane's own draft state: this is a timed hold
+      /* A reported draft keeps ITS clock. The pane reports at most every 2 s, so its last key can be
+         up to 2 s newer than prev.at; restarting at now turned a 3 min hold into 6 (measured in the
+         0.13.0 round). Keeping prev.at re-asks every HOLD_TICK_MS until the pane's own limit passes.
+         With no reported draft (the pane deferred on a key just pressed), hold briefly from now. */
+      composing.set(sessionKey(req.name), { composing: !!prev && prev.composing, at: prev && prev.composing ? prev.at : Date.now() });
+      if (!fs.existsSync(heldPath)) return;
+      await new Promise((r) => setTimeout(r, HOLD_TICK_MS));
+      continue;
+    }
     if (sendResult && !sendResult.ok) {
       if (releaseForSibling(heldPath, req, sendResult.reason)) return;   // let another surface try
       markUndelivered(heldPath, req, sendResult.reason);
@@ -714,7 +794,8 @@ async function runSend(
     const until = Date.now() + VERIFY_WINDOW_MS;
     while (Date.now() < until) {
       await new Promise((r) => setTimeout(r, VERIFY_TICK_MS));
-      const now = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
+      const now = count(sessionId);
+      if (now === null) { finishUnverifiable(); return; }
       const verdict = verifyVerdict(before, now);
       if (verdict === 'pending') continue;
       try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
@@ -749,7 +830,8 @@ async function runSend(
     if (miss.do === 'wait') {
       /* Out of sends, not out of hope: watch for a late arrival and never type again. A turn
          that lands after the window closed must not be sent twice. */
-      const late = countDeliveries(readTranscript(sessionId), deliverText, needle, claimedAt);
+      const late = count(sessionId);
+      if (late === null) { finishUnverifiable(); return; }
       if (verifyVerdict(before, late) !== 'pending') {
         try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
         log(`delivered → '${req.name}' (verified late)`);
@@ -773,6 +855,8 @@ async function runSend(
  * with a boolean deciding which you get.
  */
 function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
+    const where = launchCwd(heldPath, req);
+    if (!where) return;
     let taskFile: string | undefined;
     /* The worker's model is decided first: the consult instruction depends on it, and appending it
        can turn a short inline task into a multi-line one that must spill to a file.
@@ -798,7 +882,7 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
          dead letter. Falling back to typing the task inline brought back the Windows apostrophe
          mangling and flooded the terminal with a long POSIX task — Glass already refused here
          (AI-66); the App now does the same. */
-      try { taskFile = writePrivateFile(runDir(), `aios-spawn-task-${req.name}.md`, req.task as string); }
+      try { taskFile = writeHandoffFile(`aios-spawn-task-${req.name}.md`, req.task as string); }
       catch (e) {
         markUndelivered(heldPath, req, `could not write the task file safely (${(e as Error).message}) — not spawned; the task is never typed inline instead`);
         return;
@@ -815,8 +899,8 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
     recordTyped(taskFile ? taskFileInstruction(taskFile) : (req.task || 'Start session'), req.name, 'spawn');
     // background like every other bus path (#47): a fresh spawn was the one that still switched the
     // operator's screen, whatever busFocus said (operator-tested on 0.10.1).
-    emit(win(), 'terminal', { name: req.name, cmd, background: true });
-    log(`spawn '${req.name}'${req.task ? ' with task' : ''}${req.tier && !req.model ? ` [tier ${req.tier} → ${model ?? 'default'}]` : model ? ` [model ${model}]` : ''}${taskFile ? ' (task via file)' : ''}`);
+    emit(win(), 'terminal', { name: req.name, cmd, background: true, ...where });
+    log(`spawn '${req.name}'${req.task ? ' with task' : ''}${where.cwd ? ` in ${where.cwd}` : ''}${req.tier && !req.model ? ` [tier ${req.tier} → ${model ?? 'default'}]` : model ? ` [model ${model}]` : ''}${taskFile ? ' (task via file)' : ''}`);
 }
 
 /**
@@ -824,6 +908,33 @@ function runSpawn(win: () => BrowserWindow | undefined, heldPath: string, req: B
  * hands it off and keeps claiming other requests. The request file stays held until this lands,
  * exactly as a deferred `send` does, so nothing is lost if the lookup takes a while on a cold index.
  */
+/** `resume`: reveal-and-deliver when the session is really running, else reopen it (#78). */
+async function resumeOrReveal(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): Promise<void> {
+  /* ALREADY AWAKE → reveal and deliver, never reopen. The caller asked for a specific
+     someone; that someone is already running, so resuming would create a SECOND process for
+     one identity — the duplication this verb exists to avoid, arrived at from the other
+     side. The prompt still has to land, so this routes through the same send path a
+     `{"action":"send"}` would take. */
+  let live = targetByName(req.name);
+  /* #78: a registry entry whose pid now belongs to another process is NOT running — awaited
+     here, because this is the decision that used to swallow a resume whole. */
+  if (live && !(await aios.registryPidIsSession(live.pid))) {
+    log(`resume '${req.name}' — registry pid ${live.pid} now belongs to another process; reopening`);
+    live = undefined;
+  }
+  if (live) {
+    /* Background, like every other bus reveal. A worker that finishes reports to its
+       coordinator with exactly this request, so without the flag every finished worker pulled
+       the operator's screen onto the coordinator's tab, mid-sentence. */
+    emit(win(), 'focusByName', { name: req.name, background: true });
+    log(`resume '${req.name}' — already running, revealing and delivering${req.effort || req.advisor ? ' (effort/advisor NOT applied: a running session cannot change them)' : ''}`);
+    if (req.prompt) void runSend(win, heldPath, { ...req, action: 'send' }, Date.now());
+    else try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
+    return;
+  }
+  await runResume(win, heldPath, req);
+}
+
 async function runResume(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): Promise<void> {
   try {
     const sid = await resumeIdFor(req.name, process.env.CLAUDE_CODE_SESSION_ID);
@@ -840,11 +951,13 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
       }
       log(`resume '${req.name}' — no transcript; falling back to spawn as asked`);
     } else {
+      const where = launchCwd(heldPath, req);
+      if (!where) return;
       let taskFile: string | undefined;
       /* Same Windows quoting rule as spawn: PowerShell mangles POSIX-quoted apostrophes, so
          every prompt goes through a file there. */
       if (needsTaskFile(req.prompt) || (process.platform === 'win32' && req.prompt)) {
-        try { taskFile = writePrivateFile(runDir(), `aios-resume-task-${req.name}.md`, req.prompt as string); }
+        try { taskFile = writeHandoffFile(`aios-resume-task-${req.name}.md`, req.prompt as string); }
         catch (e) {
           markUndelivered(heldPath, req, `could not write the prompt file safely (${(e as Error).message}) — not resumed; the prompt is never typed inline instead`);
           return;
@@ -856,16 +969,32 @@ async function runResume(win: () => BrowserWindow | undefined, heldPath: string,
       if (req.prompt) recordTyped(taskFile ? taskFileInstruction(taskFile) : req.prompt, req.name, 'resume', req.from);   // AI-172
       // background: the new session opens as a tab with an activity mark; the operator's
       // current tab and keyboard focus stay where they are (setting `busFocus`).
-      emit(win(), 'terminal', { name: req.name, cmd, background: true });
-      log(`resume '${req.name}' → session ${sid.slice(0, 8)}${req.prompt ? ' with prompt' : ''}${taskFile ? ' (via file)' : ''}`);
+      emit(win(), 'terminal', { name: req.name, cmd, background: true, ...where });
+      log(`resume '${req.name}' → session ${sid.slice(0, 8)}${req.prompt ? ' with prompt' : ''}${where.cwd ? ` in ${where.cwd}` : ''}${taskFile ? ' (via file)' : ''}`);
       try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
       return;
     }
-    runSpawn(win, heldPath, req);
+    /* fallbackSpawnRequest moves the resume's `prompt` into the spawn's `task` — without it the
+       fresh session opened with the generic bootstrap and the caller's message was lost. */
+    runSpawn(win, heldPath, fallbackSpawnRequest(req));
     try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
   } catch (e) {
     markUndelivered(heldPath, req, `resume '${req.name}' failed: ${String((e as Error)?.message ?? e)}`);
   }
+}
+
+/**
+ * The directory a launched session opens in: `{}` (the framework root, as before) when the request
+ * names none, `{ cwd }` when it names a valid one, or null after dead-lettering one it cannot honour
+ * — never a silent fallback, since a session started in the wrong directory looks just like one
+ * started in the right one.
+ */
+function launchCwd(heldPath: string, req: BusRequest): { cwd?: string } | null {
+  if (req.cwd === undefined) return {};
+  const r = resolveBusCwd(req.cwd);
+  if ('error' in r) { markUndelivered(heldPath, req, r.error); return null; }
+  grantBusCwd(r.cwd);
+  return { cwd: r.cwd };
 }
 
 /** spawn / kill act immediately once claimed — nothing about the target can refuse them. */
@@ -879,7 +1008,7 @@ function contract4Args(req: BusRequest): { args: string[] } | { error: string } 
   return { args: settingsToFile(contract4LaunchArgs({ effort: req.effort, advisorModel: advisorModelFor(req.advisor, req.advisorRung) })) };
 }
 
-function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest): void {
+function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, req: BusRequest, body: Record<string, unknown>): void {
   try {
     if (req.fieldError) {
       /* Contract 4: a field we cannot honour is dead-lettered NAMING it, never silently dropped —
@@ -902,26 +1031,27 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
       let t = targetByName(req.name);
       const renamed = t ? undefined : resolveFormerName(req.name, aios.listRunningAgents());
       if (!t && renamed) t = targetByName(renamed);
+      /* A conditional kill (core/killGuard): the writer said what it saw, and a session that no
+         longer matches is left running. Checked here, immediately before the SIGTERM, which
+         narrows the window between the writer's check and the kill (it does not remove it).
+         The guard comes from `body`, the request as claimed; the held file is re-read only to
+         confirm it did not change, so a rewrite without `expect` cannot turn into a plain kill.
+         decideKill refuses on ANY failure, re-reading the request included. */
+      const verdict = decideKill(body, () => fs.readFileSync(heldPath, 'utf8'), t, () => (t ? readTranscript(t.sessionId) : ''));
+      if (!verdict.kill) {
+        /* #70, on top: a kill refused because the session moved on is the guard working — archived
+           with its reason, not dead-lettered as work still owed. Malformed or rewritten → dead letter. */
+        if (verdict.byExpect) { log(`kill '${req.name}' — ${verdict.reason} (archived)`); archiveRefusedKill(heldPath, verdict.reason); }
+        else markUndelivered(heldPath, req, verdict.reason);
+        return;
+      }
       if (t) { try { process.kill(t.pid, 'SIGTERM'); } catch { /* already gone */ } }
       emit(win(), 'closeByName', { name: t ? t.name : req.name });
       log(`kill '${req.name}'${t ? `${renamed ? ` → renamed '${t.name}'` : ''} (pid ${t.pid})`
         : ' — no live session has that name or was renamed from it; closed any pane of that name'}`);
     } else if (req.action === 'resume') {
-      /* ALREADY AWAKE → reveal and deliver, never reopen. The caller asked for a specific
-         someone; that someone is already running, so resuming would create a SECOND process for
-         one identity — the duplication this verb exists to avoid, arrived at from the other
-         side. The prompt still has to land, so this routes through the same send path a
-         `{"action":"send"}` would take. */
-      const live = targetByName(req.name);
-      if (live) {
-        emit(win(), 'focusByName', { name: req.name });
-        log(`resume '${req.name}' — already running, revealing and delivering${req.effort || req.advisor ? ' (effort/advisor NOT applied: a running session cannot change them)' : ''}`);
-        if (req.prompt) void runSend(win, heldPath, { ...req, action: 'send' }, Date.now());
-        else try { fs.unlinkSync(heldPath); } catch { /* already gone */ }
-        return;
-      }
-      void runResume(win, heldPath, req);
-      return;              // runResume owns the held file from here
+      void resumeOrReveal(win, heldPath, req);
+      return;              // resumeOrReveal owns the held file from here
     } else if (targetByName(req.name)) {
       /* Never duplicate — but never steal the screen either. An agent's request is not the operator
          asking to look somewhere: the pane is marked, and the operator chooses when to switch. */
@@ -943,7 +1073,7 @@ function runImmediate(win: () => BrowserWindow | undefined, heldPath: string, re
  * RENAME out of the watch glob, stamping who holds it. Returns undefined when we
  * deliberately left it alone.
  */
-function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number } | undefined {
+function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number; body: Record<string, unknown> } | undefined {
   let raw: string;
   try { raw = fs.readFileSync(fsPath, 'utf8'); } catch { return undefined; } // gone / mid-write
   let ageMs = 0;
@@ -981,7 +1111,7 @@ function claim(fsPath: string): { heldPath: string; req: BusRequest; at: number 
     fs.writeFileSync(fsPath, JSON.stringify(body, null, 2) + '\n');
     fs.renameSync(fsPath, heldPath);   // atomic: exactly one surface can win
   } catch { return undefined; }        // lost the race, or it vanished — either is fine
-  return { heldPath, req, at };
+  return { heldPath, req, at, body: bodyForTried };
 }
 
 /** Set by initCommandBus so the parse-grace re-check can reach the same pipeline. */
@@ -1000,7 +1130,7 @@ function consume(win: () => BrowserWindow | undefined, fsPath: string): void {
   if (!held0) return;
   const held = { ...held0, req: withRealName(held0.req) };
   if (held.req.action === 'send') void runSend(win, held.heldPath, held.req, held.at);
-  else runImmediate(win, held.heldPath, held.req);
+  else runImmediate(win, held.heldPath, held.req, held.body);
 }
 
 /** Recover `.holding` files left by a crash — but never steal a live sibling's hold. */
@@ -1046,7 +1176,7 @@ function adoptHolds(win: () => BrowserWindow | undefined, dir: string): void {
     try { fs.writeFileSync(p, JSON.stringify(body, null, 2) + '\n'); } catch { /* keep going */ }
     const real = withRealName(req);
     if (real.action === 'send') void runSend(win, p, real, Date.now());
-    else runImmediate(win, p, real);
+    else runImmediate(win, p, real, body);
   }
 }
 

@@ -12,11 +12,23 @@ a terminal.
 
 ## Download
 
-**[Latest release for Apple Silicon →](https://github.com/The-AIOS/aios-app/releases/latest/download/AIOS-arm64.dmg)**
+| | |
+|---|---|
+| **macOS** (Apple Silicon, macOS 11+) | [AIOS-arm64.dmg](https://github.com/The-AIOS/aios-app/releases/latest/download/AIOS-arm64.dmg) |
+| **Windows** (x64) | [AIOS-x64.exe](https://github.com/The-AIOS/aios-app/releases/latest/download/AIOS-x64.exe) |
+| **Linux** (x86_64) | [AIOS-x86_64.AppImage](https://github.com/The-AIOS/aios-app/releases/latest/download/AIOS-x86_64.AppImage) · [AIOS-amd64.deb](https://github.com/The-AIOS/aios-app/releases/latest/download/AIOS-amd64.deb) |
 
-Signed with a Developer ID, notarized by Apple, and stapled — so it opens on first launch with
-no warning, no right-click, and no terminal. macOS 11+ on an M-series Mac. On Intel? Open an
-issue; the build is one flag away.
+**macOS:** signed with a Developer ID, notarized by Apple, and stapled, so it opens on first
+launch with no warning. On an Intel Mac? Open an issue; the build is one flag away.
+
+**Windows:** the installer is **not code-signed yet**, so SmartScreen shows *"Windows protected
+your PC"* the first time. Choose **More info → Run anyway**. On a managed machine, policy may block
+it outright; ask whoever runs the machine.
+
+**Linux:** make the AppImage executable (`chmod +x AIOS-x86_64.AppImage`) and run it, or install
+the `.deb` with `sudo apt install ./AIOS-amd64.deb`.
+
+Every build updates itself: it checks quietly and installs on the next quit.
 
 ## Setup is four steps
 
@@ -112,6 +124,16 @@ gitignored.
 > the sandbox — which also means symlinking `~/.claude*` into the fake `HOME` so the session can
 > still authenticate. That rig does not exist yet; until it does, treat the handover button as
 > live-fire.
+
+## Talking to sessions: the spawn inbox
+
+Sessions and agents reach each other through files in `~/.aios/spawn-inbox/`, and the App is one
+of the two surfaces that carry them out ([AIOS Glass](https://github.com/The-AIOS/aios-glass) is
+the other). Four verbs, **contract 4**: `spawn` (start a named session), `send` (type into a
+running one), `kill` (close one), `resume` (reopen a closed one with its context). Whichever
+surface is running picks the request up; `"surface": "app"` or `"surface": "glass"` chooses.
+`cwd` is App-only, so a request that needs it should pin `"surface": "app"`. The full protocol is
+the `README.md` the running surface writes into that folder.
 
 Reach Setup in a normal instance from the command palette (**Setup**) or **Settings → Open Setup**.
 There is a `railSetup` button in the markup, but it ships `hidden` and nothing unhides it.

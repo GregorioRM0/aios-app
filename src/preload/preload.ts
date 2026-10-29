@@ -59,7 +59,7 @@ contextBridge.exposeInMainWorld('glassShell', {
   resolveNote: (name: string): Promise<string | null> => ipcRenderer.invoke('fs:resolveNote', name),
   resolveFile: (cand: string, base?: string): Promise<string | null> => ipcRenderer.invoke('fs:resolveFile', cand, base),
   dirtyLines: (abs: string): Promise<Array<[number, number]>> => ipcRenderer.invoke('fs:dirtyLines', abs),
-  resolveFiles: (cands: string[], base?: string): Promise<Record<string, string>> => ipcRenderer.invoke('fs:resolveFiles', cands, base),
+  resolveFiles: (cands: string[], base?: string): Promise<{ open: Record<string, string>; reveal: Record<string, string> }> => ipcRenderer.invoke('fs:resolveFiles', cands, base),
   /* One flag only, and a diagnostic one: AIOS_NO_WEBGL disables the GPU renderer so a
      rendering artifact can be attributed or ruled out. Deliberately not the whole env. */
   env: { AIOS_NO_WEBGL: process.env.AIOS_NO_WEBGL || '' },
@@ -90,11 +90,18 @@ contextBridge.exposeInMainWorld('glassShell', {
   /* AI-66 pt3 — the renderer tells the bus whether a send actually landed, so a request that
      cannot be delivered here is retired at once instead of waiting out a verification window. */
   busSendResult: (name: string, ok: boolean, reason: string): void => { ipcRenderer.send('bus:sendResult', { name, ok, reason }); },
+  /* #81 — the operator is writing in this session's pane: the bus holds its message (commandBus). */
+  busComposing: (name: string, composing: boolean): void => { ipcRenderer.send('bus:composing', { name, composing }); },
   vaultRoot: (): Promise<string | null> => ipcRenderer.invoke('shell:vaultRoot'),
   fsWrite: (p: string, content: string): Promise<boolean> => ipcRenderer.invoke('fs:write', p, content),
   setupCheck: (): Promise<{ id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[]> => ipcRenderer.invoke('setup:check'),
   // doctor: run a check's headless repair, then re-run the same check as proof
   doctorRepair: (id: string): Promise<{ id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean } | null> => ipcRenderer.invoke('doctor:repair', id),
+  /* Finish setup: skills → plugin → spawn → hooks, run by the App and re-checked; stops at the first
+     that does not come back green (`stoppedAt`), leaving the rest as they were. */
+  finishSetup: (): Promise<{ results: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; canRepair: boolean }[]; ok: boolean; stoppedAt?: string; reason?: string }> => ipcRenderer.invoke('doctor:finishSetup'),
+  // the wiring still missing, each with ONE pasteable line (no `!`, no wrap) — the Next steps fallback
+  wiringLeft: (): Promise<{ id: string; label: string; message: string; cmd?: string }[]> => ipcRenderer.invoke('doctor:wiringLeft'),
   // the Health card's rows (framework · vault · account · skills · claude · gh)
   /* "Having issues?" — the triage entry. Returns the next ACTION per failing check (run a
      command / open the vendor page / send a report), never a screen of findings. */
@@ -112,7 +119,7 @@ contextBridge.exposeInMainWorld('glassShell', {
   connectorsDelete: (id: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('connectors:delete', id),
   connectorsAddCustom: (input: string, service?: string): Promise<ConnResult & { id?: string }> => ipcRenderer.invoke('connectors:addCustom', input, service),
   // the Onboarding flow: sequenced onboarding stepper (steps + which one is active)
-  onboardingState: (): Promise<{ steps: { id: string; done: boolean; state: 'done' | 'active' | 'locked'; required: string[]; optional: string[]; skipped?: boolean; checks: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[] }[]; current: number }> => ipcRenderer.invoke('onboarding:state'),
+  onboardingState: (): Promise<{ steps: { id: string; done: boolean; state: 'done' | 'active' | 'locked'; required: string[]; optional: string[]; skipped?: boolean; checks: { id: string; label: string; status: 'pass' | 'warn' | 'fail'; message: string; repairHint?: string; repairCmd?: string; canRepair: boolean }[] }[]; current: number; finishPending?: string[] }> => ipcRenderer.invoke('onboarding:state'),
   onboardingSkip: (id: string): Promise<unknown> => ipcRenderer.invoke('onboarding:skip', id),
   // PAT lane of the GitHub step — stored via git's credential helper, never echoed
   onboardingStorePat: (pat: string): Promise<'verified' | 'unverified' | 'failed'> => ipcRenderer.invoke('onboarding:storePat', pat),

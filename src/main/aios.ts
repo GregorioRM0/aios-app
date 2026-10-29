@@ -15,7 +15,11 @@ import { parseFrontmatter } from '../core/frontmatter';
 import { ttlMemo } from '../core/memo';
 import { isRunnable, unverifiable, parsePlan, triage, diagnosticsReport, type ToolPlan, type Triage } from '../core/setupDiagnose';
 import { deriveOnboarding, type OnboardingDerived } from '../core/onboarding';
+import { FINISH_SETUP_IDS, needsFinishSetup, runFinishSetup, pluginRepairArgv, missingHooks, oneLine, type FinishSetupOutcome } from '../core/finishSetup';
 import { pickGit } from '../core/gitResolve';
+import { recordedStart, sameProcessStart } from '../core/procStart';
+import { processStartMs, cachedStartMs } from './procStartProbe';
+import { exportOpenMode, type ExportOpenMode } from './exportOpen';
 import { normalizeNotifyLevel, sessionKey, type NotifyLevel } from '../core/attention';
 import { isWritten, isPersonalized, missingEvidence, hasPlaceholders, type PersonalizationEvidence } from '../core/personalized';
 import personaPersonal from './personas/personal-family.json';
@@ -383,7 +387,7 @@ export function countNotes(kind: 'declared' | 'observed' | 'projects'): number {
    which is why it is invisible on a machine whose sessions are all idle — that absence is the
    field working, not the field missing. `statusUpdatedAt` is when the CURRENT status was
    entered, so it answers "blocked longest" without us having to remember anything. */
-export interface RunningAgent { pid: number; name: string; status: string; sessionId: string; cwd: string; startedAt: number; updatedAt: number; waitingFor?: string; statusUpdatedAt?: number; kind: string; entrypoint: string; formerNames?: string[]; }
+export interface RunningAgent { pid: number; name: string; status: string; sessionId: string; cwd: string; startedAt: number; updatedAt: number; waitingFor?: string; statusUpdatedAt?: number; kind: string; entrypoint: string; formerNames?: string[]; version?: string; }
 
 /** app#65: `formerNames` as the registry writes it — strings, or `{ name }` objects; anything else ignored. */
 export function formerNamesOf(v: unknown): string[] {
@@ -404,10 +408,21 @@ export function listRunningAgents(): RunningAgent[] {
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { return []; }
   const out: RunningAgent[] = [];
   for (const f of files) {
-    let d: { pid?: number; name?: string; status?: string; sessionId?: string; cwd?: string; startedAt?: number; updatedAt?: number; waitingFor?: string; statusUpdatedAt?: number; kind?: string; entrypoint?: string; formerNames?: unknown };
+    let d: { pid?: number; name?: string; status?: string; sessionId?: string; cwd?: string; startedAt?: number; updatedAt?: number; waitingFor?: string; statusUpdatedAt?: number; kind?: string; entrypoint?: string; formerNames?: unknown; procStart?: unknown; procStartFt?: unknown; version?: unknown };
     try { d = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
     const pid = Number(d?.pid ?? path.basename(f, '.json'));
     if (!Number.isInteger(pid) || pid <= 0 || !isAlive(pid)) continue;
+    /* #78 — A REUSED PID IS NOT THE SESSION. The registry file outlives its process, and once the
+       OS hands that pid to something else (Windows does so quickly) the entry read as a live
+       session and `resume` had nothing to reopen. The entry records when ITS process started; a
+       cached start time that disagrees means the pid belongs to another process now. Never
+       waits: an uncached pid starts a probe and keeps the old answer until the next poll. */
+    const recorded = recordedStart(d);
+    if (recorded !== undefined) {
+      const actual = cachedStartMs(pid);
+      if (actual === undefined) void processStartMs(pid);
+      else if (!sameProcessStart(recorded, actual)) continue;
+    }
     out.push({
       pid,
       name: String(d?.name ?? '').trim() || '(unnamed)',
@@ -422,6 +437,7 @@ export function listRunningAgents(): RunningAgent[] {
       kind: String(d?.kind ?? '').trim() || 'interactive',
       entrypoint: String(d?.entrypoint ?? '').trim(),
       ...(formerNamesOf(d?.formerNames).length ? { formerNames: formerNamesOf(d?.formerNames) } : {}),
+      ...(typeof d?.version === 'string' && d.version.trim() ? { version: (d.version as string).trim() } : {}),   // the Claude Code running it
     });
   }
   const seen = new Set<number>();
@@ -522,6 +538,14 @@ export function sessionScope(): SessionScope {
   const scope: SessionScope = { paneSessionIds, primaries: primaryNames(), busNames, roots, caseInsensitive: process.platform !== 'linux' };
   scopeCache = { at: Date.now(), key, scope };
   return scope;
+}
+
+/** #78, awaited: is the registry entry for `pid` still that process? Unknown → true (old behaviour). */
+export async function registryPidIsSession(pid: number): Promise<boolean> {
+  let d: { procStart?: unknown; procStartFt?: unknown } = {};
+  try { d = JSON.parse(fs.readFileSync(path.join(claudeConfigDir(), 'sessions', `${pid}.json`), 'utf8')); } catch { return true; }
+  const recorded = recordedStart(d);
+  return recorded === undefined ? true : sameProcessStart(recorded, await processStartMs(pid));
 }
 
 function isAlive(pid: number): boolean {
@@ -1320,7 +1344,7 @@ export function dailyNotePath(iso: string): string | undefined {
 
 // ── shell settings (.glass/shell.json — synced beside state.json) ───────────
 
-export interface ShellSettings { claudeCmd: string; showHints: boolean; showNudges: boolean; showMemory: boolean; theme: string; termFontSize: number; appFontSize: number; hiddenCards: string[]; showHidden: boolean; fileIcons: boolean; autoReveal: boolean; autoOpenExports: boolean; showWeekNumbers: boolean; killBehavior: 'ask' | 'kill' | 'capture'; terminalMode: 'auto' | 'ask'; caffeinate: CaffeinateMode; lidAwake: boolean; lidAsked: boolean; openNotesIn: 'rendered' | 'source'; ignorePaths: string[]; locale: LocalePref; attention: NotifyLevel; busFocus: 'stay' | 'follow'; }
+export interface ShellSettings { claudeCmd: string; showHints: boolean; showNudges: boolean; showMemory: boolean; theme: string; termFontSize: number; appFontSize: number; hiddenCards: string[]; showHidden: boolean; fileIcons: boolean; autoReveal: boolean; openExports: ExportOpenMode; showWeekNumbers: boolean; killBehavior: 'ask' | 'kill' | 'capture'; terminalMode: 'auto' | 'ask'; caffeinate: CaffeinateMode; lidAwake: boolean; lidAsked: boolean; openNotesIn: 'rendered' | 'source'; ignorePaths: string[]; locale: LocalePref; attention: NotifyLevel; busFocus: 'stay' | 'follow'; }
 
 /** Operator-defined names/globs the explorer hides AND git status ignores
  *  (no pending-commit bubble) — the desktop analog of VS Code's `files.exclude`
@@ -1358,14 +1382,14 @@ export function shellSettings(): ShellSettings {
     showHidden: raw.showHidden === true,      // default off
     fileIcons: raw.fileIcons !== false,       // default on (enhanced)
     autoReveal: raw.autoReveal !== false,     // default on
-    // a new file in 03 - export/ opens itself in a tab (the claude.ai-artifact feel); off = it
-    // only shows up in the tree. Default on: absent keeps the behaviour every install already has.
-    autoOpenExports: raw.autoOpenExports !== false,
+    // AI-222: what a NEW file in 03 - export/ does — open a tab, a quiet badge (default), or
+    // nothing. A saved autoOpenExports:false stays off. See exportOpen.ts.
+    openExports: exportOpenMode(raw),
     showWeekNumbers: raw.showWeekNumbers !== false, // default on (Glass parity)
     ignorePaths: Array.isArray(raw.ignorePaths)
       ? raw.ignorePaths.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim())
       : DEFAULT_IGNORE_PATHS,                 // absent → seed defaults; [] → operator cleared it
-    locale: normalizeLocalePref(raw.locale),  // 'auto' (default) | 'en' | 'es' | 'pt-br'
+    locale: normalizeLocalePref(raw.locale),  // 'auto' (default) | 'en' | 'es' | 'pt-br' | 'el'
     killBehavior: raw.killBehavior === 'kill' || raw.killBehavior === 'capture' ? raw.killBehavior : 'ask', // Glass parity; default confirm
     terminalMode: raw.terminalMode === 'auto' ? 'auto' : 'ask', // #6: ask where to run (only when live sessions exist); auto = primary/new
     /* AI-132. `auto` is the default and absent-means-default costs nothing here: the blocker dies
@@ -1666,8 +1690,90 @@ function runScript(script: string, cwd?: string): Promise<void> {
     const isPs = process.platform === 'win32' && /\.ps1$/i.test(script);
     const bin = isPs ? 'powershell.exe' : 'bash';
     const args = isPs ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script] : [script];
-    execFile(bin, args, { timeout: 120000, cwd }, (err) => (err ? reject(err) : resolve()));
+    execFile(bin, args, { timeout: 120000, cwd }, (err, stdout, stderr) =>
+      (err ? reject(Object.assign(err, { output: `${String(stdout || '')}\n${String(stderr || '')}` })) : resolve()));
   });
+}
+
+/** execFile as a promise that rejects on a non-zero exit, carrying what the tool printed — the
+ *  doctor's re-check is the real proof; the output is only there to say WHY when it is not green. */
+function execFileP(bin: string, args: string[], cwd?: string, timeout = 120000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(bin, args, { timeout, cwd, windowsHide: true }, (err, stdout, stderr) =>
+      (err ? reject(Object.assign(err, { output: `${String(stdout || '')}\n${String(stderr || '')}` })) : resolve()));
+  });
+}
+
+/** The last thing a failed tool said, as one short line — "plugin: not installed" alone does not
+ *  tell the operator whether the network, a policy or a missing file was in the way. */
+function failureLine(e: unknown): string {
+  const out = String((e as { output?: string })?.output || '');
+  const line = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop() || String((e as Error)?.message || '').split(/\r?\n/)[0];
+  return line.length > 200 ? line.slice(0, 197) + '…' : line;
+}
+
+/**
+ * Run `claude <args>` headless, as argv — never through a shell string.
+ *
+ * Resolved through claudeLocation(), not by bare name: the App captured its PATH at launch, and on
+ * a first install that is BEFORE Claude Code was installed (the same trap connectors.ts documents).
+ * On Windows only a `.exe` can be handed to execFile directly: Node refuses to spawn a `.cmd`/`.bat`
+ * without a shell since the CVE-2024-27980 fix, and an npm `.ps1` shim needs the policy bypassed.
+ * PowerShell's call operator runs all three, with EVERY argument single-quoted (psq) so a path
+ * with a space or an apostrophe is inert — still one argv per call, still no `&&`.
+ */
+function runClaude(args: string[], cwd?: string): Promise<void> {
+  const loc = claudeLocation();
+  const bin = loc.bin || shellSettings().claudeCmd;
+  if (process.platform === 'win32' && !/\.exe$/i.test(bin)) {
+    const line = `& ${psq(bin)} ${args.map(psq).join(' ')}; exit $LASTEXITCODE`;
+    return execFileP('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', line], cwd, 180000);
+  }
+  return execFileP(bin, args, cwd, 180000);
+}
+
+/**
+ * How to run a framework Python script, or undefined when nothing safe is available.
+ *
+ * `uv` FIRST, exactly as the framework runs its own hooks (`uv run …/context-floor.py`), and for
+ * the framework's reason: on Windows the name `python3` (and often `python`) is the Microsoft Store
+ * alias, which prints an installer notice, runs nothing and exits non-zero. Step 1 of setup
+ * installs uv, and `install-settings.py` is stdlib-only, so `uv run` needs no environment.
+ * Searched in the persisted PATH and in uv's own install folders as well as this process's PATH,
+ * because the App's PATH predates the install (AI-111). Fallbacks: `python3` on POSIX, the `py`
+ * launcher on Windows (it lives in C:\Windows, never a Store alias). Never a bare `python` there.
+ */
+export function pythonRunner(): { bin: string; args: string[]; onPath: boolean } | undefined {
+  const home = os.homedir();
+  const win = process.platform === 'win32';
+  const envDirs = (process.env.Path || process.env.PATH || '').split(path.delimiter).map((d) => d.trim()).filter(Boolean);
+  const pathDirs = win ? [...winPersistedPath(), ...envDirs] : envDirs;
+  const isFile = (p: string): boolean => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+  const find = (name: string, extra: string[]): { bin: string; onPath: boolean } | undefined => {
+    for (const d of pathDirs) { const p = path.join(d, name); if (isFile(p)) return { bin: p, onPath: true }; }
+    for (const d of extra) { const p = path.join(d, name); if (isFile(p)) return { bin: p, onPath: false }; }
+    return undefined;
+  };
+  const localApp = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+  const uv = win
+    ? find('uv.exe', [path.join(home, '.local', 'bin'), path.join(home, '.cargo', 'bin'), path.join(localApp, 'Microsoft', 'WinGet', 'Links'), path.join(home, 'scoop', 'shims')])
+    : find('uv', [path.join(home, '.local', 'bin'), path.join(home, '.cargo', 'bin'), '/opt/homebrew/bin', '/usr/local/bin']);
+  if (uv) return { bin: uv.bin, args: ['run', '--no-project'], onPath: uv.onPath };
+  if (win) {
+    const py = find('py.exe', [process.env.SystemRoot || 'C:' + path.sep + 'Windows']);
+    return py ? { bin: py.bin, args: ['-3'], onPath: py.onPath } : undefined;
+  }
+  const py3 = find('python3', ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin']);
+  return py3 ? { bin: py3.bin, args: [], onPath: py3.onPath } : undefined;
+}
+
+/** The hooks installer as ONE line the operator could type into their own terminal — PowerShell on
+ *  Windows (a quoted program path needs the `&` call operator there), POSIX elsewhere. */
+function hooksCmdLine(py: { bin: string; args: string[]; onPath: boolean }, script: string): string {
+  const win = process.platform === 'win32';
+  const q = win ? psq : shq;
+  const exe = py.onPath ? path.basename(py.bin).replace(/\.exe$/i, '') : (win ? `& ${psq(py.bin)}` : shq(py.bin));
+  return [exe, ...py.args, q(script), '--apply'].join(' ');
 }
 
 /**
@@ -2031,8 +2137,23 @@ function doctorChecks(): DoctorCheck[] {
         // the marketplace source is the local framework checkout (directory
         // source) — the vault the operator just cloned IS the marketplace
         const src = root ?? path.join(os.homedir(), 'aios');
-        const cmd = `${claudeCmd} plugin marketplace add '${src.replace(/'/g, `'\\''`)}' && ${claudeCmd} plugin install aios@the-aios`;
-        return { id: 'plugin', label: t('setupCheck.plugin'), status: 'warn', message: t('setupCheck.pluginMissing'), repairCmd: cmd, repairHint: cmd, canRepair: false };
+        /* HEADLESS NOW, and as argv (pluginRepair below). This was one string,
+           `claude plugin marketplace add '…' && claude plugin install …`, opened in a terminal —
+           and on Windows that terminal is PowerShell 5.1, which has no `&&`, so the repair failed
+           before Claude ran. The command below is kept only as the visible fallback (triage, the
+           Next steps page), written in the dialect of the shell it will actually be typed into:
+           `;` and doubled single quotes for PowerShell, `&&` and POSIX quotes everywhere else. */
+        const cmd = process.platform === 'win32'
+          ? `${claudeCmd} plugin marketplace add ${psq(src)}; ${claudeCmd} plugin install aios@the-aios`
+          : `${claudeCmd} plugin marketplace add ${shq(src)} && ${claudeCmd} plugin install aios@the-aios`;
+        return { id: 'plugin', label: t('setupCheck.plugin'), status: 'warn', message: t('setupCheck.pluginMissing'), repairCmd: cmd, repairHint: cmd, canRepair: !!root };
+      },
+      repair: async () => {
+        if (!root) return;
+        const known = knownMarketplaces().some((m) => m.name === 'the-aios');
+        // two calls, in order; the re-check that follows is the proof, so a failed first call
+        // simply leaves the row amber instead of being reported as success
+        for (const argv of pluginRepairArgv(root, known)) await runClaude(argv, root);
       },
     },
     {
@@ -2083,6 +2204,37 @@ function doctorChecks(): DoctorCheck[] {
       repair: async () => {
         const script = repairScript(path.join('hooks', 'claude-identity', 'install-wrappers.sh'));
         if (script) await runScript(script, root);
+      },
+    },
+    {
+      /* THE HOOKS — the one piece of wiring the doctor had no row for. SETUP.md's step 8 has the
+         setup session run `install-settings.py --apply`, which edits ~/.claude/settings.json; auto
+         mode blocks a session editing its own settings, so on an App install this was the line most
+         often handed to the operator to paste. The App runs the same installer itself (it backs the
+         file up, keeps every existing key, and reads its own write back). It passes when every hook
+         the framework SHIPS is registered — read from the file, not by running Python on every poll. */
+      id: 'hooks', severity: 'warn',
+      run: async (): Promise<CheckResult> => {
+        const label = t('setupCheck.hooks');
+        if (!root) return { id: 'hooks', label, status: 'warn', message: t('setupCheck.hooksNoFramework'), canRepair: false };
+        const missing = missingHooks(readJson(claudeSettingsPath()), (f) => fs.existsSync(path.join(root, 'hooks', f)));
+        if (!missing.length) return { id: 'hooks', label, status: 'pass', message: t('setupCheck.hooksOk'), canRepair: false };
+        const script = scriptIf(path.join('hooks', 'install-settings.py'));
+        const py = script ? pythonRunner() : undefined;
+        return {
+          id: 'hooks', label, status: 'warn',
+          message: !script ? t('setupCheck.hooksNoInstaller') : !py ? t('setupCheck.hooksNoUv') : t('setupCheck.hooksMissing', { n: missing.length }),
+          repairHint: script && py ? hooksCmdLine(py, script) : undefined,
+          canRepair: !!(script && py),
+        };
+      },
+      repair: async () => {
+        const script = scriptIf(path.join('hooks', 'install-settings.py'));
+        const py = script ? pythonRunner() : undefined;
+        if (!script || !py) return;
+        /* --settings names the file THIS check reads, so the installer and the check can never be
+           looking at two different settings.json files (CLAUDE_CONFIG_DIR, a fixture home). */
+        await execFileP(py.bin, [...py.args, script, '--apply', '--settings', claudeSettingsPath()], root, 300000);
       },
     },
     {
@@ -2317,10 +2469,48 @@ export async function repairCheck(id: string): Promise<CheckResult | null> {
   return check.run();
 }
 
+/**
+ * "Finish setup": skills → plugin → spawn → hooks, each repaired by the App in its own lane and
+ * re-checked, stopping at the first that does not come back green (see core/finishSetup.ts).
+ * Starts from the BATTERY, not the raw checks, so a remedy the battery withheld (a missing tool
+ * in the way) is never attempted behind the screen's back.
+ */
+export async function finishSetup(): Promise<FinishSetupOutcome<CheckResult>> {
+  const all = await setupChecks();
+  const said: Record<string, string> = {};
+  const out = await runFinishSetup(all, async (id) => {
+    const check = doctorChecks().find((c) => c.id === id);
+    if (!check) return null;
+    // repairCheck's loop, keeping the tool's own last words for the one that stops the run
+    if (check.repair) {
+      try { await check.repair(); } catch (e) { said[id] = failureLine(e); }
+    }
+    return check.run();
+  });
+  if (out.stoppedAt && said[out.stoppedAt]) out.reason = `${out.reason} (${said[out.stoppedAt]})`;
+  return out;
+}
+
+/**
+ * What is still not wired, each with the ONE line that would wire it by hand — for the Next steps
+ * page, which shows these only when the App could not finish on its own. One physical line each,
+ * never `!`-prefixed (oneLine): a wrapped or `!` command is what stalled first installs.
+ */
+export async function wiringLeft(): Promise<{ id: string; label: string; message: string; cmd?: string }[]> {
+  const all = await setupChecks();
+  return FINISH_SETUP_IDS
+    .map((id) => all.find((c) => c.id === id))
+    .filter((c): c is CheckResult => !!c && c.status !== 'pass')
+    .map((c) => ({
+      id: c.id, label: c.label, message: c.message,
+      cmd: c.repairHint && !/^https:\/\//.test(c.repairHint) ? oneLine(c.repairHint) : undefined,
+    }));
+}
+
 /** AI-18 Health card (ported from aios-glass computeHealth, doctor-backed):
  *  the ongoing "is my AIOS wired?" readout — Setup is day one, this is every
  *  day after. Order = display order on the pulse card. */
-export const HEALTH_IDS = ['framework', 'vault', 'account', 'skills', 'claude', 'gh'] as const;
+export const HEALTH_IDS = ['framework', 'vault', 'account', 'skills', 'plugin', 'spawn', 'hooks', 'claude', 'gh'] as const;   // the four wiring rows sit together (release round: wiring lost after setup had no visible prompt)
 
 /** #27 — scheduled-job health from canonical's status files ($AIOS_HEALTH_DIR or ~/.aios/health).
  *  Read only; the jobs themselves (hooks/aios-health.py) write them. No directory → no rows. */
@@ -2344,8 +2534,15 @@ export async function computeHealth(): Promise<CheckResult[]> {
 // ── the Onboarding flow (sequenced onboarding stepper — model in src/core/onboarding.ts) ──
 
 /** One battery of doctor checks → the gated stepper (done/active/locked). */
-export async function onboardingState(): Promise<OnboardingDerived<CheckResult>> {
-  return deriveOnboarding(await setupChecks(), onboardingSkipped());
+export async function onboardingState(): Promise<OnboardingDerived<CheckResult> & { finishPending: string[] }> {
+  const all = await setupChecks();
+  /* Which wiring "Finish setup" would fix right now, in run order — empty when the framework is not
+     there yet or nothing is amber, which is what hides the button. Decided here, from the same
+     battery the stepper reads, so the renderer keeps no second list of ids to drift. */
+  const finishPending = needsFinishSetup(all)
+    ? FINISH_SETUP_IDS.filter((id) => all.some((c) => c.id === id && c.status !== 'pass'))
+    : [];
+  return { ...deriveOnboarding(all, onboardingSkipped()), finishPending };
 }
 /* Steps the operator passed with "Skip for now". In ~/.aios, not the framework's shell.json: the
    framework may not exist yet when GitHub is offered (it comes before the setup session). */

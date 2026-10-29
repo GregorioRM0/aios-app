@@ -130,7 +130,7 @@ function fnBody(name: string): string {
  *  `resume` it hands off to (split out so the name lookup can read transcripts without blocking
  *  the bus). Read together because the seams below span both. */
 function runImmediateBody(): string {
-  const body = fnBody('runImmediate') + '\n' + fnBody('runResume');
+  const body = fnBody('runImmediate') + '\n' + fnBody('resumeOrReveal') + '\n' + fnBody('runResume');
   // Controls: the stripper must have stripped, and must not have eaten the code.
   assert.doesNotMatch(body, /ALREADY AWAKE/, 'the comment stripper did not strip');
   assert.match(body, /req\.action === 'resume'/, 'the comment stripper ate the code');
@@ -147,7 +147,7 @@ test('no path leaves runImmediate without disposing the held request', () => {
   /* Handing the request to runResume is a transfer of ownership, not a leak: runResume disposes
      it on every path, which this same loop checks because its body is part of `body`. */
   const disposes = (s: string) =>
-    /unlinkSync\(heldPath\)|markUndelivered\(heldPath|runResume\(win, heldPath, req\)/.test(s);
+    /unlinkSync\(heldPath\)|markUndelivered\(heldPath|runResume\(win, heldPath, req\)|resumeOrReveal\(win, heldPath, req\)|runSend\(win, heldPath|launchCwd\(heldPath, req\)/.test(s);   // launchCwd dead-letters when it returns null
   let from = 0, seen = 0;
   for (;;) {
     const at = body.indexOf('return', from);
@@ -166,7 +166,9 @@ test('no path leaves runImmediate without disposing the held request', () => {
 
 test('resume reaches the SAME launcher spawn does — one extracted function, two callers', () => {
   const body = runImmediateBody();
-  assert.equal(body.match(/runSpawn\(win, heldPath, req\)/g)?.length, 2,
+  /* The fallback hands runSpawn the request with its `prompt` moved into `task` (fallbackSpawnRequest),
+     so the fresh session opens with the caller's message — still the same launcher. */
+  assert.equal(body.match(/runSpawn\(win, heldPath, (req|fallbackSpawnRequest\(req\))\)/g)?.length, 2,
     'runSpawn must be called from both the default spawn path and resume\'s opt-in fallback');
 });
 

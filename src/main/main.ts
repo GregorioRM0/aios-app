@@ -5,7 +5,7 @@ import { withDefaultLocale } from './termLocale';
 import { resolvedTheme, WINDOW_BG } from '../core/theme';
 import { plainText } from '../core/plainText';
 import { askSessionName, uniqueName } from '../core/sessionName';
-import { runDir, writePrivateFile } from './privateRun';
+import { runDir } from './privateRun';   // legacy snapshot sweep only; new files go through handoffDir
 import { speakable, lastAnswer, guessLang } from '../core/speakable';
 import { answerPlain } from '../core/answerPlain';
 import { t } from '../i18n';
@@ -15,10 +15,14 @@ import * as os from 'os';
 import { execFile } from 'child_process';
 import { pathToFileURL } from 'url';   // main builds the file:// URL itself — see shell:openPathExternal
 import { classifyForRead } from './preview';   // the fs:read gate (#39)
+import { resolveLinkTargets, revealable, statWithin } from './pathLinks';
+import { withToolDirs } from './toolPath';
+import { writeHandoffFile, sweepHandoffDirs } from './handoffDir';   // #72: Homebrew/uv on every session's PATH   // terminal links: open vs reveal
 import * as pty from 'node-pty';
 import { PanelHost, setPanelLog } from './panelHost';
 import { installMenu } from './menu';
 import { initCommandBus, appLog } from './commandBus';
+import { isBusCwdGranted } from './busCwd';
 setPanelLog(appLog);   // panel notes land in the bus trail (see panelHost)
 import * as caffeine from './caffeinate';
 import { composeBuilderBrief, slugify, type DesignerKind, type DesignerFields } from '../core/designer';
@@ -99,6 +103,8 @@ function termEnv(cmd?: string, name?: string): Record<string, string> {
   delete env.CLAUDE_CODE_CHILD_SESSION;
   env.CLAUDE_CODE_FORCE_SESSION_PERSIST = '1';
   env.AIOS_GLASS_TERM = '1';
+  /* #72 — the folders a login shell adds (Homebrew, ~/.local/bin), so `uv` and friends resolve. */
+  if (process.platform !== 'win32') env.PATH = withToolDirs(env.PATH, os.homedir(), process.platform, (d) => fs.existsSync(d));
   /* WINDOWS ONLY — give a session's output a scrollback the operator can actually reach.
      REPORTED: a Windows operator could not scroll a Claude session at all — she saw one
      screenful and a long answer was unreadable past it. It fails in Windows Terminal too, so it
@@ -243,7 +249,9 @@ ipcMain.handle('pty:spawn', (e, opts: { cols: number; rows: number; cmd?: string
     if (!d) return false;
     try { return fs.statSync(d).isDirectory(); } catch { return false; }
   };
-  const requested = opts.cwd && inAllowed(opts.cwd) ? opts.cwd : undefined;
+  /* A bus request's `cwd` is validated where it arrives (main/busCwd: absolute, a directory, inside
+     home) and granted there; it may be outside the explorer's roots, which is the point of it. */
+  const requested = opts.cwd && (inAllowed(opts.cwd) || isBusCwdGranted(opts.cwd)) ? opts.cwd : undefined;
   const cwd = [requested, aios.frameworkRoot(), os.homedir()].find(usable) as string;
   const p = pty.spawn(shell, loginArgs(shell, !!opts.noProfile), {
     name: 'xterm-256color',
@@ -668,25 +676,17 @@ ipcMain.handle('fs:resolveFile', (_e, cand: string, base?: string) => {
   } catch { return null; }
 });
 /* Plural form: a hovered terminal line can hold a dozen path-shaped tokens, and resolving
-   them one IPC at a time is what made the first hover feel slow. */
-ipcMain.handle('fs:resolveFiles', (_e, cands: string[], base?: string) => {
-  const out: Record<string, string> = {};
-  for (const c of (Array.isArray(cands) ? cands : []).slice(0, 24)) {
-    try {
-      let v = String(c || '').trim().replace(/[)\]},.;:'"]+$/, '');
-      if (!v) continue;
-      v = v.replace(/:\d+(?::\d+)?$/, '');
-      if (v.startsWith('~')) v = path.join(os.homedir(), v.slice(1));
-      const bases = [base, aios.frameworkRoot(), os.homedir()].filter(Boolean) as string[];
-      const tries = path.isAbsolute(v) ? [v] : bases.map((b) => path.resolve(b, v));
-      for (const abs of tries) {
-        if (!inAllowed(abs)) continue;
-        try { if (fs.statSync(abs).isFile()) { out[c] = abs; break; } } catch { /* next */ }
-      }
-    } catch { /* skip */ }
-  }
-  return out;
-});
+   them one IPC at a time is what made the first hover feel slow. Answers TWO maps — what the
+   viewer may open, and what Finder may only reveal (a folder, or a file outside the allowed
+   roots) — see pathLinks.ts for why the second one has no roots gate. */
+const statOrNull = statWithin();   // async + time-limited: a hung mount must not freeze the app on hover
+ipcMain.handle('fs:resolveFiles', (_e, cands: string[], base?: string) =>
+  resolveLinkTargets(cands, {
+    allowed: inAllowed,
+    bases: [base, aios.frameworkRoot(), os.homedir()].filter(Boolean) as string[],
+    home: os.homedir(),
+    stat: statOrNull,
+  }));
 ipcMain.handle('fs:sortState', () => ({ master: aios.masterSort(), overrides: aios.folderSorts() }));
 ipcMain.handle('fs:setSort', (_e, folder: string, mode: string) => {
   if (typeof folder !== 'string' || !inAllowed(folder)) return { master: aios.masterSort(), overrides: aios.folderSorts() };
@@ -717,7 +717,13 @@ ipcMain.handle('html:toPng', async (_e, filePath: string) => {
     return { out, w: img.getSize().width, h: img.getSize().height };
   } catch { return null; } finally { off.destroy(); }
 });
-ipcMain.handle('shell:reveal', (_e, p: string) => { if (resolveIn(p)) shell.showItemInFolder(p); return true; });
+/* Reveal reads nothing, so it is not held to the allowed roots: an absolute path that exists is
+   enough (a relative one still resolves inside them, as the explorer's callers expect). */
+ipcMain.handle('shell:reveal', async (_e, p: string) => {
+  const abs = (await revealable(p, statOrNull)) ?? resolveIn(p);
+  if (abs) shell.showItemInFolder(abs);
+  return true;
+});
 ipcMain.handle('shell:readText', () => clipboard.readText());
 /* Interface scale via Electron's NATIVE zoom, never CSS `body { zoom }`. CSS zoom scales
    painting but not the coordinate space, so getBoundingClientRect() and a component's own
@@ -795,7 +801,7 @@ ipcMain.handle('feedback:snapshot', (_e, name: string, text: string) => {
     /* Review should-fix 12: written ALREADY REDACTED — token shapes, keys, credentials in URLs. The
        agent still scrubs; the App no longer depends on it. A private run file (privateRun), like
        every file a session is told to read. */
-    return writePrivateFile(runDir(), `aios-report-${slug}-${Date.now()}.txt`, redactSecrets(String(text ?? '').slice(0, 200_000)));
+    return writeHandoffFile(`aios-report-${slug}-${Date.now()}.txt`, redactSecrets(String(text ?? '').slice(0, 200_000)));
   } catch { return ''; }
 });
 /* Snapshots are read once, by the session the report opened. Any older than a day is an orphan
@@ -810,7 +816,7 @@ function sweepReportSnapshots(maxAgeMs = 24 * 60 * 60 * 1000): void {
     }
   } catch { /* tmp unreadable */ }
 }
-app.whenReady().then(() => sweepReportSnapshots()).catch(() => undefined);
+app.whenReady().then(() => { sweepReportSnapshots(); sweepHandoffDirs(); }).catch(() => undefined);   // older loose snapshots + handoff folders
 ipcMain.handle('shell:copyText', (_e, t: string) => { clipboard.writeText(String(t)); return true; });
 /* AI-192 — ⇧⌘C / right-click "Copy as plain text": the selection without Claude's TUI scaffolding
    (bullets, quote bars, indents, the footer) and with terminal wraps rejoined into paragraphs. */
@@ -960,7 +966,7 @@ ipcMain.handle('task:handoff', (_e, req: { prompt: string; name?: string }) => {
   const slug = (String(req?.name ?? 'task').toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'task').slice(0, 40);
   /* A private run file (privateRun). A failed write is REFUSED, never "fall back to inline": typing
      a long prompt is the mangling this handoff exists to prevent. The renderer says why. */
-  try { return taskFileInstruction(writePrivateFile(runDir(), `aios-task-${slug}.md`, prompt)); }
+  try { return taskFileInstruction(writeHandoffFile(`aios-task-${slug}.md`, prompt)); }
   catch (e) { return { error: (e as Error).message }; }
 });
 /* app#66 — the suggested session name for an Ask AIOS intent: a dated USER.md identity the intent
@@ -987,7 +993,7 @@ ipcMain.handle('designer:handoff', (_e, req: { kind: DesignerKind; fields: Desig
   });
   if (!brief) return null;
   const slug = slugify(req.fields?.name || '') || 'unit';
-  try { const file = writePrivateFile(runDir(), `aios-designer-${req.kind}-${slug}.md`, brief); return { file, prompt: taskFileInstruction(file) }; }
+  try { const file = writeHandoffFile(`aios-designer-${req.kind}-${slug}.md`, brief); return { file, prompt: taskFileInstruction(file) }; }
   catch (e) { return { error: (e as Error).message }; }
 });
 ipcMain.handle('designer:brief', (_e, req: { kind: DesignerKind; fields: DesignerFields; mode: 'create' | 'update'; templatePath?: string; targetPath?: string }) => {
@@ -1025,6 +1031,11 @@ ipcMain.handle('onboarding:storePat', async (_e, pat: string): Promise<'verified
 });
 // doctor: headless repair + re-run-the-same-check proof (see aios.repairCheck)
 ipcMain.handle('doctor:repair', (_e, id: string) => aios.repairCheck(String(id)));
+/* "Finish setup": the App runs the four wiring installers itself (skills → plugin → spawn → hooks),
+   re-checking each — the lane the guided setup session cannot use in auto mode. See core/finishSetup.ts. */
+ipcMain.handle('doctor:finishSetup', () => aios.finishSetup());
+// what is still not wired, each with its one-line manual command — the Next steps page's fallback
+ipcMain.handle('doctor:wiringLeft', () => aios.wiringLeft());
 ipcMain.handle('doctor:health', () => aios.computeHealth());
 ipcMain.handle('health:routines', () => aios.routineHealth());   // #27
 // "Having issues?" — one battery + a plan per failing tool → the next ACTION, not a report.
@@ -1169,7 +1180,7 @@ ipcMain.handle('claude:set', (_e, key: 'model' | 'effort' | 'advisor' | 'mode' |
   aios.setClaudeConfig(key, value);
   return aios.claudeConfig();
 });
-ipcMain.handle('shell:setSetting', (_e, key: 'claudeCmd' | 'showHints' | 'showNudges' | 'showMemory' | 'theme' | 'termFontSize' | 'showHidden' | 'fileIcons' | 'autoReveal' | 'autoOpenExports' | 'showWeekNumbers' | 'killBehavior' | 'terminalMode' | 'openNotesIn' | 'appFontSize' | 'hiddenCards' | 'ignorePaths' | 'locale' | 'caffeinate' | 'attention' | 'busFocus' | 'lidAsked', value: unknown) => {
+ipcMain.handle('shell:setSetting', (_e, key: 'claudeCmd' | 'showHints' | 'showNudges' | 'showMemory' | 'theme' | 'termFontSize' | 'showHidden' | 'fileIcons' | 'autoReveal' | 'openExports' | 'showWeekNumbers' | 'killBehavior' | 'terminalMode' | 'openNotesIn' | 'appFontSize' | 'hiddenCards' | 'ignorePaths' | 'locale' | 'caffeinate' | 'attention' | 'busFocus' | 'lidAsked', value: unknown) => {
   aios.setShellSetting(key, value);
   /* AI-132: changing the RULE retires any override — otherwise you switch manual→auto and watch
      auto not follow sessions, with nothing on screen explaining why. Applies immediately rather

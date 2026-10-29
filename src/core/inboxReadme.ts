@@ -96,6 +96,7 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
 
 - \`task\` — optional first prompt. \`"model": "<id>"\` **or** \`"tier": "<rung>"\` — optional, routes the worker by cognitive load.
 - **The rung names are not listed here on purpose.** This file used to name a closed set of two, went stale when the ladder grew, and then contradicted the handler beside it — while \`CLAUDE.md\` points sessions at this file as the protocol's authority. So an agent reading the authority would have concluded the current rungs were invalid. Ask the one table instead: **\`~/aios/hooks/resolve-tier --list\`** prints every rung and what it resolves to, and \`MODEL-ROUTING.md\` says what each is *for*. An unknown rung is refused with a dead letter that lists the valid ones, so a guess is safe — it fails loudly rather than falling back.
+- \`cwd\` — optional, **App only**: the directory the session's terminal opens in, e.g. \`"cwd": "/Users/<you>/work/reviewer"\`. Absolute, an existing directory, inside your home once symlinks are resolved — anything else is dead-lettered naming the field, never quietly opened somewhere else. Absent = the framework root, as before. **Glass dead-letters a request carrying \`cwd\`** (naming the field) rather than open it in the wrong folder, so send \`"surface": "app"\` with it.
 - A name that is already live is *revealed*, never duplicated.
 - No \`task\` still bootstraps **when the App fulfils the request** — it sends a first prompt, so the worker runs its Session Start Ritual on turn one instead of sitting idle. Glass boots the session and leaves it at the prompt (the ritual fires on the first turn, and there is no first turn). Pass a \`task\` when you need one rather than relying on a bootstrap the other surface doesn't perform.
 
@@ -106,6 +107,20 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
 **kill** — close that session (shell + claude + respawn loop):
 
     { "action": "kill", "name": "designer" }
+
+- **Conditional kill** (\`expect\`, AIOS App): say what you saw when you decided the session was done, and the App checks it immediately before killing. That reduces the risk of killing a session someone just wrote to; it does not remove it. If the session changed since, it is **left running** and the request is archived with the reason in \`_archive/<name>-<time>.refused.json\` (\`_refused.reason\`, kept a week). That is the guard working, so it is not a dead letter. A malformed \`expect\`, or a request rewritten after it was claimed, is still dead-lettered (\`kill refused …\`). Keys, each optional but at least one:
+  - \`sessionId\` — the registry's.
+  - \`status\` — normally \`idle\`.
+  - \`idleSince\` — the timestamp of the last user/assistant record you saw, copied as the transcript has it: full date and time with \`Z\` or an offset, at most milliseconds.
+
+  The App also refuses when it cannot verify:
+  - an unknown key or an unusable value;
+  - a request it cannot re-read;
+  - with \`idleSince\`, a transcript that is unreadable, has a line that is not JSON, ends mid-line, has a turn without a valid timestamp, or has no turn at all.
+
+  **Check support first.** Glass and older Apps ignore \`expect\` and kill unconditionally. The App lists \`"kill-expect"\` under \`capabilities\` in \`~/.aios/surfaces/app.json\`, valid only while that file's \`pid\` is running. Send a conditional kill only when you see it, and address it with \`"surface": "app"\` so no other surface takes it.
+
+      { "action": "kill", "name": "designer", "surface": "app", "expect": { "sessionId": "<uuid>", "status": "idle", "idleSince": "2026-01-01T09:00:00.000Z" } }
 
 **Contract 4 — optional fields** (verbs unchanged; a contract-3 request behaves exactly as before):
 
@@ -135,6 +150,10 @@ Why this exists: Claude's auto-mode classifier gates agent-invoked \`spawn\`/\`s
 
       { "action": "resume", "name": "designer", "prompt": "…", "fallback": "spawn" }
 
+  The fresh session opens with your \`prompt\` as its first message, exactly as a spawn's \`task\`.
+- \`cwd\` (App only) works here too, with the same rules as on spawn — pass the directory the
+  session originally ran in, since Claude Code keeps transcripts per directory. It also applies to
+  the fallback spawn. Glass dead-letters it, so pin \`"surface": "app"\` alongside.
 - No \`--name\` and no \`--model\` are passed: a resumed session keeps the identity and the model
   it already had.
 
