@@ -392,3 +392,16 @@ test('the done screen puts Finish setup ABOVE its buttons, and the Health card o
   assert.match(health, /if \(notGreen\.some\(\(c\) => \['skills', 'plugin', 'spawn', 'hooks'\]\.includes\(c\.id\)\)\) \{/);
   assert.match(health, /fin\.addEventListener\('click', \(\) => openSetupTab\(\)\);/, 'it opens Setup, where every change is named first');
 });
+
+test('the done screen says "Almost there" while wiring is missing, never "wired" above the wiring box', () => {
+  const fs = require('fs') as typeof import('fs');
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  const done = app.slice(app.indexOf('function onboardingDoneEl()'), app.indexOf('function onboardingDoneEl()') + 1200);
+  assert.match(done, /t\(almost \? 'onboarding\.almostDone' : 'onboarding\.allDone'\)/);
+  assert.match(done, /el\('button', almost \? 'vbtn' : 'vbtn primary', t\('onboarding\.enterAios'\)\)/, 'Enter AIOS steps down while Finish setup is the action');
+  for (const loc of ['en', 'es', 'pt-br', 'el']) {
+    const j = JSON.parse(fs.readFileSync(`src/i18n/locales/${loc}.json`, 'utf8'));
+    assert.ok(j['onboarding.almostDone'] && j['onboarding.almostDoneSub'], loc);
+    assert.doesNotMatch(j['onboarding.allDoneSub'], /pulse/i, `${loc}: "pulse" is our word, not the operator's`);
+  }
+});

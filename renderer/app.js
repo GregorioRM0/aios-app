@@ -8619,10 +8619,14 @@ function openSetupTab() {
     function onboardingDoneEl() {
       // end signed-in and running: land on Home with the pulse live
       const d = el('div', 'onboarding-done');
-      d.appendChild(el('div', 'tbig', t('onboarding.allDone')));
-      d.appendChild(el('div', 'tsub', t('onboarding.allDoneSub')));
+      /* Wiring still missing → "Almost there", never "You're in … wired" above a box saying a few
+         things are left to wire (release round: the two read as a contradiction). */
+      const almost = finishPending.length > 0;
+      d.appendChild(el('div', 'tbig', t(almost ? 'onboarding.almostDone' : 'onboarding.allDone')));
+      d.appendChild(el('div', 'tsub', t(almost ? 'onboarding.almostDoneSub' : 'onboarding.allDoneSub')));
       const row2 = el('div', 'step-acts');
-      const enter = el('button', 'vbtn primary', t('onboarding.enterAios'));
+      // one coral button per screen: while wiring is missing that is Finish setup, not Enter AIOS
+      const enter = el('button', almost ? 'vbtn' : 'vbtn primary', t('onboarding.enterAios'));
       enter.addEventListener('click', () => openHomeTab());
       row2.appendChild(enter);
       /* THE FULL TOUR, NOT "deepen your context" — and it says the promised words out loud.
