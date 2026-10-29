@@ -63,7 +63,7 @@ test('several new exports open a list, never a tab each, and confirming clears t
   const app = fs.readFileSync('renderer/app.js', 'utf8');
   const fn = app.slice(app.indexOf('async function pickExports()'), app.indexOf('function paintExportBadge()'));
   assert.ok(fn.length > 100, 'pickExports exists');
-  assert.match(fn, /NEW_EXPORTS\.length === 1\) \{ void openViewer/, 'one export still opens on click');
+  assert.doesNotMatch(fn, /NEW_EXPORTS\.length === 1/, 'one export opens the list too, never a tab straight from the folder icon');
   assert.match(fn, /checkModal\(t\('exports\.title'/, 'several open the Resume-style list');
   assert.match(fn, /picked: false/, 'nothing is pre-ticked');
   assert.match(fn, /if \(!chosen\) return;/, 'Esc keeps the count');

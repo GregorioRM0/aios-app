@@ -5993,11 +5993,11 @@ exportBadge.addEventListener('click', (e) => {
   e.stopPropagation();   // the count opens the export; the button itself still toggles the explorer
   void pickExports();
 });
-/* One new export opens on click. Several open a list, the Resume one: nothing pre-ticked, tick
-   what to open. Twenty exports are one click and a choice, never twenty tabs; what is left
-   unopened stays counted, and "Mark all as seen" clears the rest. Esc changes nothing. */
+/* The count opens a list, the Resume one, even for a single export: the whole files button opens
+   it, and a folder icon that opened a file tab directly was a surprise with no way to dismiss it.
+   Nothing pre-ticked; tick what to open. Twenty exports are one click and a choice, never twenty
+   tabs; what is left unopened stays counted, and "Mark all as seen" clears it. Esc changes nothing. */
 async function pickExports() {
-  if (NEW_EXPORTS.length === 1) { void openViewer(NEW_EXPORTS[0].path); return; }
   if (!NEW_EXPORTS.length) return;
   const items = NEW_EXPORTS.slice().reverse().map((x) => {
     const sub = (x.path.split(/[\\/]03 - export[\\/]/)[1] || '').replace(/\\/g, '/');   // Windows paths too
