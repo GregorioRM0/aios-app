@@ -6892,7 +6892,7 @@ function openWhatsNewTab() {
        gets the cup — the same glyphs sitting in the title bar — so reading the note teaches the
        operator what to look for afterwards. An arbitrary decorative icon here would be a missed
        chance to connect the words to the surface. */
-    for (const [n, glyph] of [[1, 'assistant'], [2, 'panel'], [3, 'bolt']]) {
+    for (const [n, glyph] of [[1, 'folder'], [2, 'keyboard'], [3, 'wrench'], [4, 'inbox']]) {   // one card per subject
       const c = el('div', 'wncard');
       const ic = el('div', 'wnicon'); ic.innerHTML = icon(glyph, 22);
       c.append(ic, el('div', 'wntitle', t('whatsnew.h' + n)), el('div', 'wnbody', t('whatsnew.b' + n)));
