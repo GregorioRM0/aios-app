@@ -268,8 +268,9 @@ whether any failed, and to look inside only when they care.
   open and its scroll position is kept).
 - *The unfolded state persists.* A group starts folded, except when the operator had already opened one of
   its rows (that row must not vanish). The state lives on the node and in `cs.groupOpen`, keyed by the uuid of
-  the run's first call, so it survives new calls joining, status changes, repaints, and a run that splits and
-  joins again; a manual fold stays folded; a `reset` forgets everything. Unfolding follows the log to the
+  the run's first call, so it survives new calls joining, status changes, repaints, a run that splits and
+  joins again, and older calls joining it from above when the tail window had cut it (the new first call
+  inherits the choice of the run it absorbs); a manual fold stays folded; a `reset` forgets everything. Unfolding follows the log to the
   tail, folding does not.
 
 ### 2.3 Paths in the conversation are links
@@ -1166,8 +1167,10 @@ session and the shell with it instead of orphaning them.
 
 **Not verified.** Code signing, notarization and Gatekeeper (no identity on the machine). Installing the dmg and the
 auto-update path (out of scope: it would touch an installed copy). The Windows and Linux builds: `dist:win` and
-`dist:linux` were not run, so the new asset gate has not run there (it uses no platform-specific call, but that is a
-claim from reading, not from a run). Painting of the packaged window: the window is never shown, so the PNGs come
+`dist:linux` were not run, so the asset gate has not run there. The gate has no platform condition in the app and both
+scripts end in `verify:package`, whose Linux and Windows checks now require `chat assets OK` as the macOS one does
+(`chat view` is only reported); that the line appears in their output is for the `linux-dist` and `windows-dist` CI
+jobs to show. Painting of the packaged window: the window is never shown, so the PNGs come
 from `capturePage`, not from the screen.
 
 ## 12. What changed since the first review
@@ -1291,7 +1294,8 @@ the next commit.
 - **A cost to decide on.** Paging above the window is the only place the view shows less than the file holds. If a
   search over the whole conversation is wanted, it belongs in main (reading the file), not in the DOM.
 - **Platform scope.** Verified on macOS only (§ 11). Windows rules are exercised from tests with `path.win32`; the
-  Windows and Linux packages were not built or run.
+  Windows and Linux packages were not built or run. Their `verify:package` now requires `chat assets OK`; the first
+  CI run of `linux-dist` and `windows-dist` is the first time it is checked there.
 
 ### 12.6 When it ships: release notes
 
