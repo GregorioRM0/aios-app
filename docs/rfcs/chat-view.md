@@ -1265,7 +1265,8 @@ available on macOS and is not reported. Numbers come from one Apple silicon Mac 
 lines or 16 MB (constants in `src/main/transcriptTail.ts`), parses them with the tracker, and sends `reset`, `span`
 (whether anything lies above) and `items`; live lines continue from the end of that window as before. In a mix
 dominated by large results the byte cap decides (124 and 141 rows), in a chatty one the line cap does (241 and 247).
-A window is never cut inside a tool call (results whose call was not seen widen the read a little). Scrolling near
+A window is never cut inside a tool call (results whose call was not seen widen the read a little), and a single line
+longer than the byte cap is stepped over, so that row is not shown but what is above it stays reachable. Scrolling near
 the top sends `chatSkin:earlier`; main reads the window above with a tracker of its own, so history never touches
 the live turn's state, and replies with an `earlier` event (`items`, `more`); the renderer puts the rows above and
 moves `scrollTop` by the height it added, so the bubble in view does not move (0 px in the measurement). Truncation
