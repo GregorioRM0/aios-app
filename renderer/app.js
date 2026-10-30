@@ -8946,7 +8946,7 @@ function chatSkinRegroup(cs) {
     if (!g) {
       g = chatSkinMakeGroup(cs, key);
       groups.set(key, g);
-      const open = opened.has(key) ? opened.get(key) : members.some((m) => m.classList.contains('open'));
+      const open = opened.has(key) ? opened.get(key) : members.some((m) => m.classList.contains('open') || (m.csRec && opened.get(m.csRec.uuid) === true));   // an older call joining the run from above re-keys it: the run the operator had unfolded must stay unfolded
       opened.set(key, open);
       chatSkinGroupOpen(g, open);
     }

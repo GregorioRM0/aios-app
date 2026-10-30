@@ -2793,6 +2793,37 @@ guarded('a row the operator had open does not vanish when its run becomes a grou
   },
   (src) => src.replace("members.some((m) => m.classList.contains('open'))", 'false'));
 
+/** streamHarness plus what chatSkinPrepend reads off the log: a style bag, the scroll numbers, and the state line's next sibling. */
+function prependHarness(src: string): StreamHarness {
+  const h = streamHarness(src);
+  const log = h.cs.log as Dn; const stateEl = h.cs.stateEl as Dn;
+  Object.assign(log, { style: {}, scrollTop: 0, scrollHeight: 0 });
+  Object.defineProperty(stateEl, 'nextSibling', { get: () => log.children[log.children.indexOf(stateEl) + 1] });
+  return h;
+}
+guarded('older calls that join a run from above (the tail window cut it) keep the run unfolded if the operator had it unfolded, folded if not, and lose no row',
+  (src) => {
+    const open = prependHarness(src);
+    open.handle({ type: 'items', items: [toolItem('t3'), toolItem('t4'), textItem('a1')] });   // the window starts inside the run: two calls on show
+    groupsOf(open.cs)[0].querySelector('.cg-head')!.click();
+    open.handle({ type: 'earlier', items: [toolItem('t1'), toolItem('t2')], more: false });
+    const g = groupsOf(open.cs);
+    const nodes = ['t1', 't2', 't3', 't4'].map((u) => open.cs.items.get(u).node);
+    const joined = g.length === 1 && soloTools(open.cs).length === 0 && inBody(g[0]).length === 4 && inBody(g[0]).every((n, i) => n === nodes[i]);
+    const kept = g[0].querySelector('.cg-head')!.attrs['aria-expanded'] === 'true' && g[0].querySelector('.cg-body')!.hidden === false && g[0].classList.contains('open');
+    const calm = prependHarness(src);
+    calm.handle({ type: 'items', items: [toolItem('t3'), toolItem('t4'), textItem('a1')] });
+    calm.handle({ type: 'earlier', items: [toolItem('t1'), toolItem('t2')], more: false });
+    const stayed = groupsOf(calm.cs).length === 1 && groupsOf(calm.cs)[0].querySelector('.cg-body')!.hidden === true;
+    // one call on show (a plain row) and an older one above it: they become a group, folded
+    const one = prependHarness(src);
+    one.handle({ type: 'items', items: [toolItem('t3'), textItem('a1')] });
+    one.handle({ type: 'earlier', items: [toolItem('t1'), toolItem('t2')], more: false });
+    const formed = groupsOf(one.cs).length === 1 && inBody(groupsOf(one.cs)[0]).length === 3 && groupsOf(one.cs)[0].querySelector('.cg-body')!.hidden === true && one.cs.items.size === 4;
+    return joined && kept && stayed && formed;
+  },
+  (src) => src.replace(" || (m.csRec && opened.get(m.csRec.uuid) === true));", ');'));   // the new run is keyed by its new first call and forgets the old key
+
 guarded('unfolding a group asks the view to follow the tail; folding it does not',
   (src) => {
     const { cs, handle, scrolls } = streamHarness(src);
