@@ -2,7 +2,9 @@
 
 - **Status:** Prototype, for discussion
 - **Scope:** AIOS App (this repo). No framework change.
-- **Code references:** `feat/chat-skin`, branched from 0.12.0 (it replaces the earlier `feat/chat-view` prototype).
+- **Code references:** `feat/chat-skin`, branched from 0.12.0 and merged with `upstream/main` at 0.13.0 (it replaces the
+  earlier `feat/chat-view` prototype). What changed since the first review is in § 12; what was measured on the
+  packaged build is in § 11.
   The view mode moved from a tab icon to a Settings choice in `fdb4eca`, `0aae124`, `2ce84f0`, `d000cfe` and
   `c20ca7a` (§ 2.4)
 
@@ -1098,11 +1100,14 @@ window stitching matters more for replies taller than the pane.
 - **Sessions without an adopted `sessionId`** have no transcript watch and so no chat content, but their
   dialogs are watched from the screen (§ 5, `39d60fd`). Adoption depends on the registry / title
   announcement; a pane that never gets one stays on "connecting" in chat view, with an empty log.
-- **Large transcripts.** A very large file was backfilled in under four seconds in a read-only trial, but
-  every item becomes a DOM node (markdown is rendered per message); there is no virtualisation. Memory and
-  scroll cost with very long sessions is **unmeasured**.
-- **`/clear` and forking resumes** are followed by re-asking the process tree, bounded to three attempts
-  per watch; a miss leaves the view on the old session until the next trigger.
+- **Large transcripts.** Solved at open, not while following (§ 12.3). The view loads a window of the end of the file
+  (about 300 conversation lines, at most 16 MB) and pages the rest in when the operator scrolls to the top, so its
+  size no longer depends on the length of the file. A live session still adds rows below, with no pruning above while
+  the operator follows the end (about 25 DOM nodes per row), and what the operator scrolls up to read stays. There
+  is no virtualisation. Only the main-process and renderer numbers of § 12.3 were measured, on synthetic transcripts;
+  painting and compositing of a window that is never shown were not.
+- **`/clear` and resume** are followed from the process tree (§ 12.2) and verified against a real session. A
+  *fork* of a session (`--fork-session`, the picker's "fork" choice) was not exercised.
 
 **Open questions**
 
@@ -1114,3 +1119,192 @@ window stitching matters more for replies taller than the pane.
 4. *(answered by § 2.4)* The mode is global on purpose: one setting, `claudeView`, for every Claude session. Open: would anyone want it per agent or per project? The per-tab *Show terminal* and its way back cover the one-off case today, and nothing asked for more, so a per-agent override is not built.
 5. Is a version guard on the transcript format worth having (warn when no `user`/`assistant` line was
    recognised in a non-empty file)?
+
+## 11. The packaged build
+
+Everything above was proven against source, where Electron is `node_modules/electron`. A shipped app differs in
+exactly the places this feature depends on: the renderer, its stylesheet and `marked` / `highlight.js` are read
+from inside `app.asar`, the preload runs from there, and node-pty is unpacked beside it. So the packaged binary was
+checked as its own artifact.
+
+**What was built.** `npm run dist` (compile, `electron-builder --mac dmg`, then `verify:package`) on an Apple
+silicon Mac without a Developer ID certificate. electron-builder logged `skipped macOS application code signing`
+and produced `AIOS-arm64.dmg` and `dist/mac-arm64/AIOS.app`, **unsigned and not notarized**. The command exits 0
+in that state, so a green `npm run dist` on a machine without the identity is not evidence of a signed build.
+
+**What was run.** The packaged binary was started by its own path (never through LaunchServices, which would share
+a bundle id with an installed copy), with `--smoke`, a throwaway user-data folder and no window ever shown. Before
+that, the code was read for every way a smoke run could reach a visible window: the window is created with
+`show: false`; the instance lock, the command bus, the keep-awake blocker, the config watchers and the updater are
+off under `--smoke`; the only paths that call `show()` or `focus()` were the Dock `activate` handler and the
+`second-instance` handler. The first was not guarded for smoke runs, so it is now (`!(SMOKE || CHAT_SHOT)`), and a
+smoke run on macOS also sets the `accessory` activation policy, so it takes no Dock icon. The second needs the lock,
+which a smoke run never takes.
+
+| Check | Result on the packaged build |
+|---|---|
+| `verify:package` static: bundle name matches the four helpers | pass |
+| `verify:package` contents: no compiled test suite in the asar | pass (`out/` carries `core`, `i18n`, `main`, `preload`) |
+| `AIOS_SMOKE_CHAT=1 verify:package` (the harness runs the binary) | pass in 63 s end to end, `chat assets OK`, `chat view OK` |
+| Binary run directly, `AIOS_SMOKE_CHAT=1 ... --smoke` | exit 0; `isPackaged=true`, app path inside `app.asar`, renderer URL inside `app.asar`; both chat gates ran, 0 occurrences of `SKIPPED` |
+| `--chat-shot` on the packaged binary (hidden window, synthetic `HOME`, temporary user data) | exit 0, 89 PNGs; the bubbles show highlighted code, tables, quotes and links |
+
+**What the smoke now proves inside the asar.** A new gate, `chatAssetsSmoke`, runs on every `--smoke`, needs no model
+and cannot be skipped. It reports where the app was loaded from, then checks in the renderer: `marked` and
+`highlight.js` are present, the preload bridge exposes the chat methods, the stylesheet carries the chat rules (32
+`.cs-` rules), and the app's own `chatRender` turns a markdown bubble into bold, a table and highlighted code while
+a hostile payload (`<img onerror>`, `<script>`, a `javascript:` link) comes out as inert text with nothing executed.
+Control: with the `highlight.js` script tag removed from `index.html`, the smoke fails with `highlight.js did not
+load; code was not highlighted`; with the `marked` tag removed an earlier gate (the file viewer) fails first.
+
+**Two properties of the harness worth knowing.** `verify:package` printed the smoke's output only when it failed, so
+a pass could not say whether the chat gate ran or skipped; it now prints the chat gate lines on a pass, requires
+`chat assets OK`, and with `AIOS_SMOKE_CHAT=1` requires that the real-session gate ran. And its fixed 90 s kill sat
+close to the real duration of a smoke that drives a live session (about 60 s), so the limit is 300 s in that mode
+(`AIOS_VERIFY_TIMEOUT_MS` overrides it) and the child runs in its own process group, so a kill takes the `claude`
+session and the shell with it instead of orphaning them.
+
+**Not verified.** Code signing, notarization and Gatekeeper (no identity on the machine). Installing the dmg and the
+auto-update path (out of scope: it would touch an installed copy). The Windows and Linux builds: `dist:win` and
+`dist:linux` were not run, so the new asset gate has not run there (it uses no platform-specific call, but that is a
+claim from reading, not from a run). Painting of the packaged window: the window is never shown, so the PNGs come
+from `capturePage`, not from the screen.
+
+## 12. What changed since the first review
+
+### 12.1 Merge with upstream 0.13.0, and Windows
+
+The branch now contains `upstream/main` (a merge commit, no rebase). Eight files conflicted, twelve hunks; in each
+the upstream behaviour was kept and the chat's addition layered over it (the `openExports` setting replaced
+`autoOpenExports`; `fs:resolveFiles` is upstream's async `{open, reveal}` and the chat keeps its own
+`fs:resolvePaths`; on pty exit both the draft-hold release and the chat's cleanup run). Generated `i18n.js` was
+regenerated, not merged by hand. The merge broke five tests that were not conflicts (three that pinned the old
+`resolveFiles` handler, two because the Greek locale lacked the chat's keys); they were rewritten with their negative
+controls, not loosened.
+
+A Windows CI failure was also fixed. The test expected POSIX literals while `pluginCommandDirs` returns paths joined
+with the host separator. The production code had a latent bug on the same line: `cwd.startsWith(projectPath +
+path.sep)` fails on Windows when one side uses `/`, the drive letter or a folder differs in case, `projectPath` has a
+trailing separator, or it is a drive root, and the symptom is silent (a project plugin's commands missing from the
+`/` popup). `isSameOrInside(root, child, pathMod)` (`src/main/pathResolve.ts`) is a pure function that takes the
+path module, so Windows rules are tested from any host with `path.win32`. Three tests with negative controls (each
+mutation of the helper or the old condition fails at least one test). Whether Windows or Claude Code really write
+those path shapes was not confirmed; they can arrive.
+
+### 12.2 `/clear` and resume
+
+**Finding.** The assumption in the first draft (old bubbles stay until the new transcript file appears) was wrong
+for Claude Code 2.1.x. `/clear` and `/resume` start a new session inside the *same* `claude` process: the pty, the
+pid and the tab stay, and that pid's registry entry now holds the new id. The status pulse looked the old id up in the
+registry, did not find it, and read that as the end of the session: the tab said "(ended)", the session id was
+dropped and the view fell back to the terminal. This also happened in terminal view. Real session, before the fix:
+
+    before /clear — view=chat  id=b2663a1e watched=b2663a1e tail=b2663a1e→b2663a1e
+    /clear +1.0s  — view=term  id=d910ff89 watched=null      tail=none
+    FAILED — /clear: not finished after 45s
+
+**Fix.** Before declaring the end of a session, the pulse asks the pty's process tree (the same authority
+`adoptUnidentified` uses). A live session under that pty with another id is adopted (id, confirmed name, rename
+unless the operator named it, persistence, chat view notified); with nothing live it ends as before. When the
+watched id changes, the view is emptied (`chatSkinResetView`, shared with the tail's `reset` event) and the
+in-flight state is dropped. Every tail event now carries the transcript id it belongs to (`sid`), and the renderer
+discards events whose id is not the one it watches, so a late read from the old transcript cannot repaint over the
+new one.
+
+**Real run after the fix** (smoke step 8, a real session, hidden window): after `/clear` the id changes, the view
+follows it, the tail points at the new file, no row of the old session remains, and the first rows are the new
+transcript's own (`/clear`, the next question, its answer). After `/resume <original id>` the view returns to the
+same five rows, compared text to text, with none duplicated. Cleanup removes the pane, the processes, the temporary
+folder and the transcript folder.
+
+**Controls (real mutations, restored afterwards).** Removing the reset on id change: 3 chat tests fail. Removing
+the `sid` filter: 1 fails. Removing the process-tree lookup in the pulse (the original behaviour): the pulse test
+fails. Removing `unwatch` at the start of the tail's `watch`: the new tail test and 4 others fail. Removing the
+tail's `reset` when the file appears: 4 fail.
+
+**Limits.** A new id whose transcript does not exist yet leaves the view empty (`missing`) rather than showing the
+old rows; that case never happened in the real session, so it is covered by a unit test only. Forks were not tried.
+
+### 12.3 Long transcripts
+
+**Measurement.** `npm run chat:bench -- --lines 5000,50000` builds a seeded synthetic transcript, opens it in a
+hidden window through the real tail and the real renderer, and measures load, per-line cost, DOM size and memory,
+before and after the change. The mix is calibrated from the *counts per line type and sizes* of one real 35 MB, 1,624
+line transcript (no content read): 21 % attachments, 16 % request blobs of about 37 KB, 8.6 % tool results averaging
+161 KB, about 4 % conversation text. That is why 5,000 lines weigh 91 MB and 50,000 lines 905 MB. The full run takes
+about 80 s and removes its temporary files.
+
+| | 5,000 lines (91.2 MB), before → after | 50,000 lines (905.3 MB), before → after |
+|---|---|---|
+| main: load, reset to turn (ms) | 82 → 20 | 756 → 17 |
+| main: IPC events / items / JSON (MB) | 91 / 664 / 1.68 → 5 / 124 / 0.34 | 852 / 6,975 / 17.62 → 5 / 141 / 0.36 |
+| renderer: load to last row (ms) | 197 → 66 | 13,301 → 75 |
+| renderer: handler per new line, median / p95 (ms) | 10.1 / 12.2 → 4.1 / 6.1 | 49.3 / 65.1 → 4.3 / 6.8 |
+| renderer: rows held | 602 → 124 | 6,405 → 141 |
+| renderer: DOM nodes in the log | 15,170 → 2,853 | 160,347 → 3,924 |
+| renderer: process working set, loaded (MB) | 273 → 209 | 1,304 → 214 |
+| after 60 live lines: rows / log nodes | 645 / 16,270 → 167 / 3,953 | 6,448 / 161,447 → 184 / 5,024 |
+| scroll to the top: rows before → after | 645 → 645 (nothing more to load) → 167 → 274 | 6,448 → 6,448 → 184 → 303 |
+
+A conversation-heavy mix ("chatty": small tool results) gives 6.4 MB and 64.2 MB files and 241 and 247 rows.
+
+**Reading the numbers.** Before, everything grew with the file: ten times the lines gave 10.6 times the DOM nodes,
+4.8 times the working set, a load of 13 s instead of 0.2 s, and every new line cost five times as much because the
+regrouping pass walks all rows on each event. The JS heap barely moved (12.7 MB at 50,000 lines): Blink's DOM lives
+outside V8's heap, so the useful indicators are nodes and the process working set. Working set and RSS include
+about 190 MB of Chromium baseline; read the differences.
+
+**Method limits.** The bench window is born hidden but with `backgroundThrottling: false`, so `document.hidden` was
+false and `requestAnimationFrame` ran at about 60 fps. "Load" is JS plus IPC until the handler of the last row
+returns; "forced layout" is a synchronous `getBoundingClientRect`, so it includes style and layout but not paint.
+**No figure is a paint or compositing time**, because a window that is never shown is never painted to a screen.
+Long tasks measured 0 almost always; the 13 s before was many small events, not one block. `privateBytes` is not
+available on macOS and is not reported. Numbers come from one Apple silicon Mac and one seed.
+
+**Change.** Main reads the end of the transcript backwards in 256 KB blocks until it holds about 300 conversation
+lines or 16 MB (constants in `src/main/transcriptTail.ts`), parses them with the tracker, and sends `reset`, `span`
+(whether anything lies above) and `items`; live lines continue from the end of that window as before. In a mix
+dominated by large results the byte cap decides (124 and 141 rows), in a chatty one the line cap does (241 and 247).
+A window is never cut inside a tool call (results whose call was not seen widen the read a little). Scrolling near
+the top sends `chatSkin:earlier`; main reads the window above with a tracker of its own, so history never touches
+the live turn's state, and replies with an `earlier` event (`items`, `more`); the renderer puts the rows above and
+moves `scrollTop` by the height it added, so the bubble in view does not move (0 px in the measurement). Truncation
+or replacement of the file re-windows from the new end. `current(paneId)` reports what the tail is following, for the
+smoke.
+
+**What it does not do.** The cap applies at open. A session that keeps running adds rows without pruning above
+(about 25 DOM nodes per row), and rows the operator scrolls up to read stay. An in-view search or jump-to-start over
+rows not loaded does not exist; the terminal view and the transcript file still have the whole history.
+
+### 12.4 Results of the final pass
+
+Run on the final commit of this branch: `npm run compile`, `npm test`, `npm run check:tokens`,
+`npm run check:whatsnew`, `AIOS_SMOKE_CHAT=1 npm run smoke` (with the real-session gate running, not skipped).
+Counts and output are in the pull request thread, not here, because a number in a design document goes stale with
+the next commit.
+
+### 12.5 For the design review
+
+- **Where the line is drawn.** The chat is a skin; the pty and `claude` are the source of truth. `/clear` and resume
+  fit that: the pane does not change, the view follows the id the process reports.
+- **A cost to decide on.** Paging above the window is the only place the view shows less than the file holds. If a
+  search over the whole conversation is wanted, it belongs in main (reading the file), not in the DOM.
+- **Platform scope.** Verified on macOS only (§ 11). Windows rules are exercised from tests with `path.win32`; the
+  Windows and Linux packages were not built or run.
+
+### 12.6 When it ships: release notes
+
+The chat view is not part of 0.13.0 and the maintainers want it in a release of its own, so this branch changes
+neither the version nor the "What's new" copy. When it ships:
+
+1. Bump the version as RELEASING.md describes (`npm version <level>` bumps `package.json` and creates the tag).
+2. Write the What's New copy for that version: the keys are `whatsnew.for` (the version it describes), `whatsnew.sub`
+   and `whatsnew.h1`..`whatsnew.b4`, in every locale that `scripts/check-whatsnew.mjs` lists (`en`, `es`, `pt-br`,
+   `el`), then regenerate `renderer/i18n.js` with `npm run gen-i18n`. `npm run check:whatsnew` fails when the stamp
+   is not the current version or the prose is identical to the previous release's. Rank the copy by what someone
+   notices in their first ten minutes; the chat view is the headline, the transcript paging and the packaging gate
+   are plumbing for the GitHub notes. RELEASING.md also asks for a look at What's New in the real App before the tag.
+3. The chat's own UI strings already exist in all four locales; in `el` they are the English text until someone
+   translates them.
+4. The repository has no CHANGELOG file (`upstream/main` has none), so there is nothing to append; the release notes
+   live with the GitHub release.
