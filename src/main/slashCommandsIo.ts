@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parseFrontmatter } from '../core/frontmatter';
 import { builtinCommands, mergeSlashCommands, type SlashCommand, type SlashSource } from '../core/slashCommands';
+import { isSameOrInside, type PathRules } from './pathResolve';
 
 const MAX_DEPTH = 3;          // commands/a/b/c.md is as deep as anyone nests them
 const MAX_FILES = 400;        // per folder tree: a runaway folder must not stall the popup
@@ -68,8 +69,12 @@ export async function readCommandsDir(dir: string, source: SlashSource, plugin?:
 
 interface InstalledEntry { scope?: string; installPath?: string; projectPath?: string }
 
-/** The commands folders of the plugins that apply to `cwd`: user-scope installs always, project/local ones only inside their project. */
-export async function pluginCommandDirs(configDir: string, cwd: string | null): Promise<Array<{ plugin: string; dir: string }>> {
+/**
+ * The commands folders of the plugins that apply to `cwd`: user-scope installs always, project/local ones only inside their project.
+ * `pathMod` is the path rules the registry's paths are written in (the host's own; `path.win32` in tests on another host). The
+ * registry FILE is always read with the host's path module — that is where it really is.
+ */
+export async function pluginCommandDirs(configDir: string, cwd: string | null, pathMod: PathRules = path): Promise<Array<{ plugin: string; dir: string }>> {
   let raw: { plugins?: Record<string, InstalledEntry[]> };
   try { raw = JSON.parse(await fs.promises.readFile(path.join(configDir, 'plugins', 'installed_plugins.json'), 'utf8')); } catch { return []; }
   const out: Array<{ plugin: string; dir: string }> = [];
@@ -78,8 +83,8 @@ export async function pluginCommandDirs(configDir: string, cwd: string | null): 
     if (!plugin || !Array.isArray(entries)) continue;
     const hit = entries.find((e) => e && typeof e.installPath === 'string' && (
       !e.scope || e.scope === 'user'
-      || (!!cwd && typeof e.projectPath === 'string' && (cwd === e.projectPath || cwd.startsWith(e.projectPath + path.sep)))));
-    if (hit?.installPath) out.push({ plugin, dir: path.join(hit.installPath, 'commands') });
+      || (!!cwd && isSameOrInside(e.projectPath, cwd, pathMod))));   // not a bare startsWith: see isSameOrInside
+    if (hit?.installPath) out.push({ plugin, dir: pathMod.join(hit.installPath, 'commands') });
   }
   return out;
 }

@@ -13,6 +13,7 @@ import {
   BUILTIN_COMMANDS, builtinCommands, mergeSlashCommands, rankSlashCommands, slashCompletion, slashQuery, slashSuggestions, type SlashCommand,
 } from '../core/slashCommands';
 import { listSlashCommands, pluginCommandDirs, readCommandsDir } from '../main/slashCommandsIo';
+import { isSameOrInside } from '../main/pathResolve';
 
 const cmd = (name: string, source: SlashCommand['source'] = 'user', extra: Partial<SlashCommand> = {}): SlashCommand => ({ name, description: '', source, ...extra });
 const names = (l: SlashCommand[]): string[] => l.map((c) => c.name);
@@ -230,12 +231,75 @@ test('pluginCommandDirs: user-scope plugins always, project-scope ones only insi
       'weird@m': 'not a list',
     } }),
   }, async (cfg) => {
+    /* The expected folders are built with path.join, never typed with `/`: pluginCommandDirs joins with the host's
+       separator, so a literal POSIX string here is true on macOS and Linux and false on Windows (it failed CI there). */
+    const dir = (plugin: string, ...install: string[]): string => `${plugin}=${path.join(...install, 'commands')}`;
+    const aios = dir('aios', '/x/aios/1.0'), old = dir('old', '/x/old/1.0'), proj = dir('proj', '/x/proj/1.0');
     const at = async (cwd: string | null): Promise<string[]> => (await pluginCommandDirs(cfg, cwd)).map((d) => `${d.plugin}=${d.dir}`).sort();
-    assert.deepEqual(await at(null), ['aios=/x/aios/1.0/commands', 'old=/x/old/1.0/commands']);
-    assert.deepEqual(await at('/work/app'), ['aios=/x/aios/1.0/commands', 'old=/x/old/1.0/commands', 'proj=/x/proj/1.0/commands']);
+    assert.deepEqual(await at(null), [aios, old]);
+    assert.deepEqual(await at('/work/app'), [aios, old, proj]);
     assert.deepEqual(await at('/work/app/src/deep'), await at('/work/app'), 'a subfolder of the project is inside it');
     assert.deepEqual(await at('/work/app2'), await at(null), 'a sibling that merely starts with the same letters is not');
     assert.deepEqual(await pluginCommandDirs(path.join(cfg, 'missing'), null), []);
+  });
+});
+
+test('isSameOrInside (win32 rules): separators, drive-letter case, trailing separators and a drive root', () => {
+  const w = path.win32;
+  const inside = (root: string, child: string): boolean => isSameOrInside(root, child, w);
+  assert.equal(inside('C:\\work\\app', 'C:\\work\\app'), true, 'the folder itself');
+  assert.equal(inside('C:\\work\\app', 'C:\\work\\app\\src\\deep'), true, 'a subfolder');
+  assert.equal(inside('C:\\work\\app', 'c:\\work\\app\\src'), true, 'a lower-case drive letter is the same drive');
+  assert.equal(inside('C:\\Work\\App', 'c:\\work\\app\\SRC'), true, 'the file system ignores case');
+  assert.equal(inside('C:\\work\\app', 'C:/work/app/src'), true, 'forward slashes are the same folder');
+  assert.equal(inside('C:/work/app', 'C:\\work\\app\\src'), true, '…whichever side wrote them');
+  assert.equal(inside('C:\\work\\app\\', 'C:\\work\\app\\src'), true, 'a trailing separator on the root does not hide its children');
+  assert.equal(inside('C:\\work\\app', 'C:\\work\\app\\'), true, '…nor on the child');
+  assert.equal(inside('C:\\', 'C:\\work\\app'), true, 'a drive root contains the drive');
+  assert.equal(inside('\\\\host\\share\\proj', '\\\\HOST\\share\\proj\\src'), true, 'a UNC share, host in any case');
+  // the negative controls: what must NOT match
+  assert.equal(inside('C:\\work\\app', 'C:\\work\\app2'), false, 'a sibling that only shares the prefix');
+  assert.equal(inside('C:\\work\\app', 'C:\\work\\app2\\src'), false, '…and its children');
+  assert.equal(inside('C:\\work\\app\\', 'C:\\work\\application'), false, '…also when the root carries a trailing separator');
+  assert.equal(inside('C:\\work\\app', 'D:\\work\\app\\src'), false, 'another drive');
+  assert.equal(inside('C:\\work\\app\\src', 'C:\\work\\app'), false, 'a parent is not inside its child');
+  assert.equal(inside('C:\\work\\app', 'C:\\work\\app\\..\\other'), false, '`..` is collapsed before comparing');
+  assert.equal(inside('\\\\host\\share\\proj', '\\\\host\\share\\proj2'), false, 'a UNC sibling');
+  assert.equal(inside('', 'C:\\work'), false, 'an empty root matches nothing (it would be everything)');
+  assert.equal(inside('work\\app', 'work\\app\\src'), false, 'relative paths are no answer, not a guess against another host\'s folder');
+  assert.equal(isSameOrInside(undefined, 'C:\\work', w), false);
+});
+
+test('isSameOrInside (posix rules): unchanged — case-sensitive, and a sibling prefix is not inside', () => {
+  const p = path.posix;
+  assert.equal(isSameOrInside('/work/app', '/work/app', p), true);
+  assert.equal(isSameOrInside('/work/app', '/work/app/src', p), true);
+  assert.equal(isSameOrInside('/work/app/', '/work/app/src', p), true, 'a trailing slash on the root');
+  assert.equal(isSameOrInside('/', '/work', p), true, 'the root contains everything');
+  assert.equal(isSameOrInside('/work/app', '/work/app2', p), false);
+  assert.equal(isSameOrInside('/work/app', '/work/App/src', p), false, 'POSIX file systems may tell case apart; the comparison stays exact');
+  assert.equal(isSameOrInside('/work/app', '/work/app/../other', p), false);
+  assert.equal(isSameOrInside('/work/app', 'C:\\work\\app\\src', p), false, 'a Windows path is not a POSIX path');
+});
+
+test('pluginCommandDirs (win32 rules, run from any host): a project-scope plugin applies inside its project however the path is spelled', async () => {
+  const w = path.win32;
+  await withTree({
+    'plugins/installed_plugins.json': JSON.stringify({ version: 2, plugins: {
+      'aios@the-aios': [{ scope: 'user', installPath: 'C:\\Users\\me\\.claude\\plugins\\aios\\1.0' }],
+      'proj@m': [{ scope: 'project', installPath: 'C:\\Users\\me\\.claude\\plugins\\proj\\1.0', projectPath: 'C:\\Work\\App' }],
+      'slash@m': [{ scope: 'local', installPath: 'C:\\p\\slash', projectPath: 'C:/work/slashed/' }],
+    } }),
+  }, async (cfg) => {
+    const at = async (cwd: string | null): Promise<string[]> => (await pluginCommandDirs(cfg, cwd, w)).map((d) => d.plugin).sort();
+    assert.deepEqual(await at(null), ['aios']);
+    assert.deepEqual(await at('C:\\Work\\App'), ['aios', 'proj'], 'exactly the project');
+    assert.deepEqual(await at('c:\\work\\app\\src'), ['aios', 'proj'], 'a lower-case drive letter and different case');
+    assert.deepEqual(await at('C:/Work/App/src/deep'), ['aios', 'proj'], 'forward slashes from the renderer');
+    assert.deepEqual(await at('C:\\work\\slashed\\x'), ['aios', 'slash'], 'a registry path with forward slashes and a trailing one');
+    assert.deepEqual(await at('C:\\Work\\App2'), ['aios'], 'a sibling that only shares the prefix');
+    assert.deepEqual(await at('D:\\Work\\App'), ['aios'], 'another drive');
+    assert.deepEqual((await pluginCommandDirs(cfg, null, w)).map((d) => d.dir).sort()[0], 'C:\\Users\\me\\.claude\\plugins\\aios\\1.0\\commands', 'the folder is joined with the registry\'s own separator');
   });
 });
 

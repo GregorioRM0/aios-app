@@ -87,3 +87,38 @@ export function resolveMany(cands: unknown, base: string | undefined, env: Resol
   }
   return out;
 }
+
+/** The slice of `path` the comparison needs: `path`, `path.win32` and `path.posix` all fit. */
+export type PathRules = Pick<typeof path, 'normalize' | 'parse' | 'isAbsolute' | 'join' | 'sep'>;
+
+/**
+ * Is `child` the folder `root` itself, or somewhere under it?
+ *
+ * Pure over the path module it is handed, so Windows' rules can be exercised from any host
+ * (`path.win32`), and the default is the host's own. It exists because `child.startsWith(root + path.sep)`
+ * — the obvious spelling — is wrong on Windows in four ways that all fail silently (the answer is just
+ * "no", so a project-scoped plugin's commands never appear and nothing says why):
+ *   · SEPARATORS — `C:/work/app` and `C:\work\app` are the same folder, and either form can
+ *     arrive (the renderer works in forward slashes, a registry file writes whatever it was given);
+ *   · CASE — the file system ignores it, and the same drive is `C:` in one place and `c:` in another;
+ *   · A TRAILING SEPARATOR on the root — `C:\work\app\` + `\` never prefixes anything;
+ *   · A DRIVE ROOT — `C:\` already ends in a separator, so adding one more matches nothing.
+ * `..` segments are collapsed first, so `<root>/../elsewhere` is not "inside" by its spelling.
+ * Case is folded ONLY for win32: a POSIX file system may well tell `App` from `app`, and its
+ * comparison stays exactly the byte-for-byte one it has always been.
+ * Both paths must be absolute for the module they are read with; anything else is "no" rather than a
+ * guess against the process' own working folder (which on another host's path rules means nothing).
+ */
+export function isSameOrInside(root: unknown, child: unknown, pathMod: PathRules = path): boolean {
+  if (typeof root !== 'string' || typeof child !== 'string') return false;
+  if (!pathMod.isAbsolute(root) || !pathMod.isAbsolute(child)) return false;
+  const win = pathMod === path.win32;
+  const fold = (p: string): string => {
+    const n = pathMod.normalize(p);
+    const base = n.length > pathMod.parse(n).root.length ? n.replace(/[\\/]+$/, '') : n;   // keep a drive root's own separator
+    return win ? base.toLowerCase() : base;
+  };
+  const r = fold(root), c = fold(child);
+  if (c === r) return true;
+  return c.startsWith(/[\\/]$/.test(r) ? r : r + pathMod.sep);
+}
