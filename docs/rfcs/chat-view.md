@@ -270,7 +270,7 @@ whether any failed, and to look inside only when they care.
   its rows (that row must not vanish). The state lives on the node and in `cs.groupOpen`, keyed by the uuid of
   the run's first call, so it survives new calls joining, status changes, repaints, a run that splits and
   joins again, and older calls joining it from above when the tail window had cut it (the new first call
-  inherits the choice of the run it absorbs); a manual fold stays folded; a `reset` forgets everything. Unfolding follows the log to the
+  inherits the choice of the run it absorbs and the absorbed keys are dropped, so a later fold is not undone by a stale one); a manual fold stays folded; a `reset` forgets everything. Unfolding follows the log to the
   tail, folding does not.
 
 ### 2.3 Paths in the conversation are links
