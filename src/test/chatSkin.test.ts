@@ -2822,7 +2822,7 @@ guarded('a row the operator had open does not vanish when its run becomes a grou
     calm.handle({ type: 'items', items: [toolItem('t2')] });
     return !!g && g.classList.contains('open') && g.querySelector('.cg-body')!.hidden === false && groupsOf(calm.cs)[0].querySelector('.cg-body')!.hidden === true;
   },
-  (src) => src.replace("members.some((m) => m.classList.contains('open'))", 'false'));
+  (src) => src.replace("members.some((m) => m.classList.contains('open') || (m.csRec && opened.get(m.csRec.uuid) === true))", 'false'));
 
 /** streamHarness plus what chatSkinPrepend reads off the log: a style bag, the scroll numbers, and the state line's next sibling. */
 function prependHarness(src: string): StreamHarness {
