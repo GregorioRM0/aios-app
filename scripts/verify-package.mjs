@@ -55,6 +55,16 @@ function chatGateLines(out) {
   return { lines, assets, view };
 }
 
+/* Linux and Windows: print the chat gate lines of a smoke that exited 0 and require "chat assets OK" among them. It
+   needs no model, so it is the one chat gate a CI runner can hold to. The "chat view" gate (a real claude session) is
+   only reported, as on macOS without AIOS_SMOKE_CHAT. */
+function chatAssetsProven(out, label) {
+  const g = chatGateLines(out);
+  for (const l of g.lines) console.log(`verify-package:   ${l}`);
+  if (!g.assets) fail(`${label}: packaged --smoke exited 0 but never printed "chat assets OK" — the chat view's assets (marked, highlight.js, stylesheet, preload, sanitizer) were not proven inside the asar`);
+  return g.assets;
+}
+
 const fail = (msg) => { console.error(`verify-package: ✗ ${msg}`); process.exitCode = 1; };
 const ok = (msg) => console.log(`verify-package: ✓ ${msg}`);
 
@@ -310,7 +320,7 @@ function checkLiveLinux(tree) {
       } else if (code !== 0) {
         fail(`${label}: packaged --smoke exited ${code}${signal ? ` (${signal})` : ''}:\n    ${out.split('\n').filter(Boolean).slice(-6).join('\n    ')}`);
       } else {
-        ok(`${label}: packaged --smoke passed${suid ? '' : ' (--no-sandbox: chrome-sandbox not SUID in an unpacked tree)'} — the shipped artifact launches`);
+        if (chatAssetsProven(out, label)) ok(`${label}: packaged --smoke passed${suid ? '' : ' (--no-sandbox: chrome-sandbox not SUID in an unpacked tree)'} — the shipped artifact launches (chat assets: proven)`);
       }
       resolve(!fatal && code === 0);
     });
@@ -408,7 +418,7 @@ function checkLiveWindows(tree) {
       } else if (code !== 0) {
         fail(`${label}: packaged --smoke exited ${code}${signal ? ` (${signal})` : ''}:\n    ${out.split('\n').filter(Boolean).slice(-6).join('\n    ')}`);
       } else {
-        ok(`${label}: packaged --smoke passed — the shipped artifact launches`);
+        if (chatAssetsProven(out, label)) ok(`${label}: packaged --smoke passed — the shipped artifact launches (chat assets: proven)`);
       }
       resolve(!fatal && code === 0);
     });

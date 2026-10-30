@@ -690,11 +690,42 @@ test('smoke: the chat-assets gate always runs, never skips, and a failure fails 
   assert.ok(gate(main));
   assert.equal(gate(main.replace("o.hljs = !!(window.hljs && window.hljs.getLanguage && window.hljs.getLanguage('javascript'));", '')), false, 'control: a gate that does not look for the highlighter');
   assert.equal(gate(main.replace('if (ok && assets.ok) chat = await chatViewSmoke', 'if (ok) chat = await chatViewSmoke')), false, 'control: the real-session gate runs even when the assets gate failed');
+  const live = (src: string, name: string): string => new RegExp(`function ${name}\\([\\s\\S]*?\\n\\}\\n`).exec(src)?.[0] ?? '';
+  const proven = (src: string, name: string): boolean => /if \(chatAssetsProven\(out, label\)\) ok\(/.test(live(src, name));   // the packaged smoke of that platform only passes with the line
   const pins = (src: string): boolean => /chat assets OK/.test(src) && /g\.assets/.test(src) && /AIOS_SMOKE_CHAT === '1' && g\.view !== 'ran'/.test(src)
-    && /SMOKE_TIMEOUT_MS/.test(src) && /killTree\(p\)/.test(src);
+    && /SMOKE_TIMEOUT_MS/.test(src) && /killTree\(p\)/.test(src)
+    && proven(src, 'checkLiveLinux') && proven(src, 'checkLiveWindows');
   assert.ok(pins(verify));
+  for (const fn of ['checkLiveLinux', 'checkLiveWindows']) {
+    const f = live(verify, fn);
+    assert.ok(f.length > 200, `${fn} was found`);
+    assert.equal(pins(verify.replace(f, f.replace('if (chatAssetsProven(out, label)) ok(', 'ok('))), false, `control: ${fn} passes without proving the chat assets`);
+  }
   assert.equal(pins(verify.replace('if (!g.assets) {', 'if (false) {').replace(/g\.assets/g, 'g.assetz')), false, 'control: verify:package passes without proving the chat assets');
   assert.equal(pins(verify.replace(/killTree\(p\)/g, "p.kill('SIGKILL')")), false, 'control: a harness kill that leaves the claude session behind');
+});
+
+test('verify:package on Linux and Windows: a smoke that exited 0 without "chat assets OK" is a failure, one with it is not, and the chat view line is only reported', () => {
+  const verify = read('scripts/verify-package.mjs');
+  const run = (src: string, out: string): { returned: boolean; failures: string[]; printed: string[] } => {
+    const failures: string[] = []; const printed: string[] = [];
+    const make = new Function('fail', 'console', `${fnBody(src, 'chatGateLines')}\n${fnBody(src, 'chatAssetsProven')}\nreturn chatAssetsProven;`) as (f: (m: string) => void, c: { log: (m: string) => void }) => (o: string, l: string) => boolean;
+    const returned = make((m) => failures.push(m), { log: (m) => printed.push(m) })(out, 'linux-unpacked');
+    return { returned, failures, printed };
+  };
+  const assetsLine = 'shell-smoke: chat assets OK ✓ — marked, highlight.js, stylesheet, preload bridge and sanitizer all work from where this build was loaded';
+  const base = 'shell-smoke: window + pty OK ✓\n';
+  const holds = (src: string): boolean => {
+    const good = run(src, `${base}shell-smoke: chat assets — isPackaged=true\n${assetsLine}\nshell-smoke: chat view SKIPPED — no login\n`);
+    const missing = run(src, base);
+    const failed = run(src, `${base}shell-smoke: chat assets FAILED — highlight.js did not load\n`);
+    return good.returned && good.failures.length === 0 && good.printed.length === 2 && good.printed.some((l) => /chat view SKIPPED/.test(l))   // reported, not required
+      && !missing.returned && missing.failures.length === 1 && /never printed "chat assets OK"/.test(missing.failures[0])
+      && !failed.returned && failed.failures.length === 1 && failed.printed.length === 1;
+  };
+  assert.ok(holds(verify), 'the helper must hold on the real script');
+  assert.equal(holds(verify.replace('if (!g.assets) fail(', 'if (false) fail(')), false, 'control: a missing line is not a failure');
+  assert.equal(holds(verify.replace("/^shell-smoke: chat assets OK/.test(l)", "/^shell-smoke: chat assets/.test(l)")), false, 'control: a FAILED line would count as proof');
 });
 
 test('chat-shot: skips the single-instance lock, the bus, the watchers and the updater, like --shot and --eval', () => {
