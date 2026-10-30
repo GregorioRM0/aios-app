@@ -8948,6 +8948,7 @@ function chatSkinRegroup(cs) {
       groups.set(key, g);
       const open = opened.has(key) ? opened.get(key) : members.some((m) => m.classList.contains('open') || (m.csRec && opened.get(m.csRec.uuid) === true));   // an older call joining the run from above re-keys it: the run the operator had unfolded must stay unfolded
       opened.set(key, open);
+      for (const m of members) if (m.csRec && m.csRec.uuid !== key) opened.delete(m.csRec.uuid);   // the keys this run absorbed are spent: left behind, one would reopen a run the operator folds later
       chatSkinGroupOpen(g, open);
     }
     members.forEach((m) => m.classList.remove('cs-in'));   // a row folded away never plays its entrance: it would play when the run is opened

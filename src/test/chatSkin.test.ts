@@ -2855,6 +2855,22 @@ guarded('older calls that join a run from above (the tail window cut it) keep th
   },
   (src) => src.replace(" || (m.csRec && opened.get(m.csRec.uuid) === true));", ');'));   // the new run is keyed by its new first call and forgets the old key
 
+guarded('a run the operator unfolds, folds and then receives more older calls for stays folded: the keys it absorbed do not reopen it',
+  (src) => {
+    const h = prependHarness(src);
+    h.handle({ type: 'items', items: [toolItem('t5'), toolItem('t6'), textItem('a1')] });
+    const head = () => groupsOf(h.cs)[0].querySelector('.cg-head')!;
+    const hidden = () => groupsOf(h.cs)[0].querySelector('.cg-body')!.hidden === true;
+    head().click();                                                                              // unfolded
+    h.handle({ type: 'earlier', items: [toolItem('t3'), toolItem('t4')], more: false });         // first older page
+    const keptOpen = !hidden();
+    head().click();                                                                              // the operator folds it
+    const folded = hidden();
+    h.handle({ type: 'earlier', items: [toolItem('t1'), toolItem('t2')], more: false });         // second older page
+    return keptOpen && folded && hidden() && groupsOf(h.cs).length === 1 && inBody(groupsOf(h.cs)[0]).length === 6 && h.cs.groupOpen.size === 1;
+  },
+  (src) => src.replace("      for (const m of members) if (m.csRec && m.csRec.uuid !== key) opened.delete(m.csRec.uuid);", ''));   // the stale key of the first page stays true and wins over the fold
+
 guarded('unfolding a group asks the view to follow the tail; folding it does not',
   (src) => {
     const { cs, handle, scrolls } = streamHarness(src);
