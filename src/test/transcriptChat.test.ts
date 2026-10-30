@@ -233,8 +233,20 @@ test('reset forgets the turn and the running tools (the file is about to be re-r
   t.feed(userStr('q'));
   t.feed(toolUse('x', 'Bash', { command: 'ls' }));
   t.reset();
-  assert.deepEqual(t.snapshot(), { turnOpen: false, usage: {} });
+  assert.deepEqual(t.snapshot(), { turnOpen: false, usage: {}, orphanResults: 0 });
   assert.deepEqual(t.feed(toolResult('x', 'late')).items, []);
+  assert.equal(t.snapshot().orphanResults, 1, 'a result whose call was forgotten is counted: it is how the tail knows a window cut a call in two');
+  t.reset();
+  assert.equal(t.snapshot().orphanResults, 0, 'and reset starts the count over');
+});
+
+test('orphanResults counts only results whose call this tracker never saw (control: a paired call counts none)', () => {
+  const paired = createTranscriptTracker();
+  paired.feedAll([toolUse('p1', 'Bash', { command: 'ls' }), toolResult('p1', 'out')]);
+  assert.equal(paired.snapshot().orphanResults, 0);
+  const cut = createTranscriptTracker();
+  cut.feedAll([toolResult('p2', 'out'), toolResult('p3', 'out')]);
+  assert.equal(cut.snapshot().orphanResults, 2);
 });
 
 // ── tool result preview (tool.output) ───────────────────────────────────────

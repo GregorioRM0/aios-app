@@ -13,7 +13,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as ts from 'typescript';
-import { createTranscriptTail, locateTranscript, isSessionId, type TailEvent } from '../main/transcriptTail';
+import { createTranscriptTail, locateTranscript, isSessionId, TAIL_LINES, TAIL_MAX_BYTES, type TailEvent } from '../main/transcriptTail';
+import { createTranscriptTracker, isConversationLine } from '../core/transcriptChat';
 import { normalizeClaudeView, shellSettings, setShellSetting } from '../main/aios';
 import type { ChatItem } from '../core/transcriptChat';
 
@@ -316,7 +317,7 @@ const aios = read('src/main/aios.ts');
 test('main and preload agree on every chatSkin channel, and the SDK is gone', () => {
   const invoked = new Set([...preload.matchAll(/ipcRenderer\.invoke\('(chatSkin:[a-zA-Z]+|chat:[a-zA-Z]+)'/g)].map((m) => m[1]));
   const handled = new Set([...main.matchAll(/ipcMain\.handle\('(chatSkin:[a-zA-Z]+|chat:[a-zA-Z]+)'/g)].map((m) => m[1]));
-  assert.deepEqual([...invoked].sort(), ['chat:status', 'chatSkin:unwatch', 'chatSkin:watch']);
+  assert.deepEqual([...invoked].sort(), ['chat:status', 'chatSkin:earlier', 'chatSkin:unwatch', 'chatSkin:watch']);
   assert.deepEqual([...handled].sort(), [...invoked].sort(), 'a channel with only one side is a button that does nothing');
   assert.match(preload, /ipcRenderer\.on\('chatSkin:event'/);
   assert.match(main, /sender\.send\('chatSkin:event', ev\)/);
@@ -441,4 +442,192 @@ test('chat:status reads the global statusline payload without the SDK', () => {
   assert.match(main, /mergeStatus\(undefined, scopeStatusToSession\(parseStatuslinePayload\(/);
   assert.match(main, /isSessionId\(sessionId\) \? sessionId : null/);
   assert.doesNotMatch(main, /mergeStatus\(undefined, parseStatuslinePayload\(/, 'an unscoped merge would hand back another session\'s model and context');
+});
+
+
+// ── a long transcript is read as a TAIL, and what is above it on request ─────
+//
+// The view keeps every row it is sent, so sending a whole history made its size, memory and per-line cost grow with the file
+// (scripts/chat-bench.mjs: 160k DOM nodes / 1.3 GB at 50k lines vs 15k / 270 MB at 5k). These run the real tail on real files.
+
+const tool = (id: string, name: string): string => line({ parentUuid: null, isSidechain: false, type: 'assistant', uuid: `t-${++n}`, message: { model: 'm', stop_reason: 'tool_use', content: [{ type: 'tool_use', id, name, input: { command: 'ls' } }] } });
+const toolDone = (id: string, out: string): string => line({ parentUuid: null, isSidechain: false, type: 'user', uuid: `r-${++n}`, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: out }] } });
+const bookkeeping = (bytes: number): string => line({ type: 'api-request-blob', data: 'x'.repeat(bytes) });
+/** `pairs` question/answer pairs: texts q0,a0,q1,a1…, each long enough that a few thousand bytes hold only a few of them. */
+const longChat = (pairs: number): string => Array.from({ length: pairs }, (_, i) => user(`q${i} ${'.'.repeat(60)}`) + answer(`a${i} ${'.'.repeat(60)}`)).join('');
+const allTexts = (pairs: number): string[] => Array.from({ length: pairs }, (_, i) => [`q${i} ${'.'.repeat(60)}`, `a${i} ${'.'.repeat(60)}`]).flat();
+const SMALL = { chunkBytes: 4096, tailLines: 40, tailMaxBytes: 1024 * 1024 };
+
+async function loadAll(tail: ReturnType<typeof createTranscriptTail>, evs: Ev[], pane: number): Promise<{ batches: string[][]; more: boolean[] }> {
+  const batches: string[][] = []; const more: boolean[] = [];
+  for (let i = 0; i < 200; i++) {
+    const seen = evs.filter((e) => e.type === 'earlier').length;
+    assert.equal(await tail.loadEarlier(pane), true);
+    await waitFor(() => evs.filter((e) => e.type === 'earlier').length > seen, 3000, 'the earlier window');
+    const e = evs.filter((x) => x.type === 'earlier')[seen];
+    if (e.type !== 'earlier') throw new Error('unreachable');
+    batches.push(e.items.map((it) => it.text ?? '')); more.push(e.more);
+    if (!e.more) break;
+  }
+  return { batches, more };
+}
+
+test('the window is a tail: a long file delivers about the same number of items however long it is, and says there is more above', async () => {
+  const delivered = async (pairs: number, opts: Parameters<typeof createTranscriptTail>[0]): Promise<{ texts: string[]; span: Ev | undefined; evs: Ev[] }> => {
+    const sb = sandbox();
+    fs.writeFileSync(sb.file(), longChat(pairs));
+    const evs: Ev[] = [];
+    const tail = mkTail({ ...opts, projectsDir: () => sb.base, pollMs: 25 });
+    await tail.watch(7, SID, (e) => evs.push(e));
+    await waitFor(() => evs.some((e) => e.type === 'turn'), 5000, 'the backfill to finish');
+    tail.unwatchAll(); sb.done();
+    return { texts: textsOf(evs), span: evs.find((e) => e.type === 'span'), evs };
+  };
+  const small = await delivered(300, SMALL);
+  const big = await delivered(3000, SMALL);
+  assert.ok(small.texts.length >= 40 && small.texts.length < 120, `a window of ~40 lines, not the file (got ${small.texts.length})`);
+  assert.ok(big.texts.length < small.texts.length + 20, `ten times the file, the same window (${small.texts.length} vs ${big.texts.length})`);
+  assert.deepEqual(big.texts.slice(-4), allTexts(3000).slice(-4), 'it is the END of the file');
+  assert.ok(!big.texts.includes(allTexts(3000)[0]), 'the start of the file is not sent');
+  assert.deepEqual(big.span, { paneId: 7, type: 'span', earlier: true });
+  assert.deepEqual(big.evs.slice(0, 2).map((e) => e.type), ['reset', 'span'], 'the view is emptied, then told whether there is more above');
+  const idx = big.evs.findIndex((e) => e.type === 'items');
+  assert.ok(idx > 1 && big.evs.findIndex((e) => e.type === 'turn') > idx, 'items, then the end state');
+  // the shipped defaults, no options: a file of 4000 lines (~760 KB) is still not delivered whole
+  const shipped = await delivered(2000, {});
+  assert.ok(shipped.texts.length >= 300 && shipped.texts.length < 2500, `the default window is a tail too (got ${shipped.texts.length} of 4000)`);
+  assert.equal(shipped.span?.type === 'span' && shipped.span.earlier, true);
+  // NEGATIVE CONTROL: with a window as big as the file everything is delivered and nothing is "above" — the cap is what bounds it
+  const whole = await delivered(300, { ...SMALL, tailLines: 100000 });
+  assert.equal(whole.texts.length, 600);
+  assert.deepEqual(whole.span, { paneId: 7, type: 'span', earlier: false });
+});
+
+test('the byte cap bounds a file whose lines are huge, however many lines it has', async () => {
+  const sb = sandbox();
+  // 60 conversation lines, each followed by 40 KB of bookkeeping: 300 lines would be ~2 MB, the cap is 64 KB
+  fs.writeFileSync(sb.file(), Array.from({ length: 60 }, (_, i) => user(`row ${i}`) + bookkeeping(40000)).join(''));
+  const evs: Ev[] = [];
+  const tail = mkTail({ projectsDir: () => sb.base, pollMs: 25, chunkBytes: 4096, tailLines: 300, tailMaxBytes: 64 * 1024 });
+  await tail.watch(7, SID, (e) => evs.push(e));
+  await waitFor(() => evs.some((e) => e.type === 'turn'), 5000, 'the backfill to finish');
+  const got = textsOf(evs);
+  assert.ok(got.length >= 1 && got.length <= 3, `read ~64 KB, not 2 MB (got ${got.length} rows)`);
+  assert.equal(got[got.length - 1], 'row 59');
+  // control: lift the cap and every row arrives
+  const evs2: Ev[] = [];
+  const t2 = mkTail({ projectsDir: () => sb.base, pollMs: 25, chunkBytes: 4096, tailLines: 300, tailMaxBytes: 64 * 1024 * 1024 });
+  await t2.watch(8, SID, (e) => evs2.push(e));
+  await waitFor(() => evs2.some((e) => e.type === 'turn'), 5000, 'the uncapped backfill');
+  assert.equal(textsOf(evs2).length, 60);
+  assert.equal(TAIL_LINES, 300); assert.ok(TAIL_MAX_BYTES >= 1024 * 1024 && TAIL_MAX_BYTES <= 64 * 1024 * 1024, 'the shipped caps are bounded constants');
+  tail.unwatchAll(); t2.unwatchAll(); sb.done();
+});
+
+test('loadEarlier walks back window by window: every line once, in order, nothing from below it repeated, and it ends', async () => {
+  const sb = sandbox();
+  fs.writeFileSync(sb.file(), longChat(300));
+  const evs: Ev[] = [];
+  const tail = mkTail({ projectsDir: () => sb.base, pollMs: 25, ...SMALL });
+  await tail.watch(7, SID, (e) => evs.push(e));
+  await waitFor(() => evs.some((e) => e.type === 'turn'), 5000, 'the backfill to finish');
+  const first = textsOf(evs);
+  const { batches, more } = await loadAll(tail, evs, 7);
+  assert.ok(batches.length >= 3, 'several windows');
+  assert.equal(more[more.length - 1], false); assert.ok(more.slice(0, -1).every(Boolean), 'more:true until the top');
+  const stitched = [...batches.reverse().flat(), ...first];   // newest window last in the file, so the last batch received is the oldest
+  assert.deepEqual(stitched, allTexts(300), 'oldest first, each line exactly once, no gap');
+  // asking again at the top: an empty, final answer rather than silence
+  const seen = evs.filter((e) => e.type === 'earlier').length;
+  assert.equal(await tail.loadEarlier(7), true);
+  await waitFor(() => evs.filter((e) => e.type === 'earlier').length > seen, 3000, 'the answer at the top');
+  const last = evs.filter((e) => e.type === 'earlier')[seen];
+  assert.deepEqual(last.type === 'earlier' ? [last.items.length, last.more] : null, [0, false]);
+  // control: with nothing watched, or not yet located, there is nothing to answer with
+  assert.equal(await tail.loadEarlier(99), false);
+  tail.unwatchAll(); sb.done();
+});
+
+test('a window never cuts a tool call in two: the call and its result arrive together, and a call from an earlier window is never left running', async () => {
+  const sb = sandbox();
+  // the result is in the last 4 KB chunk, its call is ~6 KB before it (behind one long operator message)
+  fs.writeFileSync(sb.file(), longChat(10) + tool('toolu_seam', 'Bash') + user('x'.repeat(6000)) + toolDone('toolu_seam', 'ok output') + answer('the end'));
+  const run = async (extraChunks: boolean): Promise<ChatItem[]> => {
+    const evs: Ev[] = [];
+    const tail = mkTail({ projectsDir: () => sb.base, pollMs: 25, chunkBytes: 4096, tailLines: 1, tailMaxBytes: 1024 * 1024 });
+    await tail.watch(7, SID, (e) => evs.push(e));
+    await waitFor(() => evs.some((e) => e.type === 'turn'), 5000, 'the backfill');
+    if (extraChunks) await loadAll(tail, evs, 7);
+    tail.unwatchAll();
+    return evs.flatMap((e) => (e.type === 'items' || e.type === 'earlier' ? e.items : []));
+  };
+  const items = await run(true);
+  const calls = items.filter((i) => i.uuid === 'toolu_seam');
+  assert.equal(new Set(calls.map((c) => c.uuid)).size, 1);
+  assert.ok(calls.length >= 1 && calls.every((c) => c.tool?.status === 'ok' && c.tool.output === 'ok output'), 'the call carries its result wherever the window began');
+  assert.ok(!items.some((i) => i.tool?.status === 'running'), 'no call is left spinning at a seam');
+  // the same file as ONE pass over a tracker that starts at the result: that is the half-call the extension exists to avoid
+  const lines = (fs.readFileSync(sb.file(), 'utf8')).split('\n').filter(Boolean);
+  const cut = createTranscriptTracker(); cut.feedAll(lines.slice(lines.findIndex((l) => l.includes('toolu_seam') && l.includes('tool_result'))));
+  assert.equal(cut.snapshot().orphanResults, 1, 'control: a window that starts at the result does see an orphan');
+  const whole = createTranscriptTracker(); whole.feedAll(lines);
+  assert.equal(whole.snapshot().orphanResults, 0, 'control: the whole file has none');
+  sb.done();
+});
+
+test('what is above belongs to the transcript that is watched: a replaced file or a pane that moved on never answers with the old one', async () => {
+  const sb = sandbox();
+  fs.writeFileSync(sb.file(SID), longChat(200));
+  fs.writeFileSync(sb.file(SID2), Array.from({ length: 200 }, (_, i) => user(`other ${i} ${'.'.repeat(60)}`)).join(''));
+  const evs: Ev[] = [];
+  const tail = mkTail({ projectsDir: () => sb.base, pollMs: 20, ...SMALL });
+  await tail.watch(7, SID, (e) => evs.push(e));
+  await waitFor(() => evs.some((e) => e.type === 'turn'), 5000, 'the first backfill');
+  // a request in flight while the pane moves to another session: its answer is never delivered
+  const mark = evs.length;
+  const pending = tail.loadEarlier(7);
+  const evs2: Ev[] = [];
+  await tail.watch(7, SID2, (e) => evs2.push(e));
+  await pending;
+  await waitFor(() => evs2.some((e) => e.type === 'turn'), 5000, 'the second backfill');
+  await sleep(100);
+  assert.ok(!evs.slice(mark).some((e) => e.type === 'earlier'), 'the old session never gets (or sends) the window it asked for');
+  const { batches } = await loadAll(tail, evs2, 7);
+  assert.ok(batches.flat().every((t) => t.startsWith('other ')), 'every earlier line is from the session now watched');
+  // the file is replaced under a live watcher: re-windowed from its own end, and "above" is the new file's
+  const evs3: Ev[] = [];
+  const t3 = mkTail({ projectsDir: () => sb.base, pollMs: 20, ...SMALL });
+  await t3.watch(8, SID, (e) => evs3.push(e));
+  await waitFor(() => evs3.some((e) => e.type === 'turn'), 5000, 'backfill 3');
+  fs.rmSync(sb.file(SID)); fs.writeFileSync(sb.file(SID), Array.from({ length: 150 }, (_, i) => user(`fresh ${i} ${'.'.repeat(60)}`)).join(''));
+  await waitFor(() => evs3.filter((e) => e.type === 'span').length >= 2, 5000, 'the re-window');
+  await waitFor(() => textsOf(evs3).some((x) => x.startsWith('fresh 149')), 5000, 'the new file');
+  const { batches: b3 } = await loadAll(t3, evs3, 8);
+  assert.ok(b3.flat().length > 0 && b3.flat().every((t) => t.startsWith('fresh ')), 'above the replaced file is the replaced file');
+  tail.unwatchAll(); t3.unwatchAll(); sb.done();
+});
+
+test('lines written after the window are streamed as before, exactly once, even while the window is being read', async () => {
+  const sb = sandbox();
+  fs.writeFileSync(sb.file(), longChat(200));
+  const evs: Ev[] = [];
+  const tail = mkTail({ projectsDir: () => sb.base, pollMs: 20, ...SMALL });
+  await tail.watch(7, SID, (e) => evs.push(e));
+  fs.appendFileSync(sb.file(), user('written during the load'));
+  await waitFor(() => evs.some((e) => e.type === 'turn'), 5000, 'the backfill');
+  fs.appendFileSync(sb.file(), answer('written after the load'));
+  await waitFor(() => textsOf(evs).includes('written after the load'), 3000, 'the live line');
+  const all = textsOf(evs);
+  assert.equal(all.filter((t) => t === 'written during the load').length, 1);
+  assert.equal(all.filter((t) => t === 'written after the load').length, 1);
+  assert.equal(all.length, new Set(all).size, 'no line twice');
+  tail.unwatchAll(); sb.done();
+});
+
+test('isConversationLine: bookkeeping lines (led by their type) are not conversation; user, assistant and system are', () => {
+  assert.equal(isConversationLine('{"type":"api-request-blob","data":"x"}'), false);
+  assert.equal(isConversationLine('{"type":"attachment"}'), false);
+  assert.equal(isConversationLine('{"parentUuid":null,"type":"user","uuid":"u"}'), true);
+  assert.equal(isConversationLine('{"type":"system","subtype":"turn_duration"}'), true);
+  assert.equal(isConversationLine('   '), false);
 });

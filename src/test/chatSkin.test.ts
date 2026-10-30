@@ -3086,3 +3086,126 @@ test('the real-session smoke gate exercises /clear and resume on the same epheme
   assert.equal(holds(g.replace(/tail\.current\(paneId\)/g, 'null')), false, 'control: the tail is not looked at');
   assert.equal(holds(g.replace('are still visible after /clear', 'ok')), false, 'control: the old rows are not checked');
 });
+
+// ── history above the window: the view holds the TAIL of a transcript and asks for the rest ────────────────
+//
+// Main sends the last few hundred lines; every row the view receives stays in the DOM, so what is above is fetched on demand
+// (scripts/chat-bench.mjs: without this, 50k lines meant 160k DOM nodes and 1.3 GB in the renderer). These tests EXECUTE the real
+// handler, the real prepend and the real request gate on a stand-in log whose height is 100 px per row.
+
+type PageHarness = {
+  cs: Record<string, any>; order: string[]; requests: number[]; answer: { value: { ok: boolean } };
+  handle: (ev: Record<string, unknown>) => void; want: () => void;
+};
+function pagingHarness(src: string): PageHarness {
+  const s = slice(src);
+  const parts = [
+    /const CS_TAIL_EVENTS = [^\n]*/.exec(s)?.[0] ?? '', /const CS_EARLIER_NEAR_PX = [^\n]*/.exec(s)?.[0] ?? '',
+    fnBody(s, 'chatSkinWantEarlier'), fnBody(s, 'chatSkinPrepend'), fnBody(s, 'chatSkinResetView'), fnBody(s, 'chatSkinHandleEvent'),
+  ].join('\n');
+  const order: string[] = []; const requests: number[] = [];
+  const answer = { value: { ok: true } };
+  const marker = { nextSibling: { row: 'first' } };
+  const log = { scrollTop: 0, style: { overflowAnchor: '' }, get scrollHeight() { return order.length * 100; }, replaceChildren: () => { order.length = 0; } };
+  const cs: Record<string, any> = {
+    watched: SESS_A, items: new Map(), groups: new Map(), groupOpen: new Map(), log, stateEl: marker, workEl: {},
+    earlier: false, earlierBusy: false, state: 'waiting', turnOpen: false, stalled: false, resetAt: 0, stick: false, lastEventAt: 0,
+  };
+  const p: Record<string, any> = { kind: 'term', view: 'chat', chatSkin: cs };
+  const panes = new Map<number, Record<string, any>>([[1, p]]);
+  const window = { glassShell: { chatSkinEarlier: async (id: number) => { requests.push(id); return answer.value; } } };
+  let ins = 0;
+  const noop = (): void => undefined;
+  const make = new Function('panes', 'window', 'chatSkinUpsert', 'chatSkinRegroup', 'chatSkinScroll', 'chatSkinPaintJump', 'chatSkinControls', 'chatSkinPaintAlert', 'chatSkinPaintState',
+    'chatSkinStreamDrop', 'chatSkinStream', 'chatSkinPrompt', 'chatReducedMotion', 'CS_ANIM_AFTER_MS', 'chatSkinCardPaint',
+    `${parts}\nreturn { handle: chatSkinHandleEvent, want: (id, pane) => chatSkinWantEarlier(id, pane) };`) as (...a: unknown[]) => { handle: (ev: unknown) => void; want: (id: number, p: unknown) => void };
+  const api = make(panes, window,
+    (c: any, it: any, _animate: boolean, before: unknown) => { if (c.items.has(it.uuid)) return; c.items.set(it.uuid, it); if (before !== undefined) order.splice(ins++, 0, it.uuid); else order.push(it.uuid); },
+    () => { ins = 0; }, noop, noop, noop, noop, noop, noop, noop, noop, () => true, 0, noop);
+  return { cs, order, requests, answer, handle: (ev) => api.handle({ paneId: 1, sid: SESS_A, ...ev }), want: () => api.want(1, p) };
+}
+const rows = (ids: string[]): Array<Record<string, unknown>> => ids.map((u) => ({ uuid: u, role: 'user', text: u }));
+const rowsEv = (...ids: string[]): Record<string, unknown> => ({ type: 'items', items: rows(ids) });
+const earlierEv = (more: boolean, ...ids: string[]): Record<string, unknown> => ({ type: 'earlier', items: rows(ids), more });
+const settle = (): Promise<void> => new Promise((r) => setImmediate(r));
+
+guarded('older rows go ABOVE the ones on show, oldest first, and the operator keeps their place; the end of the history is remembered',
+  (src) => {
+    const h = pagingHarness(src);
+    h.handle({ type: 'reset' }); h.handle({ type: 'span', earlier: true }); h.cs.log.scrollTop = 900;
+    h.handle(rowsEv('r4', 'r5', 'r6'));
+    h.cs.log.scrollTop = 120;                                   // the operator is reading near the top of what is on show
+    h.handle({ ...earlierEv(true, 'r1', 'r2', 'r3') });
+    const above = h.order.join() === 'r1,r2,r3,r4,r5,r6' && h.cs.log.scrollTop === 120 + 300 && h.cs.earlier === true && h.cs.earlierBusy === false && h.cs.log.style.overflowAnchor === '';
+    h.handle({ type: 'earlier', items: [], more: false });
+    return above && h.cs.earlier === false && h.order.length === 6;
+  },
+  (src) => src.replace('chatSkinUpsert(cs, it, false, before);', 'chatSkinUpsert(cs, it, false);'));
+guarded('what the view scrolled past keeps its screen position when older rows are added (scrollTop moves by the height added above)',
+  (src) => {
+    const h = pagingHarness(src);
+    h.handle({ type: 'reset' }); h.handle({ type: 'span', earlier: true }); h.handle(rowsEv('r3', 'r4'));
+    h.cs.log.scrollTop = 50;
+    h.handle({ ...earlierEv(true, 'r1', 'r2') });
+    return h.cs.log.scrollTop === 250;
+  },
+  (src) => src.replace('log.scrollTop = top + (log.scrollHeight - was);', 'log.scrollTop = top;'));
+guarded('a short window that leaves nothing to scroll asks for the rows above by itself, and keeps asking until the view is filled',
+  (src) => {
+    const h = pagingHarness(src);
+    h.handle({ type: 'reset' }); h.handle({ type: 'span', earlier: true });
+    h.handle(rowsEv('r5'));                                     // scrollTop 0: nothing above to scroll to
+    const asked = h.requests.length === 1;
+    h.handle({ ...earlierEv(true, 'r4') }); // one row (100 px) did not push the view past the threshold: ask again
+    const again = h.requests.length === 2;
+    h.cs.log.scrollTop = 1000;
+    h.handle({ ...earlierEv(true, 'r3') }); // scrollTop is now far from the top: stop
+    return asked && again && h.requests.length === 2;
+  },
+  (src) => src.replace("if (cs.log.scrollTop < CS_EARLIER_NEAR_PX) chatSkinWantEarlier(id, p);   // the window did not fill", "if (false) chatSkinWantEarlier(id, p);   // the window did not fill"));
+const askOutcome = async (src: string): Promise<boolean> => {
+    const h = pagingHarness(src);
+    h.want(); await settle();
+    const nothing = h.requests.length === 0;                    // cs.earlier is false
+    h.handle({ type: 'span', earlier: true });
+    h.want(); h.want(); await settle();
+    const once = h.requests.length === 1 && h.cs.earlierBusy === true;
+    h.cs.log.scrollTop = 1000;
+    h.handle({ ...earlierEv(true, 'r1') }); // answered: free again
+    h.answer.value = { ok: false };
+    h.want(); await settle();
+    const refused = h.requests.length === 2 && h.cs.earlierBusy === false;   // ok:false clears the flag so the next scroll asks again
+    h.cs.watched = null; h.want(); await settle();
+    return nothing && once && refused && h.requests.length === 2;
+};
+test('one request at a time; none without something above or without a transcript; a refused request can be repeated', async () => {
+  assert.ok(await askOutcome(app), 'the real gate must hold');
+  assert.equal(await askOutcome(app.replace('  cs.earlierBusy = true;\n  Promise.resolve(window.glassShell.chatSkinEarlier(id))', '  Promise.resolve(window.glassShell.chatSkinEarlier(id))')), false, 'control: without the busy flag every scroll event asks again');
+  assert.equal(await askOutcome(app.replace('.then((r) => { if (!r || !r.ok) cs.earlierBusy = false; })', '.then(() => undefined)')), false, 'control: a refused request would block paging for good');
+});
+guarded('rows from another session never land above this one: a late `earlier` of a transcript the pane left is dropped, and a reset forgets the paging state',
+  (src) => {
+    const h = pagingHarness(src);
+    h.handle({ type: 'reset' }); h.handle({ type: 'span', earlier: true }); h.handle(rowsEv('b3', 'b4'));
+    h.cs.earlierBusy = true;
+    h.cs.watched = SESS_B;                                      // /clear or resume: the pane moved on while the request was in flight
+    h.handle({ ...earlierEv(true, 'a1', 'a2'), sid: SESS_A });
+    const dropped = h.order.join() === 'b3,b4' && h.cs.earlierBusy === true;
+    h.handle({ type: 'reset', sid: SESS_B });
+    const forgotten = h.order.length === 0 && h.cs.earlier === false && h.cs.earlierBusy === false;
+    h.handle({ type: 'span', earlier: true, sid: SESS_B }); h.handle({ ...rowsEv('c9'), sid: SESS_B });
+    h.handle({ ...earlierEv(false, 'c8'), sid: SESS_B });
+    return dropped && forgotten && h.order.join() === 'c8,c9';
+  },
+  (src) => src.replace("const CS_TAIL_EVENTS = ['reset', 'span', 'earlier', ", "const CS_TAIL_EVENTS = ['reset', 'span', "));
+test('the scroll listener asks for the rows above when the operator gets near the top, and the preload/main contract carries it', () => {
+  const build = fnBody(skin, 'chatSkinBuild');
+  const wired = (b: string): boolean => /log\.addEventListener\('scroll', \(\) => \{[\s\S]*?if \(log\.scrollTop < CS_EARLIER_NEAR_PX\) chatSkinWantEarlier\(id, p\);[\s\S]*?\}\);/.test(b);
+  assert.ok(wired(build));
+  assert.equal(wired(build.replace('chatSkinWantEarlier(id, p);', '')), false, 'control: without it only a short window would ever page');
+  assert.match(preload, /chatSkinEarlier: \(paneId: number\)[^\n]*ipcRenderer\.invoke\('chatSkin:earlier', paneId\)/);
+  const handler = /ipcMain\.handle\('chatSkin:earlier'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
+  assert.match(handler, /k\.sender !== e\.sender\) return \{ ok: false \}/, 'only the window that owns the pane may ask');
+  assert.match(handler, /tail\.loadEarlier\(id\)/);
+  assert.doesNotMatch(handler.replace('k.sender !== e.sender', ''), /k\.sender !== e\.sender/, 'control: the ownership check is what the pattern found');
+});

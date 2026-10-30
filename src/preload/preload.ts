@@ -24,6 +24,8 @@ type ConnResult = { ok: boolean; error?: string; row?: ConnRow };
  *  the previewed message (it arrives in the next `items` event and takes the preview's place). */
 type ChatSkinEvent = { paneId: number } & (
   | { type: 'reset' }
+  | { type: 'span'; earlier: boolean }
+  | { type: 'earlier'; items: ChatItem[]; more: boolean }
   | { type: 'items'; items: ChatItem[] }
   | { type: 'turn'; open: boolean }
   | { type: 'usage'; contextTokens?: number; model?: string }
@@ -65,6 +67,8 @@ contextBridge.exposeInMainWorld('glassShell', {
      5-hour/weekly numbers always. */
   chatSkinWatch: (paneId: number, sessionId: string | null): Promise<{ ok: true; file: string } | { ok: false; error: string }> => ipcRenderer.invoke('chatSkin:watch', paneId, sessionId),
   chatSkinUnwatch: (paneId: number): Promise<void> => ipcRenderer.invoke('chatSkin:unwatch', paneId),
+  /** Ask for the window of transcript lines just above what the view has (answered as an `earlier` event; ok:false = nothing to answer with). */
+  chatSkinEarlier: (paneId: number): Promise<{ ok: boolean }> => ipcRenderer.invoke('chatSkin:earlier', paneId),
   /** What the pane's terminal shows right now (plain text): the dialog detector reads screens, not the raw stream. */
   chatSkinScreen: (paneId: number, text: string): void => { ipcRenderer.send('chatSkin:screen', paneId, text); },
   onChatSkinEvent: (cb: (ev: ChatSkinEvent) => void): void => { ipcRenderer.on('chatSkin:event', (_e, ev) => cb(ev)); },

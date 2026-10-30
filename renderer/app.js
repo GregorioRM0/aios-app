@@ -8125,6 +8125,8 @@ function chatSkinBuild(id, p) {
     groupOpen: new Map(),        // same key -> whether the operator has it unfolded; outlives the node so a re-split run keeps its state
     status: {}, model: '', ctxTokens: undefined, statusAt: 0,
     watched: null,               // the sessionId main is tailing for this pane, or null
+    earlier: false,              // main says the transcript has lines above the rows on show (it sends only a window of the tail: see chatSkinWantEarlier)
+    earlierBusy: false,          // a request for them is in flight
     gen: 0,                      // bumps on every watch/unwatch so a late reply can tell it is stale
     state: 'connecting',         // connecting · waiting · live · error
     errorCode: '',
@@ -8143,6 +8145,7 @@ function chatSkinBuild(id, p) {
     if (performance.now() < cs.autoUntil) return;   // our own smooth scroll passes through "far from the end" on its way down: that is not the operator leaving
     cs.stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48;
     chatSkinPaintJump(cs);
+    if (log.scrollTop < CS_EARLIER_NEAR_PX) chatSkinWantEarlier(id, p);   // the operator is reaching for what main did not send
   });
   log.addEventListener('wheel', (e) => { if (e.deltaY < 0) cs.autoUntil = 0; }, { passive: true });   // the operator reaching for the past takes the wheel back at once
   jumpBtn.addEventListener('click', () => { cs.stick = true; chatSkinScroll(cs, true); chatSkinPaintJump(cs); try { cs.input.focus({ preventScroll: true }); } catch { /* detached */ } });
@@ -8975,7 +8978,7 @@ function chatSkinMakeItem(role, cs) {
   const node = el('div', 'chat-note');
   return { node, body: node, role: 'system' };
 }
-function chatSkinUpsert(cs, item, animate) {
+function chatSkinUpsert(cs, item, animate, before) {
   if (!item || typeof item !== 'object' || !item.uuid) return;
   let rec = cs.items.get(item.uuid);
   if (!rec) {
@@ -8983,7 +8986,7 @@ function chatSkinUpsert(cs, item, animate) {
     rec.uuid = item.uuid;
     if (rec.role === 'tool') rec.node.csRec = rec;   // the column is regrouped from its nodes, which need to find their tool call again
     cs.items.set(item.uuid, rec);
-    cs.log.insertBefore(rec.node, (cs.stream && cs.stream.rec.node) || cs.dlg || cs.workEl);   // the working indicator stays the last child of the column, and what is still being written or asked stays under everything that has landed
+    cs.log.insertBefore(rec.node, before || (cs.stream && cs.stream.rec.node) || cs.dlg || cs.workEl);   // `before`: older history goes ABOVE what is on show. Otherwise the working indicator stays the last child of the column, and what is still being written or asked stays under everything that has landed
     if (animate) {   // a few px of rise and a fade; only for news, never for history being loaded
       rec.node.classList.add('cs-in');
       rec.node.addEventListener('animationend', (e) => { if (e.target === rec.node) rec.node.classList.remove('cs-in'); });
@@ -9077,11 +9080,41 @@ function chatSkinResetView(p) {
   cs.stream = null; cs.dlg = null; cs.dlgSig = '';   // replaceChildren below removes their nodes; a dialog still open is drawn again at the end
   cs.log.replaceChildren(cs.stateEl, cs.workEl);
   cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true; cs.resetAt = Date.now();
+  cs.earlier = false; cs.earlierBusy = false;   // main says (`span`) whether the new transcript has anything above its window
   chatSkinCardPaint(p);
+}
+/* ── history above the window ─────────────────────────────────────────────────────────────────────────────────
+   Main sends the TAIL of a transcript (the last few hundred lines), not the whole file: every row sent is kept in the DOM
+   and in cs.items, so sending a long session's entire history made the page's size, its memory and the cost of every new
+   line grow with the length of the file (scripts/chat-bench.mjs has the numbers). What is above is asked for when the
+   operator scrolls near the top, one window at a time, and goes ABOVE the rows on show without moving what they are
+   reading. The answer is an `earlier` event tagged with the id of the transcript it was read from, so one already on its
+   way when the pane moved to another session (/clear, resume) is dropped like any other tail event. */
+const CS_EARLIER_NEAR_PX = 240;
+function chatSkinWantEarlier(id, p) {
+  const cs = p && p.chatSkin;
+  if (!cs || !cs.earlier || cs.earlierBusy || cs.watched === null || cs.watched === '') return;
+  cs.earlierBusy = true;
+  Promise.resolve(window.glassShell.chatSkinEarlier(id)).then((r) => { if (!r || !r.ok) cs.earlierBusy = false; }).catch(() => { cs.earlierBusy = false; });
+}
+/* Put `items` (oldest first) above everything on show and keep the operator's place: the browser's own scroll anchoring does
+   not act at scrollTop 0, which is exactly where the operator is when this fires, so it is switched off for the insert and the
+   height that was added above is added to scrollTop by hand. */
+function chatSkinPrepend(cs, items) {
+  if (!Array.isArray(items) || !items.length) return;
+  const log = cs.log;
+  const was = log.scrollHeight;
+  const top = log.scrollTop;
+  const before = cs.stateEl.nextSibling;   // the first row or run; the state line stays on top
+  log.style.overflowAnchor = 'none';
+  for (const it of items) chatSkinUpsert(cs, it, false, before);
+  chatSkinRegroup(cs);
+  log.scrollTop = top + (log.scrollHeight - was);
+  log.style.overflowAnchor = '';
 }
 /* The events that describe a TRANSCRIPT carry the id of the one they were read from (`sid`, added by main). One that was already on
    its way when the pane moved to another session describes a transcript that is no longer the one on show. */
-const CS_TAIL_EVENTS = ['reset', 'items', 'turn', 'usage', 'missing', 'error'];
+const CS_TAIL_EVENTS = ['reset', 'span', 'earlier', 'items', 'turn', 'usage', 'missing', 'error'];
 function chatSkinHandleEvent(ev) {
   if (!ev || ev.paneId === undefined || ev.paneId === null) return;
   const id = ev.paneId;
@@ -9093,6 +9126,16 @@ function chatSkinHandleEvent(ev) {
     case 'reset':
       chatSkinResetView(p);
       break;
+    case 'span':
+      cs.earlier = !!ev.earlier;
+      break;
+    case 'earlier':
+      cs.earlierBusy = false;
+      cs.earlier = !!ev.more;
+      chatSkinPrepend(cs, ev.items);
+      chatSkinPaintJump(cs);
+      if (cs.log.scrollTop < CS_EARLIER_NEAR_PX) chatSkinWantEarlier(id, p);   // the window did not fill the view: keep going until it does
+      return;
     case 'items':
       {
         const animate = Date.now() - cs.resetAt > CS_ANIM_AFTER_MS && !chatReducedMotion();
@@ -9101,6 +9144,7 @@ function chatSkinHandleEvent(ev) {
         cs.state = 'live'; cs.lastEventAt = Date.now(); cs.stalled = false;
         chatSkinScroll(cs, animate);
         chatSkinPaintJump(cs);
+        if (cs.earlier && cs.log.scrollTop < CS_EARLIER_NEAR_PX) chatSkinWantEarlier(id, p);   // a short window leaves nothing to scroll: fetch what is above it now
       }
       break;
     case 'turn':

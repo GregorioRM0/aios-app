@@ -480,6 +480,14 @@ ipcMain.on('chatSkin:screen', (e, paneId: number, text: string) => {
   if (ev) k.send({ ...ev });
 });
 ipcMain.handle('chatSkin:unwatch', (_e, paneId: number) => endSkin(Number(paneId), false));
+/* The operator scrolled to the top of what the chat view holds: read the next window of the transcript above it (see
+   transcriptTail.loadEarlier). Only the window that owns the pane may ask; the answer comes back as an `earlier` event. */
+ipcMain.handle('chatSkin:earlier', async (e, paneId: number): Promise<{ ok: boolean }> => {
+  const id = Number(paneId);
+  const k = Number.isInteger(id) ? skins.get(id) : undefined;
+  if (!k || k.sender !== e.sender) return { ok: false };
+  return { ok: await tail.loadEarlier(id) };
+});
 /* The usage bar. ~/.claude/statusline-payload.json is the LAST payload ANY Claude Code session on this
    machine wrote, so its model, effort and context may belong to another conversation. The tab sends its own
    session id and `scopeStatusToSession` keeps those per-session fields only when the payload's session_id is

@@ -90,8 +90,12 @@ export interface TranscriptTracker {
   feedAll(lines: readonly string[]): TranscriptUpdate;
   /** Forget everything — the file changed under us and will be re-read from the top. */
   reset(): void;
-  /** Where the tracker stands now, for announcing it once after a backfill. */
-  snapshot(): { turnOpen: boolean; usage: TranscriptUsage };
+  /**
+   * Where the tracker stands now, for announcing it once after a backfill. `orphanResults` counts the tool results (since
+   * the last reset) whose call this tracker never saw: the sign that a read which started in the middle of the file cut a
+   * tool call in two, so the tail reads a little further back before it trusts the window.
+   */
+  snapshot(): { turnOpen: boolean; usage: TranscriptUsage; orphanResults: number };
 }
 
 // ── small, defensive readers ────────────────────────────────────────────────
@@ -105,6 +109,18 @@ function num(v: unknown): number | undefined { return typeof v === 'number' && N
 const KEEP = new Set(['user', 'assistant', 'system']);
 /** `{"type":"api-request-blob",…` — bookkeeping lines lead with their type; ours lead with parentUuid. */
 const LEADING_TYPE = /^\s*\{\s*"type"\s*:\s*"([^"]*)"/;
+
+/**
+ * Whether a raw line COULD make a row: the cheap test the tail uses to size the window it reads from the end of a
+ * file, without parsing anything. Bookkeeping lines lead with their type (`{"type":"api-request-blob",…`) and are the
+ * bulk of a real transcript by bytes; the rest — user, assistant, system — are the conversation (a thinking block or a
+ * sidechain line passes too, so this over-counts a little, which is the safe side for "read at least this much").
+ */
+export function isConversationLine(line: string): boolean {
+  if (!line.trim()) return false;
+  const lead = LEADING_TYPE.exec(line);
+  return !lead || KEEP.has(lead[1]);
+}
 
 const INTERRUPT = /^\[Request interrupted by user[^\]]*\]$/;
 const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g;
@@ -209,6 +225,7 @@ export function createTranscriptTracker(): TranscriptTracker {
   /** Tools waiting for their result, by tool_use id. Deleted on result, so this stays small. */
   let running = new Map<string, ChatItem>();
   let lastUsage: { contextTokens?: number; model?: string } = {};
+  let orphanResults = 0;
 
   function setTurn(open: boolean, u: TranscriptUpdate): void {
     if (turnOpen === open) return;
@@ -308,7 +325,7 @@ export function createTranscriptTracker(): TranscriptTracker {
               ...(out ? { output: out.text, ...(out.truncated ? { outputTruncated: true } : {}) } : {}),
             },
           });
-        }
+        } else if (id) orphanResults++;   // its call is before where this read began (or was interrupted)
         // a result means the model is mid-turn (it will read this next)
         setTurn(true, u);
       } else if (b.type === 'text' && typeof b.text === 'string') {
@@ -377,7 +394,7 @@ export function createTranscriptTracker(): TranscriptTracker {
   return {
     feed,
     feedAll,
-    reset(): void { turnOpen = false; running = new Map(); lastUsage = {}; },
-    snapshot(): { turnOpen: boolean; usage: TranscriptUsage } { return { turnOpen, usage: { ...lastUsage } }; },
+    reset(): void { turnOpen = false; running = new Map(); lastUsage = {}; orphanResults = 0; },
+    snapshot(): { turnOpen: boolean; usage: TranscriptUsage; orphanResults: number } { return { turnOpen, usage: { ...lastUsage }, orphanResults }; },
   };
 }
