@@ -2147,11 +2147,11 @@ test('streaming, main: the extractor runs where the transcript is, the preview i
   const w = /ipcMain\.handle\('chatSkin:watch'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
   const order = (m: string): boolean => {
     const a = m.indexOf('skin.stream.items(ev.items)');
-    const b = m.indexOf('skin.send(rest)');
+    const b = m.indexOf('skin.send({ ...rest, sid: sessionId })');
     return a > 0 && b > a;
   };
   assert.ok(order(w), 'the adoption event is computed and sent before the items event');
-  assert.equal(order(w.replace('skin.send(rest)', 'skin.send(rest); /*moved*/').replace(/if \(ev\.type === 'items'\) \{ const a = skin\.stream\.items\(ev\.items\); if \(a\) skin\.send\(\{ \.\.\.a \}\); \}/, '')), false, 'control: without the adoption step the order check fails');
+  assert.equal(order(w.replace('skin.send({ ...rest, sid: sessionId })', 'skin.send({ ...rest, sid: sessionId }); /*moved*/').replace(/if \(ev\.type === 'items'\) \{ const a = skin\.stream\.items\(ev\.items\); if \(a\) skin\.send\(\{ \.\.\.a \}\); \}/, '')), false, 'control: without the adoption step the order check fails');
   const screen = /ipcMain\.on\('chatSkin:screen'[\s\S]*?\n\}\);/.exec(main)?.[0] ?? '';
   assert.match(screen, /if \(!k\.following\) return;/, 'no transcript, no preview: a bubble that nothing can replace is never drawn');
   assert.match(screen, /k\.stream\.screen\(text\)/);
@@ -2944,4 +2944,145 @@ test('v3 polish: a run in progress wears the busy hue (with the ink spinner), th
   assert.match(busy.replace('--st-busy-ink', '--accent'), /--accent/);
   assert.equal(rule('.chat-log > .cs-state[hidden] + .chat-row', css.replace('.cs-state[hidden] + .chat-row', '.cs-state + .chat-x')), '');
   assert.equal(rule('.chat-tg.running .cg-kind', css.replace('.chat-tg.running .cg-kind', '.chat-tg.zzz .cg-kind')), '');
+});
+
+// ── the pane moves to another session: /clear and resume ────────────────────
+//
+// `/clear` and `/resume` start a NEW session inside the SAME claude process: the pty and the tab stay, the registry entry of that pid
+// carries a new id, the old id disappears. Measured on a real session (AIOS_SMOKE_CHAT=1 smoke, stage 8): the pane has to (1) NOT take the
+// old id's disappearance for the session ending, (2) follow the new id, (3) show nothing of the session it left, and (4) ignore what the
+// old transcript's tail had already put on the wire. These tests EXECUTE the real functions on a stand-in pane.
+
+type SessHarness = {
+  p: Record<string, any>; cs: Record<string, any>; watches: Array<[number, string | null]>; unwatches: number[];
+  viewCalls: Array<[number, string]>; renames: string[]; persisted: number; lookups: number[];
+  handle: (ev: Record<string, unknown>) => void; changed: () => void; follow: () => void;
+  under: { value: Record<number, { id: string; name: string }> | 'throw' };
+};
+const SESS_A = 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa';
+const SESS_B = 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb';
+function sessionHarness(src: string): SessHarness {
+  const s = slice(src);
+  const parts = [
+    /const CS_TAIL_EVENTS = [^\n]*/.exec(s)?.[0] ?? '',
+    fnBody(s, 'chatSkinEligible'), fnBody(s, 'chatSkinSessionChanged'), fnBody(s, 'chatSkinSync'),
+    fnBody(s, 'chatSkinResetView'), fnBody(s, 'chatSkinHandleEvent'),
+    /const rotateInFlight = new Set\(\);/.exec(src)?.[0] ?? '', fnBody(src, 'followRotatedId'),
+  ].join('\n');
+  const watches: Array<[number, string | null]> = []; const unwatches: number[] = []; const viewCalls: Array<[number, string]> = [];
+  const renames: string[] = []; const lookups: number[] = [];
+  let persisted = 0;
+  const under: SessHarness['under'] = { value: {} };
+  const cs: Record<string, any> = {
+    watched: SESS_A, gen: 0, items: new Map(), groups: new Map(), groupOpen: new Map(), log: { replaceChildren: () => undefined },
+    stateEl: {}, workEl: {}, state: 'live', turnOpen: true, stalled: false, ctxTokens: 52000, model: 'm', resetAt: 0, stick: false, lastEventAt: 0, idChecks: 0,
+  };
+  const p: Record<string, any> = { kind: 'term', view: 'chat', isSession: true, sessionId: SESS_A, confirmedName: 'smoke', chatSkin: cs };
+  const panes = new Map<number, Record<string, any>>([[1, p]]);
+  const window = { glassShell: {
+    chatSkinWatch: async (id: number, sid: string | null) => { watches.push([id, sid]); return { ok: false, error: 'not-found' }; },
+    chatSkinUnwatch: async (id: number) => { unwatches.push(id); },
+    sessionUnder: async (ids: number[]) => { lookups.push(...ids); if (under.value === 'throw') throw new Error('no ps'); return under.value; },
+  } };
+  const noop = (): void => undefined;
+  const make = new Function('panes', 'window', 'chatSkinSetView', 'paneIsClaude', 'chatSkinPaintState', 'chatSkinLayout', 'chatSkinScreenSoon', 'chatPaintUsage', 'chatSkinCardPaint',
+    'chatSkinUpsert', 'chatSkinRegroup', 'chatSkinScroll', 'chatSkinPaintJump', 'chatSkinControls', 'chatSkinPaintAlert', 'chatSkinStreamDrop', 'chatSkinStream', 'chatSkinPrompt',
+    'chatReducedMotion', 'CS_ANIM_AFTER_MS', 'renamePane', 'persistSessions',
+    `${parts}\nreturn { handle: chatSkinHandleEvent, changed: (id, pane) => chatSkinSessionChanged(id, pane), follow: (id, pane) => followRotatedId(id, pane) };`) as (...a: unknown[]) => {
+      handle: (ev: unknown) => void; changed: (id: number, pane: unknown) => void; follow: (id: number, pane: unknown) => void };
+  const api = make(panes, window, (id: number, v: string) => { viewCalls.push([id, v]); }, () => false, noop, noop, noop, noop, noop,
+    (c: any, it: any) => { c.items.set(it.uuid, it); }, noop, noop, noop, noop, noop, noop, noop, noop,
+    () => true, 0, (_id: number, name: string) => { renames.push(name); }, () => { persisted++; });
+  return {
+    p, cs, watches, unwatches, viewCalls, renames, lookups, under,
+    get persisted() { return persisted; },
+    handle: (ev) => api.handle({ paneId: 1, ...ev }), changed: () => api.changed(1, p), follow: () => api.follow(1, p),
+  } as SessHarness;
+}
+const itemsOf = (sid: string, ...texts: string[]): Record<string, unknown> => ({ type: 'items', sid, items: texts.map((t) => ({ uuid: `${sid.slice(0, 2)}-${t}`, role: 'user', text: t })) });
+
+guarded('a pane that moves to another session shows nothing of the one it left, even if the new transcript does not exist yet (missing, not reset)',
+  (src) => {
+    const h = sessionHarness(src);
+    h.handle({ type: 'reset', sid: SESS_A });
+    h.handle(itemsOf(SESS_A, 'old question', 'old answer'));
+    if (h.cs.items.size !== 2) return false;
+    h.p.sessionId = SESS_B; h.changed();                    // /clear: the id changed, no transcript for it yet
+    const emptied = h.cs.items.size === 0 && h.cs.watched === SESS_B && h.cs.ctxTokens === undefined && h.cs.turnOpen === false;
+    h.handle({ type: 'missing', sid: SESS_B });             // all main says while the file does not exist
+    const stillEmpty = h.cs.items.size === 0 && h.viewCalls.length === 0 && h.watches.length === 1 && h.watches[0][1] === SESS_B;
+    h.handle({ type: 'reset', sid: SESS_B }); h.handle(itemsOf(SESS_B, 'new question'));   // the file appears
+    return emptied && stillEmpty && [...h.cs.items.keys()].join() === 'bb-new question';
+  },
+  (src) => src.replace('if (prev) { chatSkinResetView(p);', 'if (false) { chatSkinResetView(p);'));
+guarded('an event read from the transcript the pane has left is dropped, whatever it is; the events of the one it follows are not',
+  (src) => {
+    const h = sessionHarness(src);
+    h.p.sessionId = SESS_B; h.changed();                    // moved on to B; A's tail had events in flight
+    h.handle(itemsOf(SESS_A, 'late old line')); h.handle({ type: 'turn', open: true, sid: SESS_A });
+    h.handle({ type: 'usage', contextTokens: 99000, sid: SESS_A }); h.handle({ type: 'reset', sid: SESS_A }); h.handle({ type: 'error', code: 'x', sid: SESS_A });
+    const dropped = h.cs.items.size === 0 && h.cs.turnOpen === false && h.cs.ctxTokens === undefined && h.cs.state === 'waiting';
+    h.handle({ type: 'reset', sid: SESS_B }); h.handle(itemsOf(SESS_B, 'new line')); h.handle({ type: 'usage', contextTokens: 1200, sid: SESS_B });
+    return dropped && h.cs.items.size === 1 && h.cs.ctxTokens === 1200;
+  },
+  (src) => src.replace("if (typeof ev.sid === 'string' && ev.sid !== cs.watched && CS_TAIL_EVENTS.includes(ev.type)) return;", ''));
+guarded('resume back to the first session: the view is emptied, the original transcript backfills ONCE, and the other session\'s late events add nothing',
+  (src) => {
+    const h = sessionHarness(src);
+    const backfill = (sid: string): void => { h.handle({ type: 'reset', sid }); h.handle(itemsOf(sid, 'q', 'a')); };
+    backfill(SESS_A);
+    h.p.sessionId = SESS_B; h.changed(); backfill(SESS_B); h.handle(itemsOf(SESS_B, 'b only'));
+    h.p.sessionId = SESS_A; h.changed();                    // resume
+    const emptied = h.cs.items.size === 0 && h.cs.watched === SESS_A;
+    h.handle(itemsOf(SESS_B, 'b late'));
+    backfill(SESS_A);
+    h.handle(itemsOf(SESS_A, 'q', 'a'));                    // the same lines delivered again are an upsert by uuid, never a second bubble
+    return emptied && [...h.cs.items.keys()].sort().join() === 'aa-a,aa-q' && h.watches.map((w) => w[1]).join() === `${SESS_B},${SESS_A}`;
+  },
+  (src) => src.replace('if (prev) { chatSkinResetView(p);', 'if (false) { chatSkinResetView(p);'));
+
+async function rotationOutcome(src: string, under: SessHarness['under']['value'], prior = false): Promise<{ h: SessHarness; adopted: boolean }> {
+  const h = sessionHarness(src);
+  h.under.value = under;
+  if (prior) h.p.idLostChecked = false;
+  h.follow();
+  await new Promise((r) => setImmediate(r));
+  return { h, adopted: h.p.sessionId === SESS_B };
+}
+test('an id that left the registry is looked up in the process tree before it is called an ending (/clear, /resume), and only then is it one', async () => {
+  const good = async (src: string): Promise<boolean> => {
+    const moved = await rotationOutcome(src, { 1: { id: SESS_B, name: 'smoke' } });
+    const m = moved.h;
+    const followed = moved.adopted && m.p.idLostChecked === false && m.persisted === 1 && m.cs.watched === SESS_B && m.viewCalls.length === 0 && m.watches.length === 1 && m.watches[0][1] === SESS_B;
+    const gone = await rotationOutcome(src, {});                           // nothing alive under the pty: the session really ended
+    const stays = gone.h.p.sessionId === SESS_A && gone.h.p.idLostChecked === true && gone.h.persisted === 0;
+    const same = await rotationOutcome(src, { 1: { id: SESS_A, name: 'smoke' } });   // the registry still says the old id: not a rotation
+    const sameOk = same.h.p.sessionId === SESS_A && same.h.p.idLostChecked === true;
+    const boom = await rotationOutcome(src, 'throw');                      // ps unavailable: the old behaviour (the next pulse ends it) rather than never ending
+    const boomOk = boom.h.p.sessionId === SESS_A && boom.h.p.idLostChecked === true;
+    const renamed = await rotationOutcome(src, { 1: { id: SESS_B, name: 'other-name' } });
+    return followed && stays && sameOk && boomOk && renamed.h.p.confirmedName === 'other-name' && renamed.h.renames.join() === 'other-name';
+  };
+  assert.ok(await good(app), 'the real function must hold');
+  assert.equal(await good(app.replace('    pane.sessionId = real.id;\n    pane.idLostChecked = false;', '    pane.idLostChecked = false;')), false, 'control: a rotation that never adopts the new id');
+  assert.equal(await good(app.replace("if (!real || !real.id || real.id === was) { pane.idLostChecked = true; return; }", 'if (!real) return;')), false, 'control: no process under the pty must unlock the ending');
+  assert.equal(await good(app.replace('    chatSkinSessionChanged(id, pane);   // the chat view follows', '    // (removed)   // the chat view follows')), false, 'control: the chat view must be told');
+});
+test('the pulse asks the process tree before declaring an ending, once per lost id, and a live id clears the question', () => {
+  const block = /const liveNames = new Set\(everyone[\s\S]*?renamePane\(pid, t\('tab\.endedSession'[\s\S]*?\n    \}/.exec(app)?.[0] ?? '';
+  const ok = (b: string): boolean => /if \(entry\) \{[\s\S]*pane\.idLostChecked = false;[\s\S]*continue;[\s\S]*\}\s*\n\s*\/\*[\s\S]*?\*\/\s*\n\s*if \(!pane\.idLostChecked\) \{ followRotatedId\(pid, pane\); continue; \}[\s\S]*pane\.isSession = false;/.test(b);
+  assert.ok(ok(block), 'the lookup must sit between "alive under this id" and the ending');
+  assert.equal(ok(block.replace('if (!pane.idLostChecked) { followRotatedId(pid, pane); continue; }', '')), false, 'control: without the lookup an id change is a death again');
+  assert.equal(ok(block.replace('pane.idLostChecked = false;\n', '')), false, 'control: a pane that was asked once would never be asked again');
+  assert.doesNotMatch(skin, /followRotatedId/, 'the skin does not own session identity: the lookup lives with the other adoption sites');
+});
+
+test('the real-session smoke gate exercises /clear and resume on the same ephemeral session, and checks what the pane shows and follows', () => {
+  const g = /async function chatViewSmoke[\s\S]*?\n\}\n/.exec(main)?.[0] ?? '';
+  const holds = (x: string): boolean => /typeIn\('\/clear'|watchChange\('\/clear', '\/clear'/.test(x) && /`\/resume \$\{idA\}`/.test(x) && /tail\.current\(paneId\)/.test(x)
+    && /x\.watched === x\.sessionId/.test(x) && /are still visible after \/clear/.test(x) && /not doubled|duplicated rows after the backfill/.test(x) && /not the original file/.test(x);
+  assert.ok(holds(g));
+  assert.equal(holds(g.replace('`/resume ${idA}`', '`/help`')), false, 'control: no resume');
+  assert.equal(holds(g.replace(/tail\.current\(paneId\)/g, 'null')), false, 'control: the tail is not looked at');
+  assert.equal(holds(g.replace('are still visible after /clear', 'ok')), false, 'control: the old rows are not checked');
 });

@@ -450,7 +450,7 @@ ipcMain.handle('chatSkin:watch', async (e, paneId: number, sessionId: string | n
     else if (ev.type === 'turn') { if (ev.open) skin.stream.begin(); else skin.stream.end(); }
     else if (ev.type === 'reset') skin.stream.reset();
     const { paneId: _pid, ...rest } = ev as { paneId: number } & Record<string, unknown>;
-    skin.send(rest);
+    skin.send({ ...rest, sid: sessionId });       // which transcript this was read from: the view drops what was in flight when the pane moved on
   });
 });
 /* The renderer's terminal emulator is the only thing that knows what the screen looks like NOW, so
@@ -849,7 +849,79 @@ async function chatViewSmoke(win: BrowserWindow): Promise<SmokeChatVerdict> {
     if (ran) return fail('the refused command ran anyway');
     if (!closed) return fail('the dialog did not close after pressing No');
     if (viaEsc) return fail('pressing the "No" button did not close the dialog by itself');
-    result = { status: 'ok', detail: 'real session, chat view, composer, bubbles, streaming, permission dialog card' };
+
+    // 8. /clear AND RESUME, in the same session: the id the pane follows changes twice, and the view must follow it
+    //    with nothing of the other session left on screen. Costs two tiny turns (one word each).
+    const wordB = `PONG-${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    const typeIn = (text: string): Promise<boolean> => js<boolean>(`(() => {
+      const cs = panes.get(${paneId}).chatSkin;
+      cs.input.value = ${JSON.stringify(text)};
+      cs.input.dispatchEvent(new Event('input', { bubbles: true }));
+      cs.input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return cs.input.value === '';
+    })()`);
+    const quiet = async (): Promise<void> => { for (let i = 0; i < 80 && st && (st.ptyAge < 1800 || st.prompt || st.turnOpen || !composerUp(st)); i++) { await sleep(300); st = await probe(); } };
+    const tailNow = (): string => { const c = tail.current(paneId); return c ? `${c.sessionId.slice(0, 8)}→${c.file ? path.basename(c.file).slice(0, 8) : 'no file'}` : 'none'; };
+    const brief = (x: NonNullable<typeof st>): string => `view=${x.view} id=${(x.sessionId ?? 'null').slice(0, 8)} watched=${(x.watched ?? 'null').slice(0, 8)} tail=${tailNow()} rows=${x.rows.filter((r) => !r.hidden).length} A=${x.rows.filter((r) => r.text.includes(word)).length} B=${x.rows.filter((r) => r.text.includes(wordB)).length}`;
+    /* sends `text`, then watches the pane until `done` holds, printing every CHANGE of what the pane follows and shows */
+    const watchChange = async (what: string, text: string, done: (x: NonNullable<typeof st>) => boolean, ms: number): Promise<NonNullable<typeof st>> => {
+      await quiet();
+      if (!st) return fail('the pane disappeared');
+      if (st.prompt) return fail(`a dialog (${st.prompt}) is open before ${what}`, st);
+      if (!(await typeIn(text))) return fail(`Enter in the composer did not send ${what}`);
+      const t1 = Date.now(); let last = '';
+      for (; Date.now() - t1 < ms; await sleep(250)) {
+        const x = await probe();
+        if (!x) return fail(`the pane disappeared during ${what}`);
+        st = x;
+        const b = brief(x);
+        if (b !== last) { last = b; say(`${what} +${((Date.now() - t1) / 1000).toFixed(1)}s ${b}`); }
+        if (x.prompt) return fail(`dialog '${x.prompt}' during ${what}`, x);
+        if (done(x)) { await sleep(1200); const y = await probe(); if (y) { st = y; const c = brief(y); if (c !== last) say(`${what} settled ${c}`); } return st as NonNullable<typeof st>; }
+      }
+      return fail(`${what}: not finished after ${ms / 1000}s (${last})`, st);
+    };
+    st = await probe();
+    if (!st || !st.sessionId) return fail('no session before /clear');
+    const idA = st.sessionId;
+    const rowsBefore = st.rows.filter((r) => !r.hidden).map((r) => `${r.who}:${r.text}`);
+    say(`before /clear — ${brief(st)}`);
+    const obsClear = await watchChange('/clear', '/clear', (x) => !!x.sessionId && x.sessionId !== idA && x.watched === x.sessionId, 45000);
+    const idB = obsClear.sessionId as string;
+    say(`after /clear — session ${idA.slice(0, 8)} → ${idB.slice(0, 8)}; rows visible with the OLD word: ${obsClear.rows.filter((r) => !r.hidden && r.text.includes(word)).length} (before any new message)`);
+    await watchChange('word B', `Reply with exactly the word ${wordB} and nothing else`, (x) => x.rows.some((r) => r.who === 'claude' && !r.hidden && r.text.includes(wordB)), 90000);
+    const afterB = st as NonNullable<typeof st>;
+    const shownB = afterB.rows.filter((r) => !r.hidden);
+    const filesB = tail.current(paneId);
+    say(`after word B — id=${(afterB.sessionId ?? '').slice(0, 8)} watched=${(afterB.watched ?? '').slice(0, 8)} tail file=${filesB?.file ? path.basename(filesB.file, '.jsonl').slice(0, 8) : 'none'}; visible rows: ${shownB.map((r) => `${r.who}:${r.text.length > 30 ? r.text.slice(0, 30) + '…' : r.text}`).join(' | ')}`);
+    const clearProblems: string[] = [];
+    if (afterB.sessionId === idA) clearProblems.push('the pane kept the old session id after /clear');
+    if (afterB.watched !== afterB.sessionId) clearProblems.push(`watched (${afterB.watched}) does not follow the pane's id (${afterB.sessionId})`);
+    if (shownB.some((r) => r.text.includes(word))) clearProblems.push(`rows of the OLD session (${word}) are still visible after /clear`);
+    if (!shownB.some((r) => r.who === 'user' && r.text.includes(wordB)) || !shownB.some((r) => r.who === 'claude' && r.text.includes(wordB))) clearProblems.push('the new session\'s bubbles are not both visible');
+    if (!filesB?.file || path.basename(filesB.file) !== `${afterB.sessionId}.jsonl`) clearProblems.push(`the tail follows ${filesB?.file ? path.basename(filesB.file) : 'no file'}, not the new session's file`);
+    /* the new transcript legitimately opens with the `/clear` command itself (Claude Code records it as the session's first line), so three rows
+       are the whole new session: that command, the word B asked, the word B answered. Anything more is something that came from the old one. */
+    if (shownB.some((r) => r.who === 'user' && !r.text.includes(wordB) && !/^\s*\/clear/.test(r.text)) || shownB.length > 3) clearProblems.push(`${shownB.length} rows visible after /clear + one message (wanted the /clear line, B asked, B answered): ${shownB.map((r) => r.text.slice(0, 20)).join(' | ')}`);
+    // resume back to the ORIGINAL transcript: the view must backfill it once, with nothing of B left and nothing doubled
+    await watchChange('/resume', `/resume ${idA}`, (x) => x.sessionId === idA && x.watched === idA && x.rows.some((r) => r.who === 'claude' && !r.hidden && r.text.includes(word)), 60000);
+    const afterR = st as NonNullable<typeof st>;
+    const shownR = afterR.rows.filter((r) => !r.hidden);
+    const filesR = tail.current(paneId);
+    say(`after resume — id=${(afterR.sessionId ?? '').slice(0, 8)} watched=${(afterR.watched ?? '').slice(0, 8)} tail file=${filesR?.file ? path.basename(filesR.file, '.jsonl').slice(0, 8) : 'none'}; visible rows: ${shownR.length}; old word rows: ${shownR.filter((r) => r.text.includes(word)).length}; B rows: ${shownR.filter((r) => r.text.includes(wordB)).length}`);
+    if (afterR.sessionId !== idA) clearProblems.push(`resume: the pane id is ${afterR.sessionId}, not the original ${idA}`);
+    if (afterR.watched !== idA) clearProblems.push(`resume: watched is ${afterR.watched}, not the original ${idA}`);
+    if (shownR.some((r) => r.text.includes(wordB))) clearProblems.push('resume: rows of the session left behind (B) are still visible');
+    const userA = shownR.filter((r) => r.who === 'user' && r.text.includes(word)).length;
+    const claudeA = shownR.filter((r) => r.who === 'claude' && r.text.includes(word)).length;
+    if (userA !== 1 || claudeA !== 1) clearProblems.push(`resume: the original exchange shows ${userA} operator and ${claudeA} assistant bubble(s) (wanted 1 and 1: backfilled once, not doubled)`);
+    const texts = shownR.map((r) => `${r.who}:${r.text}`);
+    if (new Set(texts).size !== texts.length) clearProblems.push('resume: duplicated rows after the backfill');
+    if (JSON.stringify(texts) !== JSON.stringify(rowsBefore)) clearProblems.push(`resume: the backfilled rows differ from the ${rowsBefore.length} the original session showed before /clear (${texts.length} now)`);
+    if (!filesR?.file || path.basename(filesR.file) !== `${idA}.jsonl`) clearProblems.push(`resume: the tail follows ${filesR?.file ? path.basename(filesR.file) : 'no file'}, not the original file`);
+    if (clearProblems.length) return fail(`/clear + resume: ${clearProblems.join('; ')}`);
+    say('/clear and resume — the id changed, watched followed it, the tail moved with it, no row of the other session stayed, the resume did not double anything');
+    result = { status: 'ok', detail: 'real session, chat view, composer, bubbles, streaming, permission dialog card, /clear and resume' };
   } catch (e) {
     result = { status: 'failed', detail: String((e as Error)?.message ?? e) };
   } finally {

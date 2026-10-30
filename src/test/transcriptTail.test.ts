@@ -49,6 +49,51 @@ after(() => { for (const t of made) t.unwatchAll(); });
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const textsOf = (evs: Ev[]): string[] => evs.flatMap((e) => (e.type === 'items' ? e.items.map((i: ChatItem) => i.text ?? '') : []));
 
+test('one pane, two sessions (/clear, resume): the tail follows the id it was given last, and nothing from the one it left is emitted after the switch', async () => {
+  const sb = sandbox();
+  fs.writeFileSync(sb.file(SID), user('old question') + answer('old answer'));
+  const evs: Ev[] = [];
+  const tail = mkTail({ projectsDir: () => sb.base, pollMs: 20 });
+  const emit = (e: Ev): void => { evs.push(e); };
+  assert.equal((await tail.watch(7, SID, emit)).ok, true);
+  await waitFor(() => evs.some((e) => e.type === 'turn'), 3000, 'the first backfill');
+  assert.deepEqual(tail.current(7), { sessionId: SID, file: sb.file(SID) });
+
+  // /clear: the pane now follows an id whose transcript does not exist yet — "missing", and NO reset (the view must empty itself)
+  const mark = evs.length;
+  assert.deepEqual(await tail.watch(7, SID2, emit), { ok: false, error: 'not-found' });
+  assert.deepEqual(tail.current(7), { sessionId: SID2 }, 'the watcher moved to the new id, with no file yet');
+  fs.appendFileSync(sb.file(SID), user('late line of the old session'));   // the old file keeps growing; nobody follows it any more
+  await sleep(150);
+  const quiet = evs.slice(mark);
+  assert.ok(quiet.some((e) => e.type === 'missing'), 'the new id is announced as missing');
+  assert.ok(!quiet.some((e) => e.type === 'reset'), 'a missing file emits no reset: the renderer has to empty the old session itself');
+  assert.deepEqual(textsOf(quiet), [], 'nothing of the old session (not even its late line) is emitted once the pane moved on');
+
+  // the new transcript appears: reset first, then only ITS lines
+  fs.writeFileSync(sb.file(SID2), user('new question') + answer('new answer'));
+  await waitFor(() => evs.slice(mark).some((e) => e.type === 'reset'), 3000, 'the reset for the new file');
+  await waitFor(() => textsOf(evs.slice(mark)).includes('new answer'), 3000, 'the new backfill');
+  const fresh = evs.slice(mark);
+  assert.deepEqual(textsOf(fresh), ['new question', 'new answer']);
+  assert.deepEqual(tail.current(7), { sessionId: SID2, file: sb.file(SID2) });
+
+  // resume to the ORIGINAL transcript: reset, then everything once — including the line it gained while it was not followed
+  const mark2 = evs.length;
+  assert.equal((await tail.watch(7, SID, emit)).ok, true);
+  await waitFor(() => textsOf(evs.slice(mark2)).includes('late line of the old session'), 3000, 'the resumed backfill');
+  const back = evs.slice(mark2);
+  assert.equal(back[0].type, 'reset', 'the first thing is a reset');
+  assert.deepEqual(textsOf(back), ['old question', 'old answer', 'late line of the old session'], 'each line once, none of the other session');
+  assert.deepEqual(tail.current(7), { sessionId: SID, file: sb.file(SID) });
+  fs.appendFileSync(sb.file(SID2), user('late line of the cleared session'));
+  await sleep(150);
+  assert.ok(!textsOf(evs.slice(mark2)).includes('late line of the cleared session'), 'the session left behind stays silent');
+  tail.unwatch(7);
+  assert.equal(tail.current(7), undefined, 'unwatched: nothing is followed');
+  sb.done();
+});
+
 test('a file that already exists is backfilled in one pass, then the end state is announced', async () => {
   const sb = sandbox();
   fs.writeFileSync(sb.file(), user('first question') + answer('first answer'));

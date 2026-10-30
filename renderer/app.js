@@ -1824,6 +1824,33 @@ function adoptUnidentified() {
     .finally(() => { adoptInFlight = false; });
 }
 
+/* A session's id is not for life. `/clear` and `/resume` replace the session INSIDE the running claude process: the pty, the pid and
+   the tab stay, the registry entry of that pid gets the new id, and the old id disappears. A pane that only compared its id against the
+   registry took that for the session ending: the tab read "(ended)", `sessionId` was cleared and the chat view was thrown back to the
+   terminal. The pty's process tree is the exact authority (the same one adoptUnidentified uses), so before an id that is no longer
+   registered is called an ending, ask it what lives under this pty. A live session under a different id is the same pane moving to
+   its next session; nothing under it means the old id really is gone, and the next pulse declares that. */
+const rotateInFlight = new Set();
+function followRotatedId(id, pane) {
+  if (rotateInFlight.has(id)) return;
+  rotateInFlight.add(id);
+  const was = pane.sessionId;
+  void window.glassShell.sessionUnder([id]).then((map) => {
+    const real = map && map[id];
+    if (panes.get(id) !== pane || pane.sessionId !== was) return;   // closed, or something else already moved it
+    if (!real || !real.id || real.id === was) { pane.idLostChecked = true; return; }   // nothing alive under this pty: the next pulse ends it
+    pane.sessionId = real.id;
+    pane.idLostChecked = false;
+    if (real.name && real.name !== pane.confirmedName) {
+      pane.confirmedName = real.name;
+      if (!pane.manualName) renamePane(id, real.name);
+    }
+    persistSessions();
+    chatSkinSessionChanged(id, pane);   // the chat view follows: unwatch the old transcript, watch the new one
+  }).catch(() => { pane.idLostChecked = true; })   // ps unavailable: fall back to the old behaviour rather than never ending
+    .finally(() => { rotateInFlight.delete(id); });
+}
+
 /* The RUNNING card (Glass's "Running"): quota · Sessions (registry-wide) ·
    Terminals (this window's panes). Re-renders on the 2s poll AND on pane open/close. */
 function renderPulseRunning(m) {
@@ -1855,8 +1882,13 @@ function renderPulseRunning(m) {
             pane.confirmedName = entry.name;     // followed a /rename
             renamePane(pid, entry.name);
           }
+          pane.idLostChecked = false;
           continue;                              // alive under this id — nothing to declare
         }
+        /* The id is gone from the registry, but that is not yet an ending: /clear and /resume start a NEW session inside the
+           SAME claude process, and the registry entry of that pid carries the new id. Ask the process tree once before
+           declaring a death; the answer lands in followRotatedId (an adoption, or the flag that lets the next pulse end it). */
+        if (!pane.idLostChecked) { followRotatedId(pid, pane); continue; }
       } else if (liveNames.has(pane.confirmedName)) {
         continue;                                // pre-id pane, still matching by label
       }
@@ -8375,6 +8407,7 @@ function chatSkinSync(id, p) {
      BEFORE it has an id, and the overlay would otherwise hide the one thing it is waiting on. */
   const want = p.view === 'chat' && !p.exited ? (p.sessionId ? String(p.sessionId) : '') : null;
   if (cs.watched === want) return;
+  const prev = cs.watched;
   if (cs.watched !== null && want === null) {
     cs.gen++;
     if (typeof gs.chatSkinUnwatch === 'function') Promise.resolve(gs.chatSkinUnwatch(id)).catch(() => { /* already gone */ });
@@ -8382,6 +8415,10 @@ function chatSkinSync(id, p) {
   cs.watched = want;
   cs.turnOpen = false; cs.stalled = false; cs.watchedAt = Date.now(); cs.idChecks = 0;
   if (want === null) { chatSkinLayout(p); return; }
+  /* The pane moved from one session to another (/clear, resume): what is on show belongs to the one it left. A new session has no
+     transcript file until its first message, so main announces nothing to replace it with ('missing', not 'reset'), and the old
+     bubbles would stay up under the new session. Empty the view now; a transcript that exists backfills after its own reset. */
+  if (prev) { chatSkinResetView(p); cs.ctxTokens = undefined; chatPaintUsage(cs); }
   cs.state = 'waiting'; cs.errorCode = '';
   const gen = ++cs.gen;
   if (typeof gs.chatSkinWatch !== 'function') { cs.state = 'error'; cs.errorCode = 'unavailable'; chatSkinPaintState(p); return; }
@@ -9033,19 +9070,28 @@ function chatSkinStreamAdopt(cs, uuid) {
   st.rec.node.removeAttribute('aria-hidden');
   cs.stream = null;
 }
+/* Empty the log (a transcript is about to be read from the top, or the pane moved to another session). */
+function chatSkinResetView(p) {
+  const cs = p.chatSkin;
+  cs.items.clear(); cs.groups.clear(); cs.groupOpen.clear();
+  cs.stream = null; cs.dlg = null; cs.dlgSig = '';   // replaceChildren below removes their nodes; a dialog still open is drawn again at the end
+  cs.log.replaceChildren(cs.stateEl, cs.workEl);
+  cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true; cs.resetAt = Date.now();
+  chatSkinCardPaint(p);
+}
+/* The events that describe a TRANSCRIPT carry the id of the one they were read from (`sid`, added by main). One that was already on
+   its way when the pane moved to another session describes a transcript that is no longer the one on show. */
+const CS_TAIL_EVENTS = ['reset', 'items', 'turn', 'usage', 'missing', 'error'];
 function chatSkinHandleEvent(ev) {
   if (!ev || ev.paneId === undefined || ev.paneId === null) return;
   const id = ev.paneId;
   const p = panes.get(id);
   if (!p || !p.chatSkin || p.view !== 'chat') return;
   const cs = p.chatSkin;
+  if (typeof ev.sid === 'string' && ev.sid !== cs.watched && CS_TAIL_EVENTS.includes(ev.type)) return;
   switch (ev.type) {
     case 'reset':
-      cs.items.clear(); cs.groups.clear(); cs.groupOpen.clear();
-      cs.stream = null; cs.dlg = null; cs.dlgSig = '';   // replaceChildren below removes their nodes; a dialog still open is drawn again at the end of this case
-      cs.log.replaceChildren(cs.stateEl, cs.workEl);
-      cs.turnOpen = false; cs.stalled = false; cs.state = 'waiting'; cs.stick = true; cs.resetAt = Date.now();
-      chatSkinCardPaint(p);
+      chatSkinResetView(p);
       break;
     case 'items':
       {

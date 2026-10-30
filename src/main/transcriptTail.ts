@@ -53,6 +53,8 @@ export interface TranscriptTail {
   unwatchAll(): void;
   /** Pane ids with a live watcher — what a leak test (and the quit path) asks. */
   active(): number[];
+  /** What a pane's watcher follows right now: the session id and, once located, its file. */
+  current(paneId: number): { sessionId: string; file?: string } | undefined;
 }
 
 /** The id becomes part of a PATH, so anything that is not id-shaped is refused before it is joined. */
@@ -269,5 +271,9 @@ export function createTranscriptTail(opts: TailOptions = {}): TranscriptTail {
     finish,
     unwatchAll(): void { for (const w of [...watchers.values()]) stop(w); },
     active(): number[] { return [...watchers.keys()]; },
+    current(paneId: number): { sessionId: string; file?: string } | undefined {
+      const w = watchers.get(paneId);
+      return w ? { sessionId: w.sessionId, ...(w.file ? { file: w.file } : {}) } : undefined;
+    },
   };
 }
