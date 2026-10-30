@@ -54,6 +54,27 @@ before(() => {
   // a Claude home that EXISTS but has no signed-in account — the old check's
   // false-positive shape (dir present ≠ signed in).
   fs.writeFileSync(claudeJson, JSON.stringify({}));
+  /* The hooks repair target. Two hook scripts the framework "ships" (so the check has something to
+     require), and a stand-in for hooks/install-settings.py that does what the real one does to the
+     file it is pointed at: merge the hooks into --settings, keeping what is there. It also refuses
+     to write without --apply, so a repair that forgot the flag stays amber instead of passing. */
+  w('hooks/inject-datetime.sh', '#!/bin/sh\n');
+  w('hooks/floor-at-start.py', '');
+  w('hooks/install-settings.py', [
+    'import json, sys',
+    'a = sys.argv',
+    'if "--apply" not in a: sys.exit(0)',
+    'p = a[a.index("--settings") + 1]',
+    'try:',
+    '    s = json.load(open(p, encoding="utf-8"))',
+    'except Exception:',
+    '    s = {}',
+    'h = s.setdefault("hooks", {})',
+    'h.setdefault("UserPromptSubmit", []).append({"hooks": [{"type": "command", "command": "bash ~/aios/hooks/inject-datetime.sh"}]})',
+    'h.setdefault("SessionStart", []).append({"hooks": [{"type": "command", "command": "python3 ~/aios/hooks/floor-at-start.py"}]})',
+    'json.dump(s, open(p, "w", encoding="utf-8"))',
+    '',
+  ].join('\n'));
 });
 
 test('every check reports the CheckResult shape with a valid status', async () => {
@@ -150,6 +171,74 @@ test('skills: the repair loop — warn → run fix → the SAME check re-runs an
   assert.match(proved!.message, /1/, 'counts the registered skill');
 });
 
+test('hooks: amber on a settings.json without them → the App runs install-settings.py → green', async () => {
+  /* The row the doctor never had. SETUP.md's step 8 has the setup session run
+     `install-settings.py --apply`; auto mode blocks a session editing its own settings, so on an
+     App install this was the line most often handed to the operator to paste. */
+  const settings = path.join(claudeHome, 'settings.json');
+  fs.writeFileSync(settings, JSON.stringify({ model: 'opus', hooks: {} }));
+  const before = (await aios.setupChecks()).find((c) => c.id === 'hooks')!;
+  assert.ok(before, 'hooks check present in the battery');
+  assert.equal(before.status, 'warn', 'no framework hook is registered yet');
+  const runner = aios.pythonRunner();
+  if (!runner) {
+    /* No uv and no safe Python on this machine: the row must say so and offer nothing to run —
+       never a bare `python`, which on Windows is the Store alias that prints a notice and exits. */
+    assert.equal(before.canRepair, false);
+    assert.equal(before.repairHint, undefined);
+    return;
+  }
+  assert.equal(before.canRepair, true, 'the installer exists and something can run it');
+  assert.match(before.repairHint!, /install-settings\.py'? --apply$/, 'the hint is the one line it will run');
+  assert.doesNotMatch(before.repairHint!, /\n|^!|&&/, 'one line, no `!`, no `&&`');
+  const proved = await aios.repairCheck('hooks');
+  assert.equal(proved!.status, 'pass', `the re-run proves the fix: ${proved!.message}`);
+  const after = JSON.parse(fs.readFileSync(settings, 'utf8'));
+  assert.equal(after.model, 'opus', 'every key already in the file is kept');
+});
+
+test('hooks: a hook the framework does not ship is never required', async () => {
+  /* Required = the framework ships its script. Otherwise an older (or newer) framework would leave
+     this row amber forever over a hook that does not exist, and Finish setup could never finish. */
+  fs.writeFileSync(path.join(claudeHome, 'settings.json'), JSON.stringify({
+    hooks: {
+      UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'bash ~/aios/hooks/inject-datetime.sh' }] }],
+      SessionStart: [{ hooks: [{ type: 'command', command: 'python3 ~/aios/hooks/floor-at-start.py' }] }],
+    },
+  }));
+  const c = await aios.rawCheck('hooks');
+  assert.equal(c!.status, 'pass', 'provenance / model-switch are not in this fixture framework, so they are not owed');
+});
+
+test('plugin: repaired headless, and its visible fallback is valid in the shell it is typed into', async () => {
+  /* The old remedy was ONE string joined with `&&`, opened in a terminal that is Windows
+     PowerShell 5.1 on Windows — which has no `&&`, so the button failed there before Claude ran. */
+  const c = (await aios.rawCheck('plugin'))!;
+  if (c.status === 'pass') return;   // a fixture home never has it, but be honest if it does
+  assert.equal(c.canRepair, true, 'the App runs it itself (two argv calls), with the framework present');
+  if (process.platform === 'win32') {
+    assert.doesNotMatch(c.repairCmd!, /&&/, 'PowerShell 5.1 has no &&');
+    assert.match(c.repairCmd!, /plugin marketplace add '[^']*'; .*plugin install aios@the-aios$/, 'PowerShell quoting and `;`');
+  } else {
+    assert.match(c.repairCmd!, /plugin marketplace add '.*' && .*plugin install aios@the-aios$/);
+  }
+  assert.doesNotMatch(c.repairCmd!, /\n/, 'one line');
+  const src = fs.readFileSync('src/main/aios.ts', 'utf8');
+  assert.match(src, /for \(const argv of pluginRepairArgv\(root, known\)\) await runClaude\(argv, root\)/,
+    'the headless repair is argv per call, in order — never a shell string');
+});
+
+test('wiringLeft: what is still not wired, each with ONE pasteable line', async () => {
+  const left = await aios.wiringLeft();
+  for (const w of left) {
+    assert.ok(['skills', 'plugin', 'spawn', 'hooks'].includes(w.id), `only the wiring: ${w.id}`);
+    if (w.cmd) {
+      assert.doesNotMatch(w.cmd, /[\r\n]/, `${w.id}: one physical line`);
+      assert.doesNotMatch(w.cmd, /^!/, `${w.id}: never Claude Code's \`!\` syntax`);
+    }
+  }
+});
+
 test('mcpObsidian: reads Claude Code\'s own registry (global + per-project)', async () => {
   let mcp = (await aios.setupChecks()).find((c) => c.id === 'mcpObsidian');
   assert.equal(mcp!.status, 'warn', 'not registered yet');
@@ -172,9 +261,9 @@ test('framework, vault, personalization pass on a complete fixture', async () =>
   assert.equal(by('personalized').status, 'pass');
 });
 
-test('computeHealth: the six Health rows, in display order', async () => {
+test('computeHealth: the nine Health rows, in display order (the four wiring rows together)', async () => {
   const rows = await aios.computeHealth();
-  assert.deepEqual(rows.map((r) => r.id), ['framework', 'vault', 'account', 'skills', 'claude', 'gh']);
+  assert.deepEqual(rows.map((r) => r.id), ['framework', 'vault', 'account', 'skills', 'plugin', 'spawn', 'hooks', 'claude', 'gh']);
   for (const r of rows) assert.ok(['pass', 'warn', 'fail'].includes(r.status));
 });
 

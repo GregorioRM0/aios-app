@@ -83,7 +83,7 @@ test('the picker still offers concrete generations, and labels the operator\'s o
 
 test('the model travels per session — never into settings.json', () => {
   const code = noComments(APP());
-  assert.match(code, /function spawnNamed\(name, task, cwd, mode, model\)/, 'spawnNamed must accept a model');
+  assert.match(code, /function spawnNamed\(name, task, cwd, mode, model(, readFiles)?\)/, 'spawnNamed must accept a model');
   assert.match(code, /\(model \? ' --model ' \+ shq\(model\) : ''\)/, 'passed only when a caller asks, and shell-quoted');
   // claudeSet('model', …) is how Settings PINS a model. The setup step must never reach for it.
   const i = code.indexOf("case 'firstrun':");

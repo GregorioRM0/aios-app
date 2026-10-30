@@ -43,6 +43,7 @@ jobs:
   windows:
     name: Build · verify · attach (Windows x64)
     runs-on: windows-latest
+    timeout-minutes: 45   # a hang fails in minutes, never GitHub's 6 h cancel (0.13.0 review)
     # windows-latest defaults `run:` to PowerShell; the step bodies use bash ($(...), sha256sum,
     # seq, gh). Git Bash ships on the runner, so pin bash for the whole job.
     defaults:
@@ -74,7 +75,7 @@ jobs:
 
       # Same discipline as every release lane: the one place a release is cut is the one place
       # everything must pass. A directory arg, not a glob — runs identically under bash/cmd/pwsh.
-      - run: node --test "out/test/*.test.js"
+      - run: node --test --test-timeout=120000 "out/test/*.test.js"
 
       # Build the nsis installer and verify the SHIPPED tree (PE .node + ConPTY helpers + a launch
       # of the packaged AIOS.exe --smoke). No xvfb — Windows runners have a desktop session.

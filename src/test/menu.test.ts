@@ -144,9 +144,9 @@ test('a named spawn IS the identity — the session becomes the agent', () => {
   // a session adopt a bundled agent on turn one. Running a slash command in the primary
   // session tells it ABOUT the agent instead, and cannot be closed independently.
   // Signature gained optional cwd + permission mode; the identity contract is `--name`, unchanged.
-  assert.match(app, /function spawnNamed\(name, task, cwd, mode, model\)/);
+  assert.match(app, /function spawnNamed\(name, task, cwd, mode, model(, readFiles)?\)/);
   // The model clause sits between them — passed only when a caller asks for one, like the mode.
-  assert.match(app, /CLAUDE \+ \(mode \? ' --permission-mode ' \+ mode : ''\)\s*\n?\s*\+ \(model \? ' --model ' \+ shq\(model\) : ''\)\s*\n?\s*\+ ' --name ' \+ handle/);
+  assert.match(app, /CLAUDE \+ (addDirArgs\([^\n]*\)\s*\n?\s*\+ )?\(mode \? ' --permission-mode ' \+ mode : ''\)\s*\n?\s*\+ \(model \? ' --model ' \+ shq\(model\) : ''\)\s*\n?\s*\+ ' --name ' \+ handle/);
   assert.match(app, /const hit = byName\(handle\);/, 'reveal an open one rather than duplicating');
   assert.match(app, /case 'spawnNamed':/);
   // the title-bar compass uses the same path as the menu
@@ -305,7 +305,8 @@ test('a terminal never spawns into a directory that does not exist', () => {
     'first candidate that EXISTS wins, and $HOME always does');
   assert.doesNotMatch(main, /const fallback = path\.join\(os\.homedir\(\), 'aios'\)/, 'the unchecked fallback is gone');
   // the requested cwd is still confined to the allowed roots
-  assert.match(main, /const requested = opts\.cwd && inAllowed\(opts\.cwd\) \? opts\.cwd : undefined;/);
+  // (or one the command bus validated and granted — main/busCwd: absolute, a directory, inside home)
+  assert.match(main, /const requested = opts\.cwd && \(inAllowed\(opts\.cwd\) \|\| isBusCwdGranted\(opts\.cwd\)\) \? opts\.cwd : undefined;/);
 });
 
 test('setup is TWO phases, and the second only appears once Claude runs', () => {
@@ -381,7 +382,7 @@ test('the guided setup session opens in AUTO mode, and decides that here', () =>
   assert.doesNotMatch(body, /\|\| 'auto'/, "'auto' must not sit behind a config read as a fallback");
   // and the flag still only ships when a caller asks for one — other spawns inherit the
   // operator's own mode, which is correct for every session that is not first-run setup
-  assert.match(app, /CLAUDE \+ \(mode \? ' --permission-mode ' \+ mode : ''\)/);
+  assert.match(app, /CLAUDE \+ (addDirArgs\([^\n]*\)\s*\n?\s*\+ )?\(mode \? ' --permission-mode ' \+ mode : ''\)/);
 });
 
 test('the Phase 1 script is idempotent, honest, and self-proving', () => {
@@ -693,7 +694,7 @@ test("what's new opens once after an update, and its copy cannot describe the la
   /* THE COPY EXISTS IN EVERY LANGUAGE — this is the only screen that would otherwise ship
      English-only in a three-language app. */
   const KEYS = ['whatsnew.tab', 'whatsnew.title', 'whatsnew.sub', 'whatsnew.more', 'whatsnew.for',
-    'whatsnew.h1', 'whatsnew.b1', 'whatsnew.h2', 'whatsnew.b2', 'whatsnew.h3', 'whatsnew.b3'];
+    'whatsnew.h1', 'whatsnew.b1', 'whatsnew.h2', 'whatsnew.b2', 'whatsnew.h3', 'whatsnew.b3', 'whatsnew.h4', 'whatsnew.b4'];
   const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')) as { version: string };
   for (const loc of ['en', 'es', 'pt-br']) {
     const d = JSON.parse(fs.readFileSync(`src/i18n/locales/${loc}.json`, 'utf8')) as Record<string, string>;
@@ -720,4 +721,14 @@ test("what's new opens once after an update, and its copy cannot describe the la
      clicked. Borrowing it would promise an action that is not there. */
   assert.doesNotMatch(app2, /el\('(?:div|button)', 'hcard'[^\n]*whatsnew/, 'informational cards are not buttons');
   assert.match(css, /\.wncard \{/, 'they have their own card class that mirrors Home\'s tokens');
+});
+
+test('#80 follow-up: Start on an open primary reveals it and pulses its tab — never a second session', () => {
+  const app = fs.readFileSync('renderer/app.js', 'utf8');
+  const fn = /function launchPrimary\(primary\) \{[\s\S]*?\n\}/.exec(app)![0];
+  assert.match(fn, /if \(hit && !panes\.get\(hit\[0\]\)\.exited\) \{ setActive\(hit\[0\]\); pulseTab\(hit\[0\]\); return; \}/);
+  assert.doesNotMatch(fn, /fresh/, 'no second primary under one name (the bus refuses shared names)');
+  const css = fs.readFileSync('renderer/theme.css', 'utf8');
+  assert.match(css, /\.tab\.tabpulse \{ animation: tabpulse/);
+  assert.match(css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)')), /\.tab\.tabpulse \{ box-shadow/, 'still visible without motion');
 });

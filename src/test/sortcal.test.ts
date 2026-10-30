@@ -87,12 +87,19 @@ test('getMonthData carries an ISO week number per week row', () => {
   assert.ok(d.weeks.flat().some((c) => c.date === '2026-07-20' && c.hasNote)); // fixture note still lands
 });
 
-test('shellSettings: autoOpenExports defaults on and persists off', () => {
-  assert.equal(aios.shellSettings().autoOpenExports, true);
+test('shellSettings: openExports defaults to a quiet badge, never focus (AI-222)', () => {
+  assert.equal(aios.shellSettings().openExports, 'badge', 'the old default (open a tab) was the defect');
   aios.setShellSetting('autoOpenExports', false);
-  assert.equal(aios.shellSettings().autoOpenExports, false);
+  assert.equal(aios.shellSettings().openExports, 'off', 'a saved off stays off');
+  for (const m of ['open', 'badge', 'off'] as const) {
+    aios.setShellSetting('openExports', m);
+    assert.equal(aios.shellSettings().openExports, m, 'the new choice wins over the old key');
+  }
+  aios.setShellSetting('openExports', 'bogus');
+  assert.equal(aios.shellSettings().openExports, 'off', 'an unknown value falls back to the old key (off here)');
   aios.setShellSetting('autoOpenExports', true);
-  assert.equal(aios.shellSettings().autoOpenExports, true);
+  assert.equal(aios.shellSettings().openExports, 'badge', 'an old "on" becomes the badge, not a tab');
+  aios.setShellSetting('openExports', 'badge');
 });
 
 test('shellSettings: showWeekNumbers defaults on and persists off', () => {

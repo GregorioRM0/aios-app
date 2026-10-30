@@ -124,20 +124,20 @@ function guarded(name: string, src: string, check: (s: string) => boolean, break
   });
 }
 
-guarded('fs:resolveFiles (the terminal\'s) is still files-only and still capped at 24', main,
+guarded('fs:resolveFiles (the terminal\'s) stays on pathLinks and keeps its {open, reveal} reply: no chat-style folders in it', main,
   (s) => {
-    const h = /ipcMain\.handle\('fs:resolveFiles'[\s\S]*?\n\}\);/.exec(s)?.[0] ?? '';
-    return h.length > 60 && /dirs: false/.test(h) && /RESOLVE_FILES_LIMIT/.test(h) && !/dirs: true/.test(h) && /RESOLVE_FILES_LIMIT = 24/.test(read('src/main/pathResolve.ts'));
+    const h = /ipcMain\.handle\('fs:resolveFiles'[\s\S]*?stat: statOrNull,\n  \}\)\);/.exec(s)?.[0] ?? '';
+    return h.length > 60 && /resolveLinkTargets\(cands/.test(h) && !/dirs: true/.test(h) && !/resolveMany/.test(h);
   },
-  (s) => s.replace("{ dirs: false, limit: RESOLVE_FILES_LIMIT }", "{ dirs: true, limit: RESOLVE_FILES_LIMIT }"));
+  (s) => s.replace("ipcMain.handle('fs:resolveFiles', (_e, cands: string[], base?: string) =>\n  resolveLinkTargets(cands, {", "ipcMain.handle('fs:resolveFiles', (_e, cands: string[], base?: string) =>\n  resolveMany(cands, base, resolveEnv, { dirs: true, limit: RESOLVE_PATHS_LIMIT }) || resolveLinkTargets(cands, {"));
 
 guarded('the rules live in ONE place: no handler carries its own copy of the trimming, ~ or base logic', main,
   (s) => !/replace\(\/\[\)\\\]\},\.;:/.test(s) && !/os\.homedir\(\), v\.slice\(1\)/.test(s) && /resolveOne\(cand, base, resolveEnv, false\)/.test(s)
-    && /resolveMany\(cands, base, resolveEnv, \{ dirs: false/.test(s) && /resolveMany\(cands, base, resolveEnv, \{ dirs: true/.test(s),
+    && /resolveMany\(cands, base, resolveEnv, \{ dirs: true/.test(s) && /normalizeCandidate/.test(read('src/main/pathResolve.ts')),
   (s) => s.replace("resolveOne(cand, base, resolveEnv, false)?.abs ?? null", "String(cand).trim().replace(/[)\\]},.;:'\"]+$/, '')"));
 
 guarded('the new channel is exposed by the preload and answers {abs, dir}', preload,
-  (s) => /resolvePaths: \(cands: string\[\], base\?: string\): Promise<Record<string, \{ abs: string; dir: boolean \}>> => ipcRenderer\.invoke\('fs:resolvePaths', cands, base\)/.test(s) && /resolveFiles: \(cands: string\[\], base\?: string\): Promise<Record<string, string>>/.test(s),
+  (s) => /resolvePaths: \(cands: string\[\], base\?: string\): Promise<Record<string, \{ abs: string; dir: boolean \}>> => ipcRenderer\.invoke\('fs:resolvePaths', cands, base\)/.test(s) && /resolveFiles: \(cands: string\[\], base\?: string\): Promise<\{ open: Record<string, string>; reveal: Record<string, string> \}>/.test(s),
   (s) => s.replace("ipcRenderer.invoke('fs:resolvePaths', cands, base)", "ipcRenderer.invoke('fs:resolveFiles', cands, base)"));
 
 

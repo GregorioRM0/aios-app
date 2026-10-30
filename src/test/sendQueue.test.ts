@@ -144,22 +144,27 @@ test('the bus CLAIMS by rename and deletes only after verification', () => {
 test('delivery is verified by counting USER TURNS, not substring hits', () => {
   const src = fs.readFileSync('src/main/commandBus.ts', 'utf8');
   // the RULE now lives in core (pure, unit-tested above); main only does the IO
-  assert.match(src, /function readTranscript/);
+  /* AI-223: the IO moved to main/transcriptSince (read only what was appended since the send began);
+     the RULE is still core's. One counter call, bounded by the claim, behind `count()`. */
+  const io = fs.readFileSync('src/main/transcriptSince.ts', 'utf8');
+  assert.match(io, /export function readTranscript/);
+  assert.match(io, /export class TranscriptSince/);
   /* Pin the INVARIANT, not the call text. This assertion has now broken twice by pinning a line
      that legitimately moved (the baseline hoist on 08-12, the `sinceMs` bound on 08-14), which is
      how a guard trains people to update it without reading it. What must hold: main hands the
      transcript to the core counter, and every such call BOUNDS it by the claim. */
   /* AI-170: the counter is countDeliveries (user turns, or a built-in slash command's local_command record). */
-  const counterCalls = src.match(/countDeliveries\(readTranscript\(sessionId\)[^)]*\)/g) ?? [];
-  assert.ok(counterCalls.length >= 3, `main must delegate counting to core (found ${counterCalls.length} calls)`);
+  const counterCalls = src.match(/countDeliveries\(appended[^)]*\)/g) ?? [];
+  assert.equal(counterCalls.length, 1, 'one place hands the appended transcript to the core counter');
+  assert.ok((src.match(/count\(sessionId\)/g) ?? []).length >= 4, 'and every check goes through it');
   for (const call of counterCalls) {
     assert.match(call, /, needle, claimedAt\)$/,
       `every count must be bounded by the CLAIM, not unbounded and not by a per-attempt clock — got: ${call}`);
   }
-  assert.doesNotMatch(src, /countDeliveries\(readTranscript\(sessionId\), deliverText, needle, emittedAt\)/,
+  assert.doesNotMatch(src, /countDeliveries\([^)]*, emittedAt\)/,
     'emittedAt moves on every retry; a moving bound resets the count mid-flight — the moving-baseline bug again');
   assert.doesNotMatch(src, /countInTranscript/, 'the substring counter is retired');
-  assert.match(src, /claudeConfigDir\(\), 'projects'/);   // honours CLAUDE_CONFIG_DIR
+  assert.match(io, /claudeConfigDir\(\), 'projects'/);   // honours CLAUDE_CONFIG_DIR
 });
 
 test('a mid-write request is re-checked, not condemned', () => {
@@ -251,7 +256,7 @@ test('the main side reads the transcript but delegates the RULE to core', () => 
      core owns the counting rule and the verdict. Where the baseline is captured is asserted in
      busPayload.test.ts, next to the reason. */
   const src = fs.readFileSync('src/main/commandBus.ts', 'utf8');
-  assert.match(src, /countDeliveries\(readTranscript\(sessionId\), deliverText, needle, claimedAt\)/,
+  assert.match(src, /countDeliveries\(appended, deliverText, needle, claimedAt\)/,
     'main reads the transcript and hands it to the core counter, bounded by the claim');
   assert.match(src, /const verdict = verifyVerdict\(before, now\);/,
     'the verdict rule stays in core — main must not re-derive it');

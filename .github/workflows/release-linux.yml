@@ -46,6 +46,7 @@ jobs:
   linux:
     name: Build · verify · attach (Linux x64)
     runs-on: ubuntu-latest
+    timeout-minutes: 45   # a hang fails in minutes, never GitHub's 6 h cancel (0.13.0 review)
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
       BUILD_REF: ${{ github.event.inputs.ref }}
@@ -82,7 +83,7 @@ jobs:
 
       # Same discipline as the mac lane: the one place a release is cut is the one place
       # everything must pass. v0.7.0 was published while CI was red.
-      - run: node --test "out/test/*.test.js"
+      - run: node --test --test-timeout=120000 "out/test/*.test.js"
 
       # Electron needs a display for verify-package's live launch check.
       - name: Build AppImage + deb, verify the packaged tree

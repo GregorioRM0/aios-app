@@ -12,9 +12,37 @@
    quoting (shq/xQuote) and Windows-path handling (drive letters, backslashes, file:// URLs)
    branch on this. A plain boolean, resolved once. */
 const IS_WIN = !!(window.glassShell && window.glassShell.platform === 'win32');
+const IS_LINUX = !!(window.glassShell && window.glassShell.platform === 'linux');
 /* macOS specifically, not "not Windows" — Linux is neither, and the one place this decides is
    whether a ⌘ can stand for "shortcuts". It cannot anywhere else. */
 const IS_MAC = !!(window.glassShell && window.glassShell.platform === 'darwin');
+/* WHAT A Ctrl+C / Ctrl+V KEYDOWN MEANS IN A TERMINAL, off macOS. Returns 'copy', 'paste', or
+   null — null meaning "not ours": the key goes on exactly as before this existed.
+   Windows Terminal and VS Code's terminal conventions, because that is what an operator on
+   Windows/Linux reaches for first:
+     Ctrl+C / Ctrl+Shift+C with a selection → copy it. Ctrl+C WITHOUT one stays ^C (SIGINT) —
+       that is how Claude Code and every shell get interrupted, so it must never be swallowed.
+       Ctrl+Shift+C without one stays null too: on these platforms it is the menu's Run command.
+     Ctrl+V / Ctrl+Shift+V → paste. Without this xterm turned Ctrl+V into a raw ^V (0x16) for the
+       pty and the clipboard never arrived. That also broke Windows clipboard history: picking an
+       older Win+V entry makes Windows SYNTHESIZE a Ctrl+V into the focused window, so it landed
+       as the same stray ^V.
+   Matched on keyCode, which is what xterm itself uses to produce ^C (keyCode - 64): matching on
+   the same field means the copy check and the SIGINT path can never disagree about which key was
+   pressed, whatever the keyboard layout. AltGr arrives as Ctrl+Alt on Windows, so requiring
+   !altKey keeps AltGr characters out of this. Alt+C / Alt+V are not touched — they still reach
+   the session as ESC-prefixed keys. macOS keeps its ⌘ handling and never comes through here.
+   LINUX TAKES ONLY THE SHIFTED PAIR. Plain Ctrl+V is how Claude Code pastes an IMAGE on Linux, so
+   claiming it would break image paste there; Ctrl+Shift+C/V is every Linux terminal's own
+   convention anyway. Windows keeps plain Ctrl+V: Claude Code's image paste there is Alt+V, and
+   clipboard history needs the synthesized Ctrl+V to land. */
+function termClipboardKey(e, mac, hasSelection, linux) {
+  if (mac || e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.metaKey) return null;
+  if (linux && !e.shiftKey) return null;
+  if (e.keyCode === 86) return 'paste';
+  if (e.keyCode === 67 && hasSelection) return 'copy';
+  return null;
+}
 /* WAS THIS PROFILE EMPTY WHEN WE LAUNCHED? Captured at script load, before anything in this file
    can write a key, because that is the only moment able to tell a FIRST-EVER launch from a launch
    that merely predates a feature. Asked later it is always false, since we will have written
@@ -289,7 +317,7 @@ async function speakAnswer(p, paneId) {
   /* The ANSWER's language picks the voice (a Spanish answer in an English voice is noise); the
      App's language only when the guess is unsure. */
   const loc = (res.lang === 'pt' ? 'pt-br' : res.lang) || (window.i18n && window.i18n.getLocale()) || 'en';
-  const lang = loc === 'es' ? 'es-MX' : loc === 'pt-br' ? 'pt-BR' : 'en-US';
+  const lang = loc === 'es' ? 'es-MX' : loc === 'pt-br' ? 'pt-BR' : loc === 'el' ? 'el-GR' : 'en-US';
   const u = new SpeechSynthesisUtterance(text);
   u.lang = lang;
   const voice = window.speechSynthesis.getVoices().find((v) => v.lang === lang) || window.speechSynthesis.getVoices().find((v) => v.lang.startsWith(lang.slice(0, 2)));
@@ -621,7 +649,9 @@ function applyLayout() {
   dp.title = t(showP ? 'panel.hide' : 'panel.show');
   const rx = document.getElementById('railExplorer');
   rx.classList.toggle('on', showX);
+  const exportCount = rx.querySelector('.ribadge');   // AI-222: the new-exports count lives on this button
   rx.innerHTML = icon(showX ? 'folderOpen' : 'folder', 15); // open folder when the explorer is showing
+  if (exportCount) rx.appendChild(exportCount);
   applySplit();
   saveLayout();
   fitTerms();
@@ -1115,6 +1145,16 @@ async function refreshHealth() {
      github-help pattern). One session, not one per row: problems are often related. */
   const notGreen = rows.filter((c) => c.status !== 'pass');
   const badJobs = jobs.filter((j) => j.status !== 'ok' && j.status !== 'waiting');
+  /* Wiring lost after setup (a reinstall, a hand-edited settings file) had no visible way back: the
+     wrench ships hidden and Finish setup lived only in Setup. When any of the four is amber the card
+     offers it, and the click opens Setup, where the box names every change before it makes one. */
+  if (notGreen.some((c) => ['skills', 'plugin', 'spawn', 'hooks'].includes(c.id))) {
+    const fin = el('button', 'phhelp', t('finish.go'));
+    fin.type = 'button';
+    fin.title = t('health.finishSetupHint');
+    fin.addEventListener('click', () => openSetupTab());
+    H.appendChild(fin);
+  }
   if (notGreen.length || badJobs.length) {
     const help = el('button', 'phhelp', t('health.askClaude'));
     help.type = 'button';
@@ -2744,7 +2784,7 @@ function joinAcrossBreak(hits, next, nextRow) {
 
 const NO_WEBGL = !!(window.glassShell.env && window.glassShell.env.AIOS_NO_WEBGL);
 const LINK_DEBUG = false;  // flip on to have the provider narrate what it sees
-const linkCache = new Map();   // `${cwd}\n${lineText}` → { token: absPath }
+const linkCache = new Map();   // `${cwd}\n${lineText}` → { open: { token: absPath }, reveal: { token: absPath } }
 
 let pathTip = null;
 function showPathTip(x, y, text) {
@@ -2819,18 +2859,24 @@ function attachPathLinks(term, startCwd, paneId) {
       if (!hits.length) { cb(undefined); return; }
       void linkBase(paneId, startCwd).then((cwd) => {
       const key = (cwd || '') + '\n' + text;   // logical line, so wrapped rows share one entry (and one folder)
+      /* `map` is { open, reveal } (fs:resolveFiles): a file the viewer may read, or — for a folder
+         or a file outside the allowed roots — a path only the desktop may show. */
       const build = (map) => {
         const links = [];
+        const lookup = (cand) => (map.open[cand] ? { abs: map.open[cand], open: true }
+          : map.reveal[cand] ? { abs: map.reveal[cand], open: false } : null);
         for (const m of hits) {
           /* Longest wins: a filename containing spaces must beat the shorter prefix that also
              happens to exist (a directory, usually). Shortest-match would link the folder. */
           let best = null;
           for (const cand of [...m.alts].sort((a2, b2) => b2.length - a2.length)) {
-            if (map[cand]) { best = { text: cand, abs: map[cand] }; break; }
+            const hit = lookup(cand);
+            if (hit) { best = { text: cand, ...hit }; break; }
           }
-          if (!best && map[m.value]) best = { text: m.value, abs: map[m.value] };
+          if (!best && lookup(m.value)) best = { text: m.value, ...lookup(m.value) };
           if (!best) continue;
           const abs = best.abs;
+          const canOpen = best.open;
           links.push({
             /* A joined candidate ends on the NEXT row, so its range must too — xterm ranges
                may span rows, and clamping to this one would underline only half the path. */
@@ -2839,7 +2885,9 @@ function attachPathLinks(term, startCwd, paneId) {
               : { start: at(m.index), end: at(m.index + best.text.length - 1) },
             text: best.text,
             decorations: { pointerCursor: true, underline: true },
-            hover: (ev) => showPathTip(ev.clientX, ev.clientY, abs + '  ·  ' + t(IS_WIN ? 'term.cmdClickOpenWin' : 'term.cmdClickOpen') + '  ·  ' + t(IS_WIN ? 'term.cmdShiftClickRevealWin' : 'term.cmdShiftClickReveal')),
+            hover: (ev) => showPathTip(ev.clientX, ev.clientY, abs + '  ·  ' + (canOpen
+              ? t(IS_WIN ? 'term.cmdClickOpenWin' : 'term.cmdClickOpen') + '  ·  ' + t(IS_WIN ? 'term.cmdShiftClickRevealWin' : 'term.cmdShiftClickReveal')
+              : t(IS_WIN ? 'term.cmdClickRevealWin' : 'term.cmdClickReveal'))),
             leave: () => hidePathTip(),
             activate: (ev) => {
               hidePathTip();
@@ -2852,6 +2900,9 @@ function attachPathLinks(term, startCwd, paneId) {
                  operator-reported while uploading a generated avatar. Same modifier family as
                  the preview, so a plain click still selects text. */
               if (ev.shiftKey) { void window.glassShell.revealInOS(abs); return; }
+              /* A folder, or a file outside the allowed roots: there is nothing the viewer may
+                 show, so ⌘-click reveals too rather than doing nothing. */
+              if (!canOpen) { void window.glassShell.revealInOS(abs); return; }
               void openViewer(abs);
             },
           });
@@ -2863,8 +2914,9 @@ function attachPathLinks(term, startCwd, paneId) {
       window.glassShell.resolveFiles(hits.flatMap((m) => [m.value, ...m.alts]), cwd).then((map) => {
         if (linkCache.size > 400) linkCache.clear();   // bounded; the buffer scrolls forever
         if (LINK_DEBUG && /espacios|03 -/.test(text)) console.log('[link] resolved=' + JSON.stringify(map));
-        linkCache.set(key, map || {});
-        build(map || {});
+        const got = { open: (map && map.open) || {}, reveal: (map && map.reveal) || {} };
+        linkCache.set(key, got);
+        build(got);
       }).catch(() => cb(undefined));
       });
     },
@@ -3324,13 +3376,19 @@ async function reportThis(id) {
     + '2) whether it is best sent as an issue, or built as a pull request because you can make and test a small, clear fix. '
     + 'For a pull request, work in a separate contribution clone exactly as CONTRIBUTING.md says, never in my AIOS folder. '
     + 'Before drafting, run hooks/issue-scrub.py over everything you will include. Show me the exact repository and text (and for a pull request, the diff), '
-    + 'and do not run gh issue create, gh pr create, git push or post any comment until I approve.', undefined, 'default');
+    + 'and do not run gh issue create, gh pr create, git push or post any comment until I approve.', undefined, 'default', undefined, [file]);
 }
 function explainRelease(version) {
   const v = String(version || '').replace(/[^0-9a-z.\-]/gi, '');
   if (!v) return;
+  /* AI-217 — A MINUTE OR TWO, NOT TWENTY-THREE. Measured: the open brief sent the explainer into the
+     source and a page took 23 m 33 s. The release notes already say what changed and why in plain
+     words, so they are the material; the code is only for a claim the notes leave unexplained, and
+     one verification pass keeps that from becoming a tour. */
   spawnNamed('explainer', `Explain AIOS App ${v} to me as a non-technical operator: what changed and what it means for my day. `
-    + `Source: https://github.com/The-AIOS/aios-app/releases/tag/v${v} . Write it as one HTML page at "03 - export/explainers/aios-app-${v}.html" in my vault, then tell me it is there.`);
+    + `Work from the release notes: https://github.com/The-AIOS/aios-app/releases/tag/v${v} (they include the What's New text the App shows). `
+    + 'Build the page from them, then do ONE verification pass. Open the source code only for a claim the notes do not explain, and say on the page which claims you checked that way. '
+    + `Aim to finish in a minute or two. Write it as one HTML page at "03 - export/explainers/aios-app-${v}.html" in my vault, then tell me it is there.`);
 }
 
 if (window.glassShell.onUpdater) {
@@ -3415,7 +3473,12 @@ function sessionNameFromTitle(title) {
    three limits: a name the operator set always wins; the topic is only a LABEL (p.name, which
    the bus and the Running list correlate on, never changes); and it is only taken after the pane
    has announced Claude, so a shell's own title (a path, user@host) can never become a label —
-   and such a title puts the pane's own name back. */
+   and such a title puts the pane's own name back.
+   A NAMED session never titles "Claude Code" — `--name x` announces "✳ x" from its first frame —
+   so for it the announcement is its handle confirmed against the live registry (the title
+   handler sets claudeTitled there). Without that, `/rename Two Words` inside a named session
+   reached the registry and the tty title but never the tab: sessionNameFromTitle rejects the
+   space, and this path was waiting for a "Claude Code" that never comes. */
 function claudeTopicLabel(id, title) {
   const p = panes.get(id);
   if (!p) return;
@@ -3427,7 +3490,13 @@ function claudeTopicLabel(id, title) {
     if (p.claudeTitled) { p.claudeTitled = false; p.topic = ''; paintTabLabel(p); }
     return;
   }
-  if (!p.claudeTitled || p.manualName || sessionNameFromTitle(raw)) return;
+  /* The session's own handle is back on the title (`/rename` to a slug, or to the launch name):
+     a topic left from an earlier rename would otherwise outlive it on the tab. */
+  if (sessionNameFromTitle(raw)) {
+    if (p.topic) { p.topic = ''; paintTabLabel(p); }
+    return;
+  }
+  if (!p.claudeTitled || p.manualName) return;
   p.topic = bare.slice(0, 60);
   paintTabLabel(p);
 }
@@ -3889,6 +3958,23 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
     if ((e.metaKey || e.ctrlKey) && ['k', 'p', 'j'].includes(e.key.toLowerCase())) return false; // app shortcuts win
     /* AI-77 — Option types the character your keyboard makes, when it makes a plain one. */
     if (e.type === 'keydown') { const ch = optionComposedChar(e); if (ch) { e.preventDefault(); window.glassShell.ptyWrite(id, ch); return false; } }   // preventDefault: no second copy via keypress
+    const clip = termClipboardKey(e, IS_MAC, term.hasSelection(), IS_LINUX);
+    if (clip === 'copy') {
+      // preventDefault so the keystroke stays handled: no ^C for the pty, and on Ctrl+Shift+C
+      // no Run command picker opening over the copy.
+      e.preventDefault();
+      void window.glassShell.copyText(term.getSelection());
+      term.clearSelection();
+      return false;
+    }
+    /* PASTE BY NOT HANDLING THE KEY — the same path ⌘V takes on macOS (see the note below).
+       Returning false keeps xterm from turning it into ^V, and deliberately does NOT
+       preventDefault: Chromium's own Ctrl+V then fires the native `paste` event on xterm's
+       textarea, and xterm's paste handler writes it ONCE, bracketed when the session asked for
+       bracketed paste. A hand-rolled readText()+write here would be a second writer racing that
+       one — the double-paste bug ⌘V already had once. Measured in Electron with the real xterm:
+       Ctrl+V and Ctrl+Shift+V each produce exactly one `ESC[200~…ESC[201~` write and no 0x16. */
+    if (clip === 'paste') return false;
     if (e.type !== 'keydown' || !e.metaKey || e.altKey) return true;
     // ⌘ conventions every macOS terminal user expects — and that a non-technical operator
     // will try first. Without these, ⌘C sent nothing and ⌘←/→ did nothing at all.
@@ -3929,8 +4015,8 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
   }
   // drop a file/folder onto THIS terminal → insert its quoted path (not the active one:
   // the pane under the pointer is the one the operator meant)
-  attachDropZone(el, (paths) => { window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' '); setActive(id); });
-  term.onData((d) => window.glassShell.ptyWrite(id, d));
+  attachDropZone(el, (paths) => { noteOperatorKeys(p, 'drop'); window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' '); setActive(id); });   // #81: a dropped path is a draft
+  term.onData((d) => { noteOperatorKeys(p, d); window.glassShell.ptyWrite(id, d); });
   attachPathLinks(term, cwd, id);
   /* AI-64: the session tells us its own name through the tty title. */
   /* Titles CONFIRM a session; only the REGISTRY can declare one over.
@@ -3967,6 +4053,7 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
     const hit = running.find((a) => a.name === nm);
     if (!hit) return;
     p.isSession = true;
+    p.claudeTitled = true;   // a live session confirmed its handle — the named form of "Claude Code"
     p.confirmedName = nm;
     /* Record the STABLE identity too. A name is a label an operator may change at any moment
        with `/rename`; the sessionId is what the session actually IS. Liveness and endings are
@@ -4013,6 +4100,43 @@ async function createPane({ name = 'terminal', cmd, cwd, bypassReady = false, ba
    it lands as a newline in the composer instead of sending. That is exactly the command bus's
    `send` bug: the message arrived, but never went. A person pastes and then presses Enter,
    after the paste has closed; so do we. */
+/* #81 (an operator saw sessions "jump in" while typing). The pane reports whether its operator is
+   writing a draft; the bus (commandBus, operatorComposing) holds its messages meanwhile. Composing =
+   any key since the last Enter / Ctrl-C OUTSIDE a bracketed paste (a paste can carry line
+   breaks and is still a draft; an up-arrow recalls an old prompt, so escapes count as keys). */
+const BUS_DEFERRED_TYPING = 'deferred: the operator is typing in this session';   // commandBus matches it
+/* A draft with no key for 3 min is abandoned (an Esc or a digit leaves composing set with nothing to
+   clear it); after that the bus may type. Same limit as main's COMPOSE_STALE_MS. */
+const BUS_COMPOSE_STALE_MS = 3 * 60 * 1000;
+/* Terminal-generated replies arrive through the same onData as keys: focus in/out, cursor-position and
+   device-attribute reports, mode reports, OSC answers, mouse reports. None of them is the operator writing. */
+const TERM_REPLY = /\x1b\[[IO]|\x1b\[\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[\?[\d;]*\$y|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[<[\d;]+[Mm]|\x1b\[M[\s\S]{3}/g;
+function noteOperatorKeys(p, d) {
+  if (!p || typeof d !== 'string' || !d) return;
+  d = d.replace(TERM_REPLY, '');
+  if (!d) return;                                    // only the terminal answering: the draft is unchanged
+  p.lastKeyAt = Date.now();
+  let rest = '';
+  for (let k = 0; k < d.length;) {
+    if (d.startsWith('\x1b[200~', k)) { p.inPaste = true; k += 6; continue; }
+    if (d.startsWith('\x1b[201~', k)) { p.inPaste = false; k += 6; continue; }
+    if (!p.inPaste) rest += d[k];
+    k++;
+  }
+  const was = !!p.composing;
+  if (p.inPaste) p.composing = true;
+  else {
+    rest = rest.replace(/\x1b[\r\n]/g, '\n');                   // ESC-Enter is a new line in the draft, not a send
+    const last = Math.max(rest.lastIndexOf('\r'), rest.lastIndexOf('\x03'));   // not Ctrl-U: it may clear only to the cursor
+    p.composing = last < 0 ? true : last < rest.length - 1;   // text after the last send/clear is a new draft
+  }
+  const now = Date.now();
+  if (p.name && (p.composing !== was || now - (p.composingSentAt || 0) > 2000)) {
+    p.composingSentAt = now;
+    window.glassShell.busComposing(p.name, p.composing);
+  }
+}
+
 function submitToPty(id, text) {
   if (!text) return;
   window.glassShell.ptyWrite(id, text);
@@ -4158,7 +4282,7 @@ window.glassShell.onPtyData((m) => {
 });
 window.glassShell.onPtyExit((m) => {
   const p = panes.get(m.id);
-  if (p && p.kind === 'term') { p.exited = true; p.term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n'); chatSkinOnExit(m.id, p); paintRunning(); }
+  if (p && p.kind === 'term') { p.exited = true; if (p.composing && p.name) { p.composing = false; window.glassShell.busComposing(p.name, false); } p.term.write('\r\n\x1b[2m[session ended]\x1b[0m\r\n'); chatSkinOnExit(m.id, p); paintRunning(); }   // #81: an ended pane holds no draft
   /* A guided connect/add session just closed — re-read rather than waiting for focus or the poll.
      Same shape as the Health card's fix panes: run the check that found the problem to prove the
      fix, never trust that the work happened. */
@@ -5043,6 +5167,7 @@ async function openRecents() {
 }
 
 async function openViewer(p) {
+  seenExport(p);   // AI-222: an opened export is no longer new
   for (const [id, pane] of panes) {
     if (pane.kind === 'view' && pane.path === p) { setActive(id); return; }
   }
@@ -5889,6 +6014,66 @@ document.getElementById('dragMark').innerHTML = icon('aios', 13);
 document.getElementById('railFind').innerHTML = icon('search', 15);
 document.getElementById('railFind').addEventListener('click', () => void quickOpen());
 document.getElementById('railExplorer').innerHTML = icon('folder', 15);
+/* AI-222 — NEW EXPORTS, QUIETLY. In the default `badge` mode a new file in 03 - export is not
+   opened (that took focus mid-typing); it is counted on the explorer button instead. Clicking the
+   count opens the newest; opening any of them, by any route, takes it off the count. A pulled
+   file never reaches here (main asks git first). */
+const NEW_EXPORTS = [];
+const exportBadge = Object.assign(document.createElement('span'), { className: 'ribadge go', hidden: true });
+document.getElementById('railExplorer').appendChild(exportBadge);
+exportBadge.addEventListener('click', (e) => {
+  e.stopPropagation();   // the count opens the export; the button itself still toggles the explorer
+  void pickExports();
+});
+/* The count opens a list, the Resume one, even for a single export: the whole files button opens
+   it, and a folder icon that opened a file tab directly was a surprise with no way to dismiss it.
+   Nothing pre-ticked; tick what to open. Twenty exports are one click and a choice, never twenty
+   tabs; what is left unopened stays counted, and "Mark all as seen" clears it. Esc changes nothing. */
+async function pickExports() {
+  if (!NEW_EXPORTS.length) return;
+  /* A file deleted or moved since it was counted leaves the count here, before it can be ticked and
+     fail to open (release round). One batched existence check; if it cannot answer, keep them all. */
+  let found = null;
+  try { found = await window.glassShell.resolveFiles(NEW_EXPORTS.map((x) => x.path)); } catch { found = null; }
+  if (found && found.open) for (const x of NEW_EXPORTS.slice()) if (!found.open[x.path]) seenExport(x.path);
+  if (!NEW_EXPORTS.length) return;
+  const items = NEW_EXPORTS.slice().reverse().map((x) => {
+    const sub = (x.path.split(/[\\/]03 - export[\\/]/)[1] || '').replace(/\\/g, '/');   // Windows paths too
+    const dir = sub.includes('/') ? sub.slice(0, sub.lastIndexOf('/')) : '';
+    return { label: x.name, desc: [agoLabel(x.at), dir].filter(Boolean).join(' · '), icon: 'file', value: x.path, picked: false, hay: sub || x.name };
+  });
+  const chosen = await checkModal(t('exports.title', { n: items.length }), items, {
+    hint: t('exports.sub'),
+    placeholder: t('exports.filter'),
+    confirmLabel: t('exports.confirm'),
+    altAction: { label: t('exports.markSeen') },
+    altInFoot: true,
+  });
+  if (!chosen) return;
+  /* Only what is opened leaves the count: an unticked file is still new. Clearing everything is
+     the explicit "Mark all as seen" (release round: the count vanishing with a file unopened read
+     as a bug). */
+  if (chosen.alt) { for (const it of items) seenExport(it.value); return; }
+  for (const p of chosen) { seenExport(p); void openViewer(p); }
+}
+function paintExportBadge() {
+  const n = NEW_EXPORTS.length;
+  exportBadge.hidden = !n;
+  exportBadge.textContent = String(n);
+  exportBadge.title = n ? t('rail.newExports', { n, name: NEW_EXPORTS[n - 1].name }) : '';
+}
+function noteExport(p, name) {
+  const i = NEW_EXPORTS.findIndex((x) => x.path === p);
+  if (i >= 0) NEW_EXPORTS.splice(i, 1);
+  NEW_EXPORTS.push({ path: p, name: name || xBase(p), at: Date.now() });
+  paintExportBadge();
+}
+function seenExport(p) {
+  const i = NEW_EXPORTS.findIndex((x) => x.path === p);
+  if (i < 0) return;
+  NEW_EXPORTS.splice(i, 1);
+  paintExportBadge();
+}
 mountExplorerRefresh();
 document.getElementById('railPlugins').innerHTML = icon('box', 15);
 /* Rail tooltips — re-applied on locale change (paintRailTitles). */
@@ -6267,9 +6452,15 @@ document.getElementById('railSettings').addEventListener('click', () => openSett
 // whole preset, so clicking it took the panel down with it.) From a panel-less layout it
 // also returns you to Full, since that's the only place an explorer can show.
 document.getElementById('railExplorer').addEventListener('click', () => {
+  /* While new exports are counted, the whole button opens their list: the count is the urgent
+     thing and the badge alone is a small target. The ⌘⌥G B chord still toggles the explorer. */
+  if (NEW_EXPORTS.length) { void pickExports(); return; }
+  toggleExplorer();
+});
+function toggleExplorer() {
   if (!hasExplorer()) { preset = lastPanelPreset; xOn = true; } else { xOn = !xOn; }  // from Zen, come back
   applyLayout();
-});
+}
 // The panel is always visible (collapsing it made it hard to get back). The layout
 // preset menu lives in the TITLE BAR (#36) — ⌘1–4 switch presets (native menu accelerators).
 document.getElementById('railLayout').addEventListener('click', (e) => {
@@ -6353,6 +6544,7 @@ attachDropZone(document.getElementById('tpanes'), (paths, isDir) => {
   const id = active.term;
   if (id != null && panes.get(id) && !panes.get(id).exited) {
     // several files from Finder arrive as one drop — insert them all, space separated
+    noteOperatorKeys(panes.get(id), 'drop');   // #81: a dropped path is a draft
     window.glassShell.ptyWrite(id, paths.map(xQuote).join(' ') + ' ');
     setActive(id);
     return;
@@ -6436,7 +6628,8 @@ const paneOf = (name, id) => {
 window.glassShell.onIntent(async (m) => {
   switch (m.kind) {
     case 'terminal':
-      await createPane({ name: m.name || 'terminal', cmd: m.cmd, background: busBackground(m) });
+      // cwd: a bus request's validated directory (main/busCwd); absent = the framework root.
+      await createPane({ name: m.name || 'terminal', cmd: m.cmd, cwd: typeof m.cwd === 'string' ? m.cwd : undefined, background: busBackground(m) });
       return;
     case 'toggleChatView': void chatSkinToggleMode(); return;
     case 'spawnWorker': void spawnWorkerFlow(); return;
@@ -6502,6 +6695,21 @@ window.glassShell.onIntent(async (m) => {
       const p = hit ? panes.get(hit[0]) : null;
       if (!p || p.exited) { window.glassShell.busSendResult(m.name, false, 'no pane by that name in this surface'); return; }
       if (!p.isSession) { window.glassShell.busSendResult(m.name, false, 'that pane is no longer running the session (its Claude exited; it is a shell now)'); return; }
+      /* #81: the last word is the pane's, with no gap: if its operator is writing now, say so and type
+         nothing. The bus keeps the request and does not spend an attempt on it. */
+      const sinceKey = Date.now() - (p.lastKeyAt || 0);
+      const staleMs = Number(m.staleMs) > 0 ? Number(m.staleMs) : BUS_COMPOSE_STALE_MS;   // the bus decides by the target's Claude Code
+      if ((p.composing && sinceKey < staleMs) || sinceKey < 8000) {
+        window.glassShell.busSendResult(m.name, false, BUS_DEFERRED_TYPING);
+        return;
+      }
+      /* A draft left untouched past the limit is set aside, never glued to the message: Ctrl+S is
+         Claude Code's prompt stash, which empties the box and puts the draft back after the next
+         send. Measured in the 0.13.0 round on Claude Code 2.1.312: without it, "hello draft" was
+         submitted as the message's first words; with it, the message went alone and the draft came
+         back. On an empty box Ctrl+S does nothing, so a stale flag (a lone Esc) is harmless. Only when
+         the bus says the target's Claude Code has the stash (m.stash); otherwise the old 3 min limit. */
+      if (p.composing && m.stash) { window.glassShell.ptyWrite(hit[0], '\x13'); await new Promise((r) => setTimeout(r, 300)); }
       submitToPty(hit[0], m.text);
       // a bus send is agent-to-agent: deliver it in the background unless the operator chose 'follow'
       if (BUS_FOCUS === 'follow') setActive(hit[0]); else markActivity(hit[0]);
@@ -6522,6 +6730,9 @@ window.glassShell.onIntent(async (m) => {
     }
     case 'openFile':
       if (m.path) void openViewer(m.path);
+      return;
+    case 'exportReady':   // AI-222: a new export in badge mode — counted, never opened, no focus taken
+      if (m.path) noteExport(m.path, m.name);
       return;
     case 'toast':
       toast(m.text);
@@ -6644,7 +6855,21 @@ const RITUAL_BOOTSTRAP = 'Start session';
    both from the same string, so they cannot drift. */
 const ritual = (name, slash) => ({ name, cmd: CLAUDE + ' --name ' + name + ' ' + shq(slash) });
 
-function spawnNamed(name, task, cwd, mode, model) {
+/* aios#231 — a session told to READ a run file must be allowed to read it. Under Claude Code's
+   permissions.blockReadsOutsideWorkingDirectories a worker could not open its own task file in
+   ~/.aios/run (the temp folder on Windows), so the handoff arrived as an instruction it was
+   forbidden to follow. `--add-dir <the file's folder>` makes that folder a working directory for
+   this one session. The flag is VARIADIC (`--add-dir <directories...>`): a prompt right after it
+   would be read as one more directory, so it always goes BEFORE another flag, never last.
+   TASK_FILE_RE mirrors core's taskFileInstruction (runFileReads.test.ts pins the two together). */
+const TASK_FILE_RE = /^Read (.+) and follow the instructions inside\.$/;
+const taskFileOf = (prompt) => { const m = TASK_FILE_RE.exec(String(prompt || '')); return m ? m[1] : ''; };
+function addDirArgs(...files) {
+  const dirs = new Set();
+  for (const f of files) { const s = String(f || ''); const i = xSepIdx(s); if (i > 0) dirs.add(s.slice(0, i)); }
+  return [...dirs].map((d) => ' --add-dir ' + shq(d)).join('');
+}
+function spawnNamed(name, task, cwd, mode, model, readFiles) {
   const handle = (name || '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
   if (!handle) return;
   const hit = byName(handle);
@@ -6667,7 +6892,8 @@ function spawnNamed(name, task, cwd, mode, model) {
      every other session keeps the operator's own default. Passed per-session and never written
      to settings.json — a suggestion that silently re-pins someone's model is not a suggestion. */
   void createPane({ name: handle, cwd: cwd || undefined,
-    cmd: CLAUDE + (mode ? ' --permission-mode ' + mode : '')
+    cmd: CLAUDE + addDirArgs(taskFileOf(task), ...(readFiles || []))
+      + (mode ? ' --permission-mode ' + mode : '')
       + (model ? ' --model ' + shq(model) : '')
       + ' --name ' + handle + ' ' + shq(task || RITUAL_BOOTSTRAP) });
 }
@@ -6713,7 +6939,7 @@ function openWhatsNewTab() {
        gets the cup — the same glyphs sitting in the title bar — so reading the note teaches the
        operator what to look for afterwards. An arbitrary decorative icon here would be a missed
        chance to connect the words to the surface. */
-    for (const [n, glyph] of [[1, 'assistant'], [2, 'panel'], [3, 'bolt']]) {
+    for (const [n, glyph] of [[1, 'folder'], [2, 'keyboard'], [3, 'wrench'], [4, 'inbox']]) {   // one card per subject
       const c = el('div', 'wncard');
       const ic = el('div', 'wnicon'); ic.innerHTML = icon(glyph, 22);
       c.append(ic, el('div', 'wntitle', t('whatsnew.h' + n)), el('div', 'wnbody', t('whatsnew.b' + n)));
@@ -6758,7 +6984,7 @@ function openWhatsNewTab() {
    cannot tell you whether a 0.9.10 exists). Add the new version here at each cut; a test fails
    if package.json names a version that is missing. */
 const RELEASES = ['0.6.0', '0.7.0', '0.7.1', '0.7.2', '0.8.0', '0.8.1', '0.8.2', '0.8.3', '0.8.4', '0.8.5', '0.8.6', '0.8.7',
-  '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.9.4', '0.9.5', '0.9.6', '0.9.7', '0.9.8', '0.9.9', '0.10.0', '0.10.1', '0.11.0', '0.11.1', '0.12.0'];
+  '0.9.0', '0.9.1', '0.9.2', '0.9.3', '0.9.4', '0.9.5', '0.9.6', '0.9.7', '0.9.8', '0.9.9', '0.10.0', '0.10.1', '0.11.0', '0.11.1', '0.12.0', '0.13.0'];
 let whatsNewFrom = null;
 /** Releases strictly between the one they had and the one they now run. [] when none, or unknown. */
 function skippedReleases(from, to) {
@@ -6904,6 +7130,49 @@ const RENDERER_KEYS = [
   { group: 'menu.file', label: 'shortcut.save', accel: 'CmdOrCtrl+S' },          // codeedit onSave
 ];
 
+/* ── INSIDE A SESSION ──────────────────────────────────────────────────────────
+   The third half of the sheet, and the one operators actually asked for: the two lists above
+   answer "what can I press in the APP", and nothing answered "what can I press in the SESSION" —
+   how to insert a newline without sending, reach the start of the line, get back a word you
+   deleted. These are Claude Code's own keys (glass, not engine: the App neither implements nor
+   remaps them, except the two ⌘ rows marked macOnly, which attachCustomKeyEventHandler translates
+   for people who come from an editor rather than a terminal).
+   Hand-listed, like RENDERER_KEYS, because nothing can derive them: they live in another program.
+   So the list carries the Claude Code version it was read against, and the sheet prints it, so a
+   row that stops being true is at least dated rather than silently wrong. Verified against
+   https://code.claude.com/docs/en/interactive-mode — the link the sheet offers as the full story.
+   NOT listed on purpose: Ctrl+J, Ctrl+K and Ctrl+P. They are real Claude Code keys, but the pane's
+   key handler swallows ⌘/Ctrl + k/p/j as app shortcuts before xterm sees them, so promising them
+   here would be the sheet lying about the terminal it sits next to (sessionKeys.test.ts guards
+   that). Shift+Enter is not listed either: xterm delivers it as a plain Enter, so it SENDS.
+   OFF macOS CmdOrCtrl IS Ctrl, so every plain Ctrl+letter the menu holds (E, R, W among the rows
+   here) never reaches the session there: those rows are macOnly. Image paste differs per
+   platform, so it is two rows filtered by `os`. sessionKeys.test.ts derives the collision from
+   menu.ts, so a new menu key cannot quietly falsify a row. */
+const SESSION_KEYS_VERIFIED = '2.1.308';
+const SESSION_KEYS_DOCS = 'https://code.claude.com/docs/en/interactive-mode';
+const SESSION_KEYS = [
+  { label: 'shortcut.sessionNewline', accel: 'Option+Enter / \\+Enter' },
+  { label: 'shortcut.sessionLineEdges', accel: 'Ctrl+A / Ctrl+E', macOnly: true },   // Ctrl+E is the menu's off macOS
+  { label: 'shortcut.sessionLineEdgesMac', accel: '⌘← / ⌘→', macOnly: true },   // ptyWrite \x01 / \x05
+  { label: 'shortcut.sessionWord', accel: 'Option+B / Option+F' },
+  { label: 'shortcut.sessionDeleteWord', accel: 'Ctrl+W', macOnly: true },          // Ctrl+W closes the tab off macOS
+  { label: 'shortcut.sessionDeleteToStart', accel: 'Ctrl+U' },
+  { label: 'shortcut.sessionClearLineMac', accel: 'CmdOrCtrl+Backspace', macOnly: true }, // ptyWrite \x15
+  { label: 'shortcut.sessionUndo', accel: 'Ctrl+_' },
+  { label: 'shortcut.sessionYank', accel: 'Ctrl+Y' },
+  { label: 'shortcut.sessionHistory', accel: 'Ctrl+R', macOnly: true },             // Ctrl+R is the menu's off macOS
+  { label: 'shortcut.sessionInterrupt', accel: 'Esc' },
+  { label: 'shortcut.sessionRewind', accel: 'esc esc' },   // prose stays as written; lower-case to match the single `esc` glyph
+  { label: 'shortcut.sessionMode', accel: 'Shift+Tab' },
+  { label: 'shortcut.sessionEditor', accel: 'Ctrl+G' },
+  { label: 'shortcut.sessionImage', accel: 'Ctrl+V', os: ['mac', 'linux'] },
+  { label: 'shortcut.sessionImage', accel: 'Alt+V', os: ['win'] },                  // Ctrl+V pastes text here; Claude Code's image key on Windows is Alt+V
+  { label: 'shortcut.sessionTranscript', accel: 'Ctrl+O' },
+  { label: 'shortcut.sessionCopy', accel: '/copy' },
+  { label: 'shortcut.sessionHelp', accel: '?' },
+];
+
 /** `CmdOrCtrl+Shift+T` → `⌘⇧T` on macOS, `Ctrl+Shift+T` elsewhere.
     TOKENISED, not a chain of replaces. The chained version turned `CmdOrCtrl+Plus` into `⌘` — it
     mapped `Plus` to a literal `+` and then a later step stripped `+` after a modifier glyph,
@@ -6972,6 +7241,25 @@ async function renderShortcuts(wrap) {
     wrap.appendChild(grid);
   }
   if (!rows.length) wrap.appendChild(el('div', 'thint', t('shortcut.none')));
+  /* The session group comes LAST and is never empty: it does not depend on the menu being
+     installed, so it renders even when the app's own rows could not be reported. */
+  const mac = navigator.platform.toLowerCase().includes('mac');
+  wrap.appendChild(el('div', 'ttitle', t('shortcuts.inSession')));
+  const sgrid = el('div', 'kgrid');
+  for (const k of SESSION_KEYS) {
+    if (k.macOnly && !mac) continue;
+    if (k.os && !k.os.includes(mac ? 'mac' : IS_WIN ? 'win' : 'linux')) continue;
+    const row = el('div', 'krow');
+    row.appendChild(el('kbd', '', prettyAccel(k.accel)));
+    row.appendChild(el('span', 'klabel', t(k.label)));
+    sgrid.appendChild(row);
+  }
+  wrap.appendChild(sgrid);
+  const hint = el('div', 'thint', t('shortcuts.inSessionHint', { version: SESSION_KEYS_VERIFIED }) + ' ');
+  const docs = el('button', 'chip', t('shortcuts.inSessionDocs'));   // a chip, not a .pbtn: this is a link out, not a panel action
+  docs.addEventListener('click', () => void window.glassShell.openExternal(SESSION_KEYS_DOCS));
+  hint.appendChild(docs);
+  wrap.appendChild(hint);
 }
 
 /* ── Home: the human front door (greeting + big actions) ──────────────────── */
@@ -7004,12 +7292,7 @@ function openHomeTab() {
       grid.appendChild(c);
     };
     const iso = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
-    card('sun', t('home.planDay'), t('home.planDayHint'), async () => {
-      // dual-use: open today's note if it already exists, else run /aios:today to create it
-      const existing = await window.glassShell.resolveNote(iso());
-      if (existing) window.glassShell.panelSend({ type: 'openDay', date: iso() });
-      else void runWhere('/aios:today', 'today');
-    });
+    card('sun', t('home.planDay'), t('home.planDayHint'), () => void planMyDay());
     card('sparkles', t('home.ask'), t('home.askHint'), () => { window.glassShell.panelSend({ type: 'cmd', command: 'aios.askAios', args: [] }); });
     card('md', t('home.todayNote'), t('home.todayNoteHint'), () => { window.glassShell.panelSend({ type: 'openDay', date: iso() }); });
     card('moon', t('home.closeDay'), t('home.closeDayHint'), () => void createPane(ritual('close-day', '/aios:close-day')));
@@ -9146,6 +9429,103 @@ function chatSkinTick() {
 setInterval(chatSkinTick, CS_TICK_MS);
 /* ═══ END CHAT SKIN ═══ */
 
+/** Plan my day, dual-use: open today's note if it already exists, else run /aios:today to create
+ *  it. One function, so Home and the Next steps page cannot drift into two meanings of the button. */
+async function planMyDay() {
+  const d = new Date();
+  const iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const existing = await window.glassShell.resolveNote(iso);
+  if (existing) window.glassShell.panelSend({ type: 'openDay', date: iso });
+  else void runWhere('/aios:today', 'today');
+}
+
+/* ── Next steps — what to do once the AIOS is installed ─────────────────────────────────────
+   Opens on its own the moment the setup stepper reaches done, and from the done screen after.
+   It answers the question every newcomer asks right then ("…and now what?") in four plain
+   sections, and — ONLY when some wiring is still missing — puts each remaining command at the top
+   as ONE physical line with a Copy button. That fallback exists because of how first installs
+   stalled: a command hard-wrapped by the terminal arrived as two commands, and `!`-prefixed lines
+   were pasted into a PowerShell where `!` means nothing. The lines come from the doctor
+   (wiringLeft), already flattened and `!`-free, in the dialect of the shell they will be typed in. */
+function openNextStepsTab() {
+  openToolTab('::nextsteps', t('nextSteps.title'), async (body) => {
+    const wrap = el('div', 'tool nextsteps');
+    body.appendChild(wrap);
+    wrap.appendChild(el('div', 'tbig', t('nextSteps.title')));
+    wrap.appendChild(el('div', 'tsub', t('nextSteps.lead')));
+    const section = (cls, title, text) => {
+      const sec = el('section', 'ns-sect' + (cls ? ' ' + cls : ''));
+      sec.appendChild(el('h2', 'ns-t', title));
+      if (text) sec.appendChild(el('p', 'ns-b', text));
+      wrap.appendChild(sec);
+      return sec;
+    };
+    const btn = (parent, label, fn, primary) => {
+      const b = el('button', 'vbtn' + (primary ? ' primary' : ''), label);
+      b.addEventListener('click', fn);
+      parent.appendChild(b);
+      return b;
+    };
+
+    // What is still not wired comes FIRST when there is any — it is the only part that blocks.
+    let left = [];
+    try { left = await window.glassShell.wiringLeft(); } catch { left = []; }
+    if (left.length) {
+      const sec = section('ns-left', t('nextSteps.leftTitle'), t('nextSteps.leftBody'));
+      sec.appendChild(el('p', 'ns-b', IS_WIN ? t('nextSteps.leftHowWin') : t('nextSteps.leftHowPosix')));
+      for (const w of left) {
+        const row = el('div', 'ns-cmdrow');
+        row.appendChild(el('div', 'ns-cmdlab', w.label + ' — ' + w.message));
+        if (w.cmd) {
+          const line = el('div', 'ns-cmdline');
+          // nowrap + horizontal scroll: what is SHOWN is one line too, so nobody retypes a wrap
+          line.appendChild(el('code', 'ns-cmd', w.cmd));
+          btn(line, t('nextSteps.copy'), () => {
+            void window.glassShell.copyText(w.cmd);
+            toast(t('nextSteps.copied'));
+          });
+          row.appendChild(line);
+        } else {
+          // the label line above already says what is wrong; this only says no line can fix it
+          row.appendChild(el('div', 'step-note', t('nextSteps.noCmd')));
+        }
+        sec.appendChild(row);
+      }
+      /* #84, on top: the button below runs every one of these at once, so it says what each will
+         change first — the same list and backup note the setup panel shows (finishSetupEl). */
+      const changes = el('ul', 'setup-finish-list');
+      for (const w of left) changes.appendChild(el('li', '', t('finish.change.' + w.id)));
+      sec.append(el('div', 'step-sub', t('finish.intro')), changes, el('div', 'step-note', t('finish.backup')));
+      const acts = el('div', 'step-acts');
+      const again = btn(acts, t('finish.go'), async () => {
+        again.disabled = true; again.textContent = t('finish.working');
+        try { await window.glassShell.finishSetup(); } catch { /* the rebuild below shows what is left */ }
+        openNextStepsTab();   // already open → rebuilds in place with what is left now
+      }, true);
+      sec.appendChild(acts);
+    }
+
+    const tour = section('', t('nextSteps.tourTitle'), t('nextSteps.tourBody'));
+    const tourActs = el('div', 'step-acts');
+    btn(tourActs, t('setup.fullTour'), () => void createPane(
+      ritual('cold-start', '/aios:cold-start-interview show me the full tour')), true);
+    tour.appendChild(tourActs);
+
+    const rhythm = section('', t('nextSteps.rhythmTitle'), t('nextSteps.rhythmBody'));
+    const rActs = el('div', 'step-acts');
+    btn(rActs, t('home.planDay'), () => void planMyDay());
+    btn(rActs, t('home.closeDay'), () => void createPane(ritual('close-day', '/aios:close-day')));
+    rhythm.appendChild(rActs);
+
+    section('', t('nextSteps.keepOpenTitle'), t('nextSteps.keepOpenBody'));
+
+    const phone = section('', t('nextSteps.phoneTitle'), t('nextSteps.phoneBody'));
+    const pActs = el('div', 'step-acts');
+    btn(pActs, t('nextSteps.phoneGo'), () => openSettingsTab());
+    phone.appendChild(pActs);
+  }, { rebuild: true });
+}
+
 /* ── tool tabs: Settings + Setup (synthetic viewer panes) ─────────────────── */
 /* `rebuild: true` re-runs `build` every time the tab is re-opened or re-shown.
    Settings needs it: it MIRRORS Claude's own config, and `build` ran exactly once per pane — so a
@@ -9164,6 +9544,7 @@ const TOOL_TAB_ICONS = {
   '::shortcuts': IS_MAC ? 'cmdKey' : 'keyboard',     // exactly what the title-bar button shows
   '::settings': 'gear',
   '::setup': 'wrench',
+  '::nextsteps': 'rocket',
   '::plugins': 'plug',
   '::designer': 'design',
 };
@@ -9636,8 +10017,14 @@ function openSettingsTab() {
     row(wrap, t('settings.showHidden'), exToggle('showHidden', cfg.showHidden, () => void paintExplorer()), t('settings.showHiddenHint'));
     row(wrap, t('settings.fileIcons'), exToggle('fileIcons', cfg.fileIcons !== false, (on) => { EXPLORER.icons = on; void paintExplorer(); }), t('settings.fileIconsHint'));
     row(wrap, t('settings.autoReveal'), exToggle('autoReveal', cfg.autoReveal !== false, (on) => { EXPLORER.autoReveal = on; }), t('settings.autoRevealHint'));
-    // main reads this per export event, so nothing renderer-side to update
-    row(wrap, t('settings.autoOpenExports'), exToggle('autoOpenExports', cfg.autoOpenExports !== false, () => {}), t('settings.autoOpenExportsHint'));
+    /* AI-222 — main reads this per export event, so nothing renderer-side to update. Three rungs,
+       like attention above: a tab, a quiet count, or nothing. The default never takes focus. */
+    const expSel = document.createElement('select');
+    expSel.className = 'tinput';
+    for (const v of ['badge', 'open', 'off']) { const o = document.createElement('option'); o.textContent = t('openExports.' + v); o.value = v; expSel.appendChild(o); }
+    expSel.value = cfg.openExports || 'badge';
+    expSel.addEventListener('change', async () => { await window.glassShell.setSetting('openExports', expSel.value); toast(t('settings.saved')); });
+    row(wrap, t('settings.openExports'), expSel, t('settings.openExportsHint'));
 
     // AI-58: the MASTER default sort — app-only operators have no VS Code settings UI,
     // so the global default lives here. Setting it clears every per-folder override.
@@ -9909,6 +10296,25 @@ const onboardingFixPanes = new Set(); // pty ids of Onboarding fix terminals →
 const stepTried = new Set();
 let onboardingRepaint = null;         // live while the Setup tab is open
 
+/**
+ * The order the Setup steps are DRAWN in: the next thing to do first, then what comes after it,
+ * then what is already done. Returns step indexes; the numbers on the steps stay their own, so
+ * "4 · Set up my AIOS" on top of "✓ 1 · ✓ 2 · ✓ 3" still reads as a sequence.
+ *
+ * Operator-reported: drawn in sequence order, every finished step stayed ABOVE the active one, so
+ * by the time git and node were installed the button that mattered ("Set up my AIOS") had been
+ * pushed below the fold — on a laptop, with no sign there was anything further down. A stepper
+ * whose next action needs a scroll to discover is a stepper that looks finished, or stuck.
+ * All done → plain sequence order: there is no "next" to pin, and the done screen follows.
+ */
+function setupStepOrder(steps, current) {
+  const idx = steps.map((_, i) => i);
+  if (!(current >= 0) || current >= steps.length) return idx;
+  const pending = idx.filter((i) => i !== current && !steps[i].done);
+  const done = idx.filter((i) => i !== current && steps[i].done);
+  return [current, ...pending, ...done];
+}
+
 function openSetupTab() {
   openToolTab('::setup', t('setup.title'), (body, head) => {
     const wrap = el('div', 'tool onboarding');
@@ -9944,11 +10350,22 @@ function openSetupTab() {
     wrap.appendChild(why);
     const list = el('div', 'steps');
     wrap.appendChild(list);
+    /* Announces the step that just became next. Visually hidden: the moved focus and the step at
+       the top are what a sighted operator sees; this is the same news for a screen reader. */
+    const announce = el('div', 'sr-only');
+    announce.setAttribute('role', 'status');
+    announce.setAttribute('aria-live', 'polite');
+    wrap.appendChild(announce);
 
     const recheck = el('button', 'vbtn', t('setup.recheck'));
     head.appendChild(recheck);
 
     let prevDone = null;   // step ids done on the previous paint → animate fresh completions once
+    /* The active step index on the previous paint. TWO readers, one variable (#85 and #84 each
+       added one): bring a NEW next step into view once, and open Next steps once when the install
+       "just finished". The finished-check must read it BEFORE the focus block updates it. */
+    let prevCurrent = null;
+    let finishPending = [];   // wiring ids Finish setup would fix now (empty → no panel)
     let painting = false;
     /* THE ONE CONVERSATION WORTH THE BEST MODEL — and the PRIMARY button is the one that has to
        act on that, which is where the first version of this went wrong.
@@ -10041,6 +10458,12 @@ function openSetupTab() {
          interview closes on "Welcome to The AIOS" and anything firing after that goodbye is the
          post-setup defect Front A just removed three instances of. Asking for it here would
          re-add a fourth from a different repo. */
+      /* THE WIRING IS THE APP'S. This session runs in auto mode, whose classifier refuses exactly the
+         four installs SETUP.md asks of it (skills, plugin, the spawn wrapper in the shell profile, the
+         hooks in settings.json) — with no dialog, so a refused session falls back to handing over `!`
+         lines to paste, which is where first installs stalled. The App runs those four itself behind
+         a consented click (Finish setup), so a refusal here points there instead of at a terminal. */
+      + 'The App wires the skills, the plugin, the spawn wrapper and the hooks itself. If any of those is refused here, do not hand me commands to paste; tell me to press Finish setup in the App. '
       + 'Work through it with me interactively.', cwd, 'auto', model);
     };
 
@@ -10067,6 +10490,55 @@ function openSetupTab() {
       return b;
     };
     const cmdHint = (parent, cmd) => { if (cmd) parent.appendChild(el('div', 'step-cmd', '$ ' + cmd)); };
+
+    /* ── Finish setup — the App wires what the setup session is not allowed to ──────────────────
+       The setup session runs in auto mode, and auto mode refuses the four installs SETUP.md asks of
+       it (skills, plugin, the spawn wrapper, the hooks) without showing a dialog — so it used to end
+       by handing the operator `!` lines to paste. The App runs those same installers itself, after
+       a click on a button whose text names every change. Shown only when the framework exists and
+       something is still amber (`st.finishPending`, decided in main by core/finishSetup.ts), so an
+       operator whose machine is already wired never sees it.
+       The last run's outcome lives HERE, outside the DOM: the run ends in a repaint, and a message
+       written into the panel would be wiped by the very repaint that proves the result. */
+    let lastFinish = null;
+    let finishing = false;
+    function finishSetupEl(pending) {
+      const box = el('div', 'setup-finish');
+      box.appendChild(el('div', 'setup-finish-t', t('finish.title')));
+      box.appendChild(el('div', 'step-sub', t('finish.intro')));
+      const ul = el('ul', 'setup-finish-list');
+      for (const id of pending) ul.appendChild(el('li', '', t('finish.change.' + id)));
+      box.appendChild(ul);
+      box.appendChild(el('div', 'step-note', t('finish.backup')));
+      const acts = el('div', 'step-acts');
+      const go = el('button', 'vbtn primary', finishing ? t('finish.working') : t('finish.go'));
+      go.disabled = finishing;
+      const out = el('div', 'setup-finish-out');
+      out.setAttribute('role', 'status');
+      out.setAttribute('aria-live', 'polite');
+      if (lastFinish && !lastFinish.ok) {
+        const at = (lastFinish.results || []).find((x) => x.id === lastFinish.stoppedAt);
+        out.appendChild(el('div', 'step-note', t('finish.stopped', { what: at ? at.label : (lastFinish.stoppedAt || '?'), why: lastFinish.reason || '' })));
+        const more = el('button', 'vbtn', t('finish.seeNext'));
+        more.addEventListener('click', () => openNextStepsTab());
+        out.appendChild(more);
+      }
+      go.addEventListener('click', async () => {
+        if (finishing) return;
+        finishing = true;
+        go.disabled = true; go.textContent = t('finish.working');
+        let r = null;
+        try { r = await window.glassShell.finishSetup(); } catch { r = null; }
+        finishing = false;
+        lastFinish = r || { ok: false, results: [], reason: '' };
+        if (r && r.ok) toast(t('finish.done'));
+        void paint(true);
+      });
+      acts.appendChild(go);
+      box.appendChild(acts);
+      box.appendChild(out);
+      return box;
+    }
 
     /* quickstart-vs-advanced: ONE primary action per step; the alternate lane
        lives behind the "Advanced" disclosure. Buttons exist only on the ACTIVE
@@ -10250,6 +10722,7 @@ function openSetupTab() {
         rows.appendChild(r);
       }
       bd.appendChild(rows);
+      if (s.id === 'firstrun' && finishPending.length) bd.appendChild(finishSetupEl(finishPending));
       const acts = el('div', 'step-acts');
       const adv = document.createElement('details'); adv.className = 'step-adv';
       /* ADVANCED IS EARNED, NOT OFFERED. Each step's Advanced holds a real alternate lane — per-tool
@@ -10356,10 +10829,14 @@ function openSetupTab() {
     function onboardingDoneEl() {
       // end signed-in and running: land on Home with the pulse live
       const d = el('div', 'onboarding-done');
-      d.appendChild(el('div', 'tbig', t('onboarding.allDone')));
-      d.appendChild(el('div', 'tsub', t('onboarding.allDoneSub')));
+      /* Wiring still missing → "Almost there", never "You're in … wired" above a box saying a few
+         things are left to wire (release round: the two read as a contradiction). */
+      const almost = finishPending.length > 0;
+      d.appendChild(el('div', 'tbig', t(almost ? 'onboarding.almostDone' : 'onboarding.allDone')));
+      d.appendChild(el('div', 'tsub', t(almost ? 'onboarding.almostDoneSub' : 'onboarding.allDoneSub')));
       const row2 = el('div', 'step-acts');
-      const enter = el('button', 'vbtn primary', t('onboarding.enterAios'));
+      // one coral button per screen: while wiring is missing that is Finish setup, not Enter AIOS
+      const enter = el('button', almost ? 'vbtn' : 'vbtn primary', t('onboarding.enterAios'));
       enter.addEventListener('click', () => openHomeTab());
       row2.appendChild(enter);
       /* THE FULL TOUR, NOT "deepen your context" — and it says the promised words out loud.
@@ -10374,11 +10851,20 @@ function openSetupTab() {
          tour` is the trigger phrase the interview promises twice in its own copy (Step 0 and Step
          11's close), so passing it turns a guess into an instruction — and the operator arrives at
          the branch that was actually advertised to them. */
+      const next = el('button', 'vbtn', t('nextSteps.open'));
+      next.addEventListener('click', () => openNextStepsTab());
+      row2.appendChild(next);
       const deepen = el('button', 'vbtn', t('setup.fullTour'));
       deepen.title = t('setup.fullTourHint');
       deepen.addEventListener('click', () => void createPane(
         ritual('cold-start', '/aios:cold-start-interview show me the full tour')));
       row2.appendChild(deepen);
+      /* The interview can make the stepper "done" while the wiring is still amber — exactly the run
+         where the session was refused and the App has not been asked yet. So the done screen offers
+         Finish setup too; otherwise the only place to find it would be a step that no longer renders.
+         ABOVE the buttons: below them, a newcomer clicks Enter AIOS and never scrolls to it, which is
+         the stall Finish setup exists to end (release round, 2026-10-28). */
+      if (finishPending.length) d.appendChild(finishSetupEl(finishPending));
       d.appendChild(row2);
       return d;
     }
@@ -10398,6 +10884,7 @@ function openSetupTab() {
         (x.checks || []).map((c) => [c.id, c.status, c.message])]),
       current: st.current,
       tried: [...stepTried].sort(),
+      finish: [st.finishPending || [], lastFinish && lastFinish.stoppedAt, lastFinish && lastFinish.reason, finishing],
       model: modelWorthSuggesting() ? [modelRec && modelRec.value, modelPinned, modelPinLabel] : null,
     });
     let lastSig = '';
@@ -10428,6 +10915,7 @@ function openSetupTab() {
       const sig = renderSig(st);
       if (!force && sig === lastSig && list.childElementCount) return;
       lastSig = sig;
+      finishPending = Array.isArray(st.finishPending) ? st.finishPending : [];
       /* A repaint that discards where the operator was is its own defect, so carry both across:
          the scroll offset, and which Advanced sections were open. */
       const scroller = list.closest('.vbody') || list.parentElement;
@@ -10436,15 +10924,64 @@ function openSetupTab() {
         .map((d) => d.closest('.step') && d.closest('.step').dataset.stepId).filter(Boolean));
       list.replaceChildren();
       if (subEl) subEl.textContent = t('setup.onboardingSub', { n: String(st.steps.length) });
-      st.steps.forEach((s, i) => list.appendChild(stepEl(s, i)));
+      /* NEXT STEP FIRST (setupStepOrder). Finished steps collapse to one line each BELOW it, under
+         a small "Already done" label so the out-of-sequence numbers read as intended. */
+      const order = setupStepOrder(st.steps, st.current);
+      let doneLabel = false;
+      for (const i of order) {
+        const s = st.steps[i];
+        if (st.current < st.steps.length && s.done && !doneLabel) {
+          list.appendChild(el('div', 'steps-donelab', t('setup.alreadyDone')));
+          doneLabel = true;
+        }
+        list.appendChild(stepEl(s, i));
+      }
       if (st.current >= st.steps.length) list.appendChild(onboardingDoneEl());
       else list.appendChild(troubleEl());
+      /* The "why" note argues for the setup BEFORE anything happens; once a step is done it has
+         made its case, and above the steps it only pushes the next action down. So it moves under
+         them — still there for whoever scrolls, never between the operator and the next button. */
+      if (st.current > 0) { if (why.nextSibling !== announce) wrap.insertBefore(why, announce); }
+      else if (why.nextSibling !== list) wrap.insertBefore(why, list);
       for (const id of openAdv) {
         const d = list.querySelector('.step[data-step-id="' + id + '"] details.step-adv');
         if (d) d.open = true;
       }
       if (scroller) scroller.scrollTop = keepTop;
+      /* A NEW next step (or the first paint) → show it and put focus on its primary action. Only on
+         that change: the 5-second poll repaints too, and dragging a reader back every tick is the
+         defect the scroll restore above exists to prevent. Focus is never taken from someone
+         typing — a terminal (xterm's textarea), an input or an editor — because the setup session
+         is a terminal the operator is talking to while this tab polls beside it. */
+      /* THE INSTALL JUST FINISHED → open Next steps, once. Only on a TRANSITION seen by this tab
+         (prevCurrent is null on the first paint), so an operator who opens Setup on an AIOS that
+         was finished last week is not handed the page again; the done screen keeps a button for it.
+         Computed HERE, before the block below moves prevCurrent on. */
+      const justFinished = prevCurrent !== null && prevCurrent < st.steps.length && st.current >= st.steps.length;
+      if (st.current !== prevCurrent) {
+        const done = st.current >= st.steps.length;
+        const target = done ? list.querySelector('.onboarding-done') : list.querySelector('.step.active');
+        /* The step's OWN buttons: the Finish setup panel (#84) sits inside the step with its own
+           .step-acts and primary button, and must not take the focus meant for the step. */
+        const ownActs = target ? [...target.querySelectorAll('.step-acts')].filter((a) => !a.closest('.setup-finish')) : [];
+        const action = ownActs.map((a) => a.querySelector('button.primary') || a.querySelector('button')).find(Boolean) || null;
+        if (target && scroller) {
+          scroller.scrollTop = 0;
+          (action || target).scrollIntoView({ block: 'nearest' });
+        }
+        const ae = document.activeElement;
+        const typing = !!ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable);
+        if (action && !typing && wrap.offsetParent !== null) {
+          try { action.focus({ preventScroll: true }); } catch { /* older engines */ }
+        }
+        announce.textContent = done
+          ? t('onboarding.allDone')
+          : t('setup.nextStepAnnounce', { n: String(st.current + 1), total: String(st.steps.length), name: t('onboarding.step.' + st.steps[st.current].id) });
+        prevCurrent = st.current;
+      }
       prevDone = new Set(st.steps.filter((s) => s.done).map((s) => s.id));
+      prevCurrent = st.current;
+      if (justFinished) openNextStepsTab();
     }
 
     recheck.addEventListener('click', () => void paint(true));
@@ -10566,14 +11103,14 @@ async function addMarketplaceFlow() {
    and any other "pick several, then act" flow, so popups read the same everywhere.
    items: [{label, desc?, icon?, value, picked?, dot?}] → resolves an array of values
    (or null on cancel). */
-function checkModal(title, items, { placeholder, hint, confirmLabel, allowEmpty, altAction } = {}) {
+function checkModal(title, items, { placeholder, hint, confirmLabel, allowEmpty, altAction, altInFoot } = {}) {
   return new Promise((resolve) => {
     const wrap = document.createElement('div');
     wrap.className = 'modal-wrap';
     claimModal(wrap, () => done(null));
     wrap.innerHTML = `<div class="modal"><div class="mtitle"></div><div class="msub"></div>
       <input id="checkInput" /><div class="plist"></div>
-      <div class="mfoot"><span class="mhint"></span><button class="vbtn primary mgo"></button></div></div>`;
+      <div class="mfoot"><span class="mhint"></span><span class="mbtns"><button class="vbtn primary mgo"></button></span></div></div>`;
     wrap.querySelector('.mtitle').textContent = title;
     wrap.querySelector('.msub').textContent = hint || '';
     /* An ALTERNATIVE ROUTE, not an item in the list. "Use Claude's own picker instead" was a row
@@ -10586,7 +11123,11 @@ function checkModal(title, items, { placeholder, hint, confirmLabel, allowEmpty,
       alt.textContent = altAction.label;
       if (altAction.hint) alt.title = altAction.hint;
       alt.addEventListener('click', () => { wrap.remove(); resolve({ alt: true }); });
-      wrap.querySelector('.modal').insertBefore(alt, wrap.querySelector('#checkInput'));
+      /* altInFoot: when the alternative is a FINAL answer to the same question (new exports'
+         "Mark all as seen"), it sits beside the confirm button as a real button; above the
+         filter it read as a hint and was missed (release round, 2026-10-28). */
+      if (altInFoot) { alt.className = 'vbtn malt-foot'; wrap.querySelector('.mbtns').insertBefore(alt, wrap.querySelector('.mgo')); }
+      else wrap.querySelector('.modal').insertBefore(alt, wrap.querySelector('#checkInput'));
     }
     wrap.querySelector('.mhint').textContent = t('modal.checkHint');
     const go = wrap.querySelector('.mgo');
@@ -11128,7 +11669,7 @@ function openDesignerTab() {
       const h = await window.glassShell.designerHandoff({ kind: st.kind, fields, mode: st.mode, targetPath: st.targetPath || undefined }).catch(() => null);
       if (h && h.error) { toast(t('handoff.failed', { why: h.error })); return; }
       if (!h) { toast(t('designer.needName')); return; }
-      void createPane({ name: 'aios-builder', cmd: CLAUDE + ' --name aios-builder ' + shq('/aios:agent aios-builder — ' + h.prompt) });
+      void createPane({ name: 'aios-builder', cmd: CLAUDE + addDirArgs(h.file) + ' --name aios-builder ' + shq('/aios:agent aios-builder — ' + h.prompt) });
       toast(t('designer.handedOff'));
     });
     wrap.append(go, goHint);
@@ -11167,9 +11708,21 @@ function openDesignerTab() {
 }
 
 /* Launch (or reveal) the primary session — no trailing prompt. */
+/* #80 follow-up — Start on a primary that is already open REVEALS it, and says so. When that
+   tab was already the one on screen, revealing changed nothing visible and the button read as
+   broken; the tab now pulses once, so the answer "it is this one" is always visible. A second
+   session under the same name is deliberately not opened: the bus refuses a name two sessions
+   share, which would cut off every worker that reports back to the primary. */
+function pulseTab(id) {
+  const p = panes.get(id);
+  if (!p || !p.tab) return;
+  p.tab.classList.remove('tabpulse'); void p.tab.offsetWidth;   // retrigger on a second click
+  p.tab.classList.add('tabpulse');
+  setTimeout(() => p.tab.classList.remove('tabpulse'), 1300);
+}
 function launchPrimary(primary) {
   const hit = byName(primary);
-  if (hit && !panes.get(hit[0]).exited) { setActive(hit[0]); return; }
+  if (hit && !panes.get(hit[0]).exited) { setActive(hit[0]); pulseTab(hit[0]); return; }
   void createPane({ name: primary, cmd: CLAUDE + ' --name ' + primary + ' ' + shq(RITUAL_BOOTSTRAP) });
 }
 
@@ -11309,7 +11862,7 @@ function handleChord(e) {
     case 'KeyH': openHomeTab(); return true; // Home is a TAB, not a layout (it used to cycle presets)
     case 'KeyY': window.glassShell.panelSend({ type: 'openDay', date: iso() }); return true;
     case 'KeyG': send('aios.goWithAgents'); return true;
-    case 'KeyB': document.getElementById('railExplorer').click(); return true; // files (Glass parity)
+    case 'KeyB': toggleExplorer(); return true; // files (Glass parity) — always the toggle, even while exports are counted
     case 'Comma': openSettingsTab(); return true;
     case 'Digit8': void openPalette(); return true; // * (shift+8)
     default: return false;
@@ -11358,7 +11911,7 @@ async function launchAsk(ask) {
   /* Refused, not inlined, when the handoff file cannot be written safely (see task:handoff). */
   const handed = await window.glassShell.taskHandoff(prompt, name).catch((e) => ({ error: String(e && e.message || e) }));
   if (handed && typeof handed === 'object') { toast(t('handoff.failed', { why: handed.error })); return; }
-  await createPane({ name, cmd: `${CLAUDE} --name ${shq(name)} ${shq(handed)}` });
+  await createPane({ name, cmd: `${CLAUDE}${addDirArgs(taskFileOf(handed))} --name ${shq(name)} ${shq(handed)}` });
 }
 
 // A minimal choice modal (reuses the input-modal chrome + chip styling): a title

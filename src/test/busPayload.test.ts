@@ -152,9 +152,11 @@ test('INVARIANT: the verification baseline is captured ONCE, not per attempt', (
      because the failure is invisible in any single-attempt test. */
   const bus = fs.readFileSync('src/main/commandBus.ts', 'utf8');
   assert.match(bus, /let baseline: number \| undefined;/, 'the baseline must be declared OUTSIDE the delivery loop');
-  assert.match(bus, /if \(baseline === undefined\) baseline = countDeliveries\(/,
+  /* AI-223: the baseline is now counted through `count()` (only what the transcript gained since the
+     send began); it is still captured exactly once. */
+  assert.match(bus, /if \(baseline === undefined\) baseline = count\(sessionId\)/,
     'it must be captured only on the first pass');
-  assert.doesNotMatch(bus, /const before = countDeliveries\(/,
+  assert.doesNotMatch(bus, /const before = (countDeliveries|count)\(/,
     're-reading the baseline per attempt is the bug — derive `before` from the captured baseline');
 });
 
@@ -170,7 +172,9 @@ test('INVARIANT: every test invocation uses the one portable spelling', () => {
 
      Asserted because five call sites drifting apart is invisible in review — the failure is loud in
      CI but only on the one platform that happens to run the odd one out. */
-  const want = 'node --test "out/test/*.test.js"';
+  /* 0.13.0: the spelling now carries a per-test timeout, so a hung test fails instead of holding
+     the job until GitHub's 6 h cancel (ciTimeouts.test.ts). One spelling, still. */
+  const want = 'node --test --test-timeout=120000 "out/test/*.test.js"';
   const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> };
   assert.ok(pkg.scripts.test.includes(want), `package.json test script must use: ${want}`);
   for (const f of fs.readdirSync('.github/workflows').filter((n) => n.endsWith('.yml'))) {

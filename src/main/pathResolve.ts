@@ -1,10 +1,10 @@
 /**
  * Turning a path-shaped string from a terminal line or a chat message into a real path on disk.
  *
- * ONE implementation of the rules, because there are now three callers and they must never drift:
+ * ONE implementation of the rules, because there are now two callers here and they must never drift:
  *   · fs:resolveFile   — a single candidate (files only)
- *   · fs:resolveFiles  — a hovered terminal line, as a batch (files only)
  *   · fs:resolvePaths  — a chat message, as a batch (files AND folders, and it says which)
+ * (fs:resolveFiles, the terminal's hover, runs on pathLinks.ts: same cleaning, plus a reveal-only level.)
  *
  * The rules are the ones the terminal has always had: trim the punctuation prose leaves on the end,
  * drop a `:line[:col]` suffix, expand `~`, try the base folder first and then the framework root and
@@ -18,6 +18,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { normalizeCandidate } from './pathLinks';
 
 export interface ResolvedPath {
   abs: string;
@@ -41,13 +42,11 @@ export const RESOLVE_FILES_LIMIT = 24;
    each candidate costs up to three stat calls on the main thread. */
 export const RESOLVE_PATHS_LIMIT = 200;
 
-/** The text of a candidate with the prose around it removed: what is left is what to look for on disk. */
+/** The text of a candidate with the prose around it removed: what is left is what to look for on disk.
+ *  The rules live in pathLinks.normalizeCandidate (the terminal's resolver uses them too): one copy, so
+ *  a terminal link and a chat link cannot disagree about the same string. */
 export function cleanCandidate(raw: unknown, home: string = os.homedir()): string {
-  let v = String(raw || '').trim().replace(/[)\]},.;:'"]+$/, '');   // trailing punctuation from prose
-  if (!v) return '';
-  v = v.replace(/:\d+(?::\d+)?$/, '');                              // file.ts:42[:7] → file.ts
-  if (v.startsWith('~')) v = path.join(home, v.slice(1));
-  return v;
+  return normalizeCandidate(String(raw || ''), home);
 }
 
 /**
