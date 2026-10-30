@@ -18,6 +18,8 @@ import { t } from '../i18n';
 import { shellArgs } from './shellArgs';
 import * as path from 'path';
 import * as os from 'os';
+import * as v8 from 'v8';
+import * as vm from 'vm';
 import { execFile } from 'child_process';
 import { pathToFileURL } from 'url';   // main builds the file:// URL itself — see shell:openPathExternal
 import { classifyForRead } from './preview';   // the fs:read gate (#39)
@@ -83,6 +85,10 @@ const CHAT_SHOT_ARG = process.argv.find((a) => a === '--chat-shot' || a.startsWi
 const CHAT_SHOT = !!CHAT_SHOT_ARG;
 const CHAT_SHOT_DIR = CHAT_SHOT_ARG && CHAT_SHOT_ARG.includes('=') ? CHAT_SHOT_ARG.slice(CHAT_SHOT_ARG.indexOf('=') + 1) : '';
 const CHAT_SHOT_FIXTURE_ARG = process.argv.find((a) => a.startsWith('--chat-shot-fixture='));
+/* --chat-bench (always together with --chat-shot): measurement mode for scripts/chat-bench.mjs. Same hidden window, same
+   isolation; it only adds what a memory number needs — a renderer that can force a GC and report its heap precisely, and a
+   probe line the fixture can print to ask this process for the process-level numbers (see the console-message handler). */
+const CHAT_BENCH = CHAT_SHOT && process.argv.includes('--chat-bench');
 const CHAT_SHOT_SIZE = { width: 1280, height: 860 };   // CSS pixels; the PNG is 2x this (see the scale switch below)
 let chatShotUserData = '';   // set only when this run had to mint its own userData (the runner normally passes one)
 if (CHAT_SHOT) {
@@ -90,6 +96,7 @@ if (CHAT_SHOT) {
      renderer lays out at 1280x860 CSS px and capturePage returns 2560x1720 device px — sharp
      enough to judge hairlines and type, which a 1x capture hides. */
   app.commandLine.appendSwitch('force-device-scale-factor', '2');
+  if (CHAT_BENCH) { app.commandLine.appendSwitch('js-flags', '--expose-gc'); app.commandLine.appendSwitch('enable-precise-memory-info'); }
   /* macOS: no Dock icon, no menu bar, no activation. A QA run should not so much as bounce in the
      Dock while the operator is working in the same session of the desktop. */
   if (process.platform === 'darwin') { try { app.setActivationPolicy('accessory'); } catch { /* older Electron — the window is still never shown */ } }
@@ -2138,6 +2145,22 @@ const CHAT_SHOT_DRIVER = String.raw`(() => {
   return 'installed';
 })()`;
 
+/* The process-level half of a chat-bench probe. The fixture prints `chat-bench:probe <label> <json>` after forcing a GC in
+   the renderer; this answers with `chat-bench: metrics <label> <json>` carrying the renderer process's working set and private
+   bytes (app.getAppMetrics, KB) and this process's RSS and heap after a forced GC. The fixture waits a moment after each probe. */
+async function chatBenchProbe(win: BrowserWindow, msg: string): Promise<void> {
+  try {
+    const label = msg.split(' ')[1] ?? '?';
+    try { v8.setFlagsFromString('--expose-gc'); (vm.runInNewContext('gc') as () => void)(); } catch { /* no GC: the heap number is then not post-GC */ }
+    const m = app.getAppMetrics().find((x) => x.pid === win.webContents.getOSProcessId());
+    const mu = process.memoryUsage();
+    console.log('chat-bench: metrics ' + label + ' ' + JSON.stringify({
+      rendererWorkingSetKB: m?.memory.workingSetSize ?? null, rendererPrivateKB: m?.memory.privateBytes ?? null,
+      mainRssMB: +(mu.rss / 1048576).toFixed(1), mainHeapMB: +(mu.heapUsed / 1048576).toFixed(1),
+    }));
+  } catch (e) { console.log('chat-bench: metrics-error ' + String(e)); }
+}
+
 /* Belt and braces for "never visible": no code path may bring this window up. */
 function lockWindowHidden(win: BrowserWindow): void {
   const noop = (): void => { /* a QA window is never shown */ };
@@ -2298,6 +2321,7 @@ app.whenReady().then(() => {
       const d = args[0] as { message?: string; level?: unknown } | undefined;
       const msg = d && typeof d === 'object' && 'message' in d ? d.message : (args[1] as string);
       if (msg) console.log('[renderer]', String(msg));
+      if (CHAT_BENCH && msg && msg.startsWith('chat-bench:probe ')) void chatBenchProbe(win, msg);
     });
   }
   if (SMOKE) {
