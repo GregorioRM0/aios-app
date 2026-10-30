@@ -171,6 +171,7 @@ async function mainWorker(projects, file, liveFile) {
     });
   });
   await Promise.race([done, sleep(240000).then(() => { throw new Error('backfill did not end in 240 s'); })]);
+  const loadCounts = { ...counts };
   const cpu = process.cpuUsage(cpu0);
   const loadCpuMs = (cpu.user + cpu.system) / 1000;
   await sleep(300);
@@ -190,7 +191,7 @@ async function mainWorker(projects, file, liveFile) {
     await sleep(40);
   }
   tail.unwatchAll();
-  console.log('BENCH-MAIN ' + JSON.stringify({ ...tl, ...counts, loadCpuMs, afterLoad, liveLines: live.length, liveGot: lat.length, liveMedianMs: median(lat), liveP95Ms: p95(lat) }));
+  console.log('BENCH-MAIN ' + JSON.stringify({ ...tl, ...counts, load: loadCounts, loadCpuMs, afterLoad, liveLines: live.length, liveGot: lat.length, liveMedianMs: median(lat), liveP95Ms: p95(lat) }));
 }
 
 // ── RENDERER half: the fixture's script (runs in the page; ctx is chat-shot's) ───────────────────────
@@ -264,15 +265,20 @@ await sleep(500);
 cs.stick = false;
 cs.log.scrollTop = Math.max(0, cs.log.scrollHeight - cs.log.clientHeight - 400);
 cs.log.dispatchEvent(new Event('scroll'));
-await sleep(200);
+await sleep(300);
+// a bubble on screen, not a tool row (those can be folded into a run when older ones arrive): where it sits must not change
+cs.log.scrollTop = 500; await sleep(100);
+const lb = () => cs.log.getBoundingClientRect();
+const bubble = Array.from(cs.log.querySelectorAll('.chat-row')).find((n) => n.getBoundingClientRect().top >= lb().top && n.getBoundingClientRect().bottom <= lb().bottom);
 const rowsBefore = cs.items.size;
-const topRow = Array.from(cs.log.children).find((n) => n.classList.contains('chat-row') || n.classList.contains('chat-tool') || n.classList.contains('chat-tg'));
-cs.log.scrollTop = 0; cs.log.dispatchEvent(new Event('scroll'));
+cs.log.scrollTop = 0;
+const at0 = bubble ? bubble.getBoundingClientRect().top - lb().top : null;   // forced layout: before anything could load
+cs.log.dispatchEvent(new Event('scroll'));
 const s0 = performance.now();
 await until(() => cs.items.size > rowsBefore, 'earlier rows', 6000).catch(() => {});
-await sleep(400);
-const shift = topRow && topRow.isConnected ? Math.round(topRow.getBoundingClientRect().top - cs.log.getBoundingClientRect().top) : null;
-out('scrollback', { rowsBefore, rowsAfter: cs.items.size, loadedInMs: cs.items.size > rowsBefore ? performance.now() - s0 : null, oldTopRowOffsetPx: shift, scrollTop: Math.round(cs.log.scrollTop), logNodes: nodesIn(cs.log) });
+await sleep(500);
+const at1 = bubble && bubble.isConnected ? bubble.getBoundingClientRect().top - lb().top : null;
+out('scrollback', { rowsBefore, rowsAfter: cs.items.size, loadedInMs: cs.items.size > rowsBefore ? performance.now() - s0 : null, bubbleShiftPx: at0 === null || at1 === null ? null : Math.round(at1 - at0), scrollTop: Math.round(cs.log.scrollTop), logNodes: nodesIn(cs.log), earlierStillAvailable: !!cs.earlier });
 await probe('after-scrollback');
 console.log('chat-bench: renderer-done');
 `;
@@ -371,7 +377,7 @@ const head = `| | ${results.map((r) => `${r.lines} lines`).join(' | ')} |\n|---|
 const rows = [
   line('file size (MB)', (r) => f(r.mb, 1)),
   line('main: backfill reset→turn (ms)', (r) => f(r.main.turn)),
-  line('main: events / items / IPC-size (MB)', (r) => `${r.main.events} / ${r.main.items} / ${f(r.main.bytes / 1048576, 2)}`),
+  line('main: events / items / IPC-size (MB)', (r) => `${r.main.load.events} / ${r.main.load.items} / ${f(r.main.load.bytes / 1048576, 2)}`),
   line('main: CPU for the load (ms)', (r) => f(r.main.loadCpuMs)),
   line('main: line appended→items event, median / p95 (ms)', (r) => `${f(r.main.liveMedianMs, 1)} / ${f(r.main.liveP95Ms, 1)}`),
   line('main (node): RSS / heap after load, MB (peak RSS)', (r) => `${f(r.main.afterLoad.rssMB)} / ${f(r.main.afterLoad.heapMB)} (${f(r.main.afterLoad.maxRssMB)})`),
@@ -388,7 +394,7 @@ const rows = [
   line('renderer process: working set, idle → loaded (MB)', (r) => `${f(r.renderer.metrics.idle.rendererWorkingSetKB / 1024)} → ${f(r.renderer.metrics.loaded.rendererWorkingSetKB / 1024)}`),
   line('main (Electron): RSS / heap, loaded (MB)', (r) => `${f(r.renderer.metrics.loaded.mainRssMB)} / ${f(r.renderer.metrics.loaded.mainHeapMB)}`),
   line('after live lines: rows / nodes in cs.log', (r) => `${r.renderer.data.live.rows} / ${r.renderer.data.live.logNodes}`),
-  line('scroll to top: rows before → after, old top row shifted (px)', (r) => `${r.renderer.data.scrollback.rowsBefore} → ${r.renderer.data.scrollback.rowsAfter}, ${r.renderer.data.scrollback.oldTopRowOffsetPx}`),
+  line('scroll to top: rows before → after, bubble in view moved (px)', (r) => `${r.renderer.data.scrollback.rowsBefore} → ${r.renderer.data.scrollback.rowsAfter}, ${r.renderer.data.scrollback.bubbleShiftPx}`),
 ];
 console.log('\n' + head + '\n' + rows.join('\n'));
 process.exit(0);
