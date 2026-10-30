@@ -22,7 +22,7 @@ type ConnResult = { ok: boolean; error?: string; row?: ConnRow };
  *  reply being written, read off the screen (core/screenStream): a string is the preview so far, null is
  *  "nothing is being written now" (keep the preview frozen), and `adopt` names the transcript item that IS
  *  the previewed message (it arrives in the next `items` event and takes the preview's place). */
-type ChatSkinEvent = { paneId: number } & (
+type ChatSkinEvent = { paneId: number; sid?: string } & (
   | { type: 'reset' }
   | { type: 'span'; earlier: boolean }
   | { type: 'earlier'; items: ChatItem[]; more: boolean }

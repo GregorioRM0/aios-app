@@ -575,6 +575,31 @@ test('a window never cuts a tool call in two: the call and its result arrive tog
   sb.done();
 });
 
+test('a line no window can hold is stepped over: the view reaches what is above it instead of asking for the same window forever', async () => {
+  const sb = sandbox();
+  const huge = user('x'.repeat(2 * 1024 * 1024));
+  fs.writeFileSync(sb.file(), user('above the line') + huge + user('below 1') + user('below 2'));
+  const evs: Ev[] = [];
+  const tail = mkTail({ projectsDir: () => sb.base, pollMs: 25, chunkBytes: 4096, tailLines: 2, tailMaxBytes: 1024 * 1024 });
+  await tail.watch(7, SID, (e) => evs.push(e));
+  await waitFor(() => evs.some((e) => e.type === 'turn'), 5000, 'the backfill');
+  assert.deepEqual(textsOf(evs), ['below 1', 'below 2'], 'control: the window stops at the line it cannot hold');
+  assert.equal(await tail.loadEarlier(7), true);
+  const answer1 = evs.filter((e) => e.type === 'earlier').at(-1) as Extract<Ev, { type: 'earlier' }>;
+  assert.deepEqual(answer1.items.map((i) => i.text), ['above the line'], 'the first answer already moved past the line');
+  assert.equal(answer1.more, false, 'and the top of the file ends the paging');
+  tail.unwatchAll();
+  // the same line at the very END of the file: the first window must not come up empty
+  fs.writeFileSync(sb.file(), user('before the end') + huge);
+  const evs2: Ev[] = [];
+  const t2 = mkTail({ projectsDir: () => sb.base, pollMs: 25, chunkBytes: 4096, tailLines: 2, tailMaxBytes: 1024 * 1024 });
+  await t2.watch(8, SID, (e) => evs2.push(e));
+  await waitFor(() => evs2.some((e) => e.type === 'turn'), 5000, 'the backfill of the second file');
+  assert.deepEqual(textsOf(evs2), ['before the end']);
+  t2.unwatchAll();
+  sb.done();
+});
+
 test('what is above belongs to the transcript that is watched: a replaced file or a pane that moved on never answers with the old one', async () => {
   const sb = sandbox();
   fs.writeFileSync(sb.file(SID), longChat(200));

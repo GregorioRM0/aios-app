@@ -238,6 +238,24 @@ export function createTranscriptTail(opts: TailOptions = {}): TranscriptTail {
     } finally { await fh.close(); }
   }
 
+  /** Where the line ending at `end` begins. Scans without holding the line: this is for one no window can hold. */
+  async function lineStart(file: string, end: number): Promise<number> {
+    const fh = await fs.promises.open(file, 'r');
+    try {
+      const buf = Buffer.alloc(back);
+      let pos = end - 1;                                  // the byte before `end` is that line's own newline
+      while (pos > 0) {
+        const n = Math.min(back, pos);
+        const { bytesRead } = await fh.read(buf, 0, n, pos - n);
+        if (bytesRead !== n) return 0;                    // the file shrank under us
+        const nl = buf.subarray(0, n).lastIndexOf(0x0a);
+        if (nl !== -1) return pos - n + nl + 1;
+        pos -= n;
+      }
+      return 0;
+    } finally { await fh.close(); }
+  }
+
   /** readBack, then feed `tracker` and widen the read while a tool result's call is missing (the window cut a call in two). */
   async function readWindow(file: string, end: number, tracker: TranscriptTracker): Promise<{ start: number; rest: string; items: ChatItem[] }> {
     const minLines = Math.max(1, opts.tailLines ?? TAIL_LINES);
@@ -245,6 +263,11 @@ export function createTranscriptTail(opts: TailOptions = {}): TranscriptTail {
     let minBytes = 0;
     for (let extra = 0; ; extra++) {
       const r = await readBack(file, end, minLines, minBytes, maxBytes + extra * back);
+      if (r.start === end && end > 0) {                   // a line no window can hold: step over it, or the read never moves and the view asks forever
+        end = await lineStart(file, end);
+        extra--; minBytes = 0;
+        continue;
+      }
       tracker.reset();
       const u = tracker.feedAll(r.lines);
       if (tracker.snapshot().orphanResults === 0 || r.start === 0 || extra >= SEAM_EXTRA_CHUNKS) return { start: r.start, rest: r.rest, items: u.items };
