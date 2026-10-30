@@ -628,7 +628,7 @@ const gateHolds = (src: string): boolean => {
       && /path\.basename\(dir\) === `aios-smoke-chat-\$\{tag\}`/.test(g)
       && /path\.dirname\(tdir\) === projects/.test(g) && /isSymbolicLink\(\)/.test(g)
       && /chatSkinSetMode\('chat', \{ persist: false \}\)/.test(g) && /chatSkinSetMode\(\$\{JSON\.stringify\(priorMode\)\}, \{ persist: false \}\)/.test(g) && !/\.click\(\); return p\.view/.test(g) && /KeyboardEvent\('keydown', \{ key: 'Enter'/.test(g)
-      && /app\.exit\(ok && chat\.status !== 'failed' \? 0 : 1\)/.test(src)
+      && /app\.exit\(ok && assets\.ok && chat\.status !== 'failed' \? 0 : 1\)/.test(src)
       && /smokeUserData = path\.join\(os\.tmpdir\(\), 'aios-smoke-userdata'\)/.test(src);
 };
 test('the real-session smoke gate: hidden window, skipped without claude, strict on request, always cleans up, deletes only what it can name', () => {
@@ -659,12 +659,42 @@ test('chat-shot: the window is created hidden, the lock makes any later show a n
       && /show: noop/.test(lock) && /showInactive: noop/.test(lock) && /focus: noop/.test(lock) && /win\.on\('show', \(\) => \{[^}]*win\.hide\(\)/.test(lock)
       && /if \(CHAT_SHOT\) \{ lockWindowHidden\(win\); void runChatShot\(win\); return; \}/.test(src)
       && !/\.show\(\)|showInactive\(\)|\.focus\(\)/.test(chatShotBlock(src).replace(lock, ''))
-      && /if \(!CHAT_SHOT && mainWin/.test(src);   // the Dock's activate handler
+      && /if \(!\(SMOKE \|\| CHAT_SHOT\) && mainWin/.test(src);   // the Dock's activate handler: a smoke or shot run never shows a window
   };
   assert.ok(holds(main), 'the hidden-window guarantees must hold on the real source');
   assert.equal(holds(main.replace('show: !(SMOKE || CHAT_SHOT)', 'show: !SMOKE')), false, 'control: a window that is shown in chat-shot mode');
   assert.equal(holds(main.replace("win.on('show', () => { if (!win.isDestroyed()) win.hide(); });", '')), false, 'control: no re-hide if something shows it');
   assert.equal(holds(main.replace('void runChatShot(win); return; }', 'void runChatShot(win); }')), false, 'control: the mode falls through into the normal flow');
+});
+
+test('smoke: a packaged or source --smoke run is headless on macOS — no Dock activation, no activate-handler show', () => {
+  const holds = (src: string): boolean => /if \(SMOKE && process\.platform === 'darwin'\) \{ try \{ app\.setActivationPolicy\('accessory'\)/.test(src)
+    && /if \(!\(SMOKE \|\| CHAT_SHOT\) && mainWin && !mainWin\.isDestroyed\(\)\) \{ mainWin\.show\(\); mainWin\.focus\(\); \}/.test(src);
+  assert.ok(holds(main));
+  assert.equal(holds(main.replace("if (SMOKE && process.platform === 'darwin') { try { app.setActivationPolicy('accessory')", "if (false) { try { app.setActivationPolicy('accessory')")), false, 'control: a smoke run that shows a Dock icon');
+  assert.equal(holds(main.replace('if (!(SMOKE || CHAT_SHOT) && mainWin', 'if (!CHAT_SHOT && mainWin')), false, 'control: an activate event during a smoke run shows the window');
+});
+
+// ── the chat view's assets, inside whatever the app was loaded from ─────────
+
+test('smoke: the chat-assets gate always runs, never skips, and a failure fails the run; verify:package demands its OK line', () => {
+  const verify = read('scripts/verify-package.mjs');
+  const gate = (src: string): boolean => {
+    const g = /async function chatAssetsSmoke[\s\S]*?\n\}\n/.exec(src)?.[0] ?? '';
+    return /marked\.Marked/.test(g) && /window\.hljs/.test(g) && /chatSkinWatch/.test(g) && /\.cs-/.test(g)
+      && /chatRender\(t,/.test(g) && /pre code\.hljs span/.test(g) && /onerror/.test(g) && /javascript:/.test(g)
+      && /app\.isPackaged/.test(g) && /app\.getAppPath\(\)/.test(g)
+      && /assets = await chatAssetsSmoke\(win\)/.test(src) && /if \(ok && assets\.ok\) chat = await chatViewSmoke/.test(src)
+      && !/skipped/.test(g);
+  };
+  assert.ok(gate(main));
+  assert.equal(gate(main.replace("o.hljs = !!(window.hljs && window.hljs.getLanguage && window.hljs.getLanguage('javascript'));", '')), false, 'control: a gate that does not look for the highlighter');
+  assert.equal(gate(main.replace('if (ok && assets.ok) chat = await chatViewSmoke', 'if (ok) chat = await chatViewSmoke')), false, 'control: the real-session gate runs even when the assets gate failed');
+  const pins = (src: string): boolean => /chat assets OK/.test(src) && /g\.assets/.test(src) && /AIOS_SMOKE_CHAT === '1' && g\.view !== 'ran'/.test(src)
+    && /SMOKE_TIMEOUT_MS/.test(src) && /killTree\(p\)/.test(src);
+  assert.ok(pins(verify));
+  assert.equal(pins(verify.replace('if (!g.assets) {', 'if (false) {').replace(/g\.assets/g, 'g.assetz')), false, 'control: verify:package passes without proving the chat assets');
+  assert.equal(pins(verify.replace(/killTree\(p\)/g, "p.kill('SIGKILL')")), false, 'control: a harness kill that leaves the claude session behind');
 });
 
 test('chat-shot: skips the single-instance lock, the bus, the watchers and the updater, like --shot and --eval', () => {

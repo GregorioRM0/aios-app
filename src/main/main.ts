@@ -66,6 +66,10 @@ if (SMOKE) {
   fs.mkdirSync(smokeUserData, { recursive: true });
   app.setPath('userData', smokeUserData);
 }
+/* macOS: a smoke run is headless. The window is born hidden (`show: false`), and the process itself
+   takes no Dock icon and no activation either, so the packaged binary can be run by path while the
+   operator's own App is open without bouncing in the Dock or stealing focus. */
+if (SMOKE && process.platform === 'darwin') { try { app.setActivationPolicy('accessory'); } catch { /* older Electron: the window is still never shown */ } }
 /* app.exit() does not run 'exit' listeners, so the smoke verdict removes the folder itself. */
 const dropSmokeUserData = (): void => { if (smokeUserData) { try { fs.rmSync(smokeUserData, { recursive: true, force: true }); } catch { /* best effort */ } } };
 /* A gate that CAN skip will eventually skip silently, and nobody notices the day it stops running
@@ -549,6 +553,60 @@ ipcMain.handle('chatFiles:savePastedImage', async (_e, bytes: unknown, mime: unk
     return file;
   } catch { return null; }
 });
+
+/* ── SMOKE: the chat view's ASSETS, wherever the app was loaded from ────────────────────────────
+   The real-session gate below needs a model and a login, so it can skip; this one needs neither and
+   never skips. It answers the packaging question the unit tests cannot: when the app runs from
+   app.asar, does the chat view still find its markdown parser, its highlighter, its stylesheet and
+   its preload bridge, and does a bubble that carries markdown (plus a hostile payload) come out
+   formatted AND sanitised? Those are the four things the package can lose without any test noticing:
+   index.html reaches marked/highlight through ../node_modules, which exists in the asar only because
+   they are `dependencies`, not `devDependencies`. It runs the app's own chatRender on a detached node,
+   so nothing is opened, painted or sent. */
+type SmokeAssetsVerdict = { ok: boolean; detail: string };
+async function chatAssetsSmoke(win: BrowserWindow): Promise<SmokeAssetsVerdict> {
+  const say = (m: string): void => console.log(`shell-smoke: chat assets — ${m}`);
+  try {
+    const where = app.getAppPath();
+    const inAsar = /\.asar$/.test(where);
+    const url = win.webContents.getURL();
+    say(`isPackaged=${app.isPackaged}; app path ends in ${path.basename(where)}${inAsar ? ' (inside the asar)' : ' (a plain folder)'}; renderer url ${url.includes('app.asar') ? 'is inside app.asar' : 'is outside an asar'}`);
+    if (app.isPackaged && !(inAsar && url.includes('app.asar'))) return { ok: false, detail: 'a packaged build is not running from its asar' };
+    const r = await win.webContents.executeJavaScript(`(() => {
+      const o = {};
+      o.marked = typeof marked !== 'undefined' && typeof marked.Marked === 'function';
+      o.hljs = !!(window.hljs && window.hljs.getLanguage && window.hljs.getLanguage('javascript'));
+      const sh = window.glassShell;
+      o.bridge = !!sh && ['chatSkinWatch', 'chatSkinUnwatch', 'chatSkinEarlier', 'onChatSkinEvent'].every((k) => typeof sh[k] === 'function');
+      let rules = 0;
+      for (const sheet of document.styleSheets) { try { for (const rule of sheet.cssRules) if (rule.selectorText && rule.selectorText.includes('.cs-')) rules++; } catch (e) { /* cross-origin sheet */ } }
+      o.cssRules = rules;
+      const t = document.createElement('div');
+      chatRender(t, '**bold** and \`code\`\\n\\n| a | b |\\n|---|---|\\n| 1 | 2 |\\n\\n\`\`\`js\\nconst x = 1;\\n\`\`\`\\n\\n<img src=x onerror="window.__pwn=1"><script>window.__pwn=2</script>\\n\\n[bad](javascript:window.__pwn=3) [ok](https://example.com)');
+      o.strong = !!t.querySelector('strong');
+      o.table = !!t.querySelector('table');
+      o.highlighted = !!t.querySelector('pre code.hljs span');
+      o.noActive = !t.querySelector('img, script, iframe, [onerror], [onclick], [style]');
+      o.links = [...t.querySelectorAll('a')].map((a) => a.getAttribute('href'));
+      o.badLink = o.links.some((h) => !/^(https?:|mailto:)/i.test(h || ''));
+      o.escapedText = t.textContent.includes('onerror');   // the raw html shows up as TEXT, not as markup
+      o.pwn = window.__pwn === undefined;
+      return o;
+    })()`) as Record<string, unknown>;
+    say(`marked=${r.marked} highlight.js=${r.hljs} preload bridge=${r.bridge} chat css rules=${r.cssRules}; bubble: strong=${r.strong} table=${r.table} highlighted code=${r.highlighted}; sanitizer: no active elements/attributes=${r.noActive} hostile html shown as text=${r.escapedText} nothing executed=${r.pwn} links=${JSON.stringify(r.links)}`);
+    const bad: string[] = [];
+    if (!r.marked) bad.push('marked did not load');
+    if (!r.hljs) bad.push('highlight.js did not load');
+    if (!r.bridge) bad.push('the preload bridge has no chat methods');
+    if (!(Number(r.cssRules) > 20)) bad.push(`the chat stylesheet is missing (${r.cssRules} .cs- rules)`);
+    if (!r.strong || !r.table) bad.push('markdown did not render to bold/table');
+    if (!r.highlighted) bad.push('code was not highlighted');
+    if (!r.noActive || !r.pwn) bad.push('the sanitizer let active markup through');
+    if (r.badLink) bad.push('a non-http link survived the sanitizer');
+    if (!r.escapedText) bad.push('the hostile html did not appear as escaped text');
+    return bad.length ? { ok: false, detail: bad.join('; ') } : { ok: true, detail: 'ok' };
+  } catch (e) { return { ok: false, detail: String((e as Error)?.message ?? e) }; }
+}
 
 /* ── SMOKE: the chat view over a REAL Claude Code session, end to end ───────────────────────────
    Everything else in this file proves the chat view with fixtures; this proves it against the real
@@ -2856,13 +2914,19 @@ app.whenReady().then(() => {
       /* The real-session gate runs AFTER the fast ones and outside their 25 s ceiling: it waits on a
          model, so it has deadlines of its own (and always cleans up). Skipped when something
          already failed, so a broken build does not also spend a model call. */
+      let assets: SmokeAssetsVerdict = { ok: false, detail: 'an earlier gate failed' };
+      if (ok) {
+        assets = await chatAssetsSmoke(win);
+        if (assets.ok) console.log('shell-smoke: chat assets OK ✓ — marked, highlight.js, stylesheet, preload bridge and sanitizer all work from where this build was loaded');
+        else console.error(`shell-smoke: chat assets FAILED — ${assets.detail}`);
+      }
       let chat: SmokeChatVerdict = { status: 'skipped', detail: 'an earlier gate failed' };
-      if (ok) chat = await chatViewSmoke(win).catch((e): SmokeChatVerdict => ({ status: 'failed', detail: String(e?.message ?? e) }));
+      if (ok && assets.ok) chat = await chatViewSmoke(win).catch((e): SmokeChatVerdict => ({ status: 'failed', detail: String(e?.message ?? e) }));
       if (chat.status === 'ok') console.log('shell-smoke: chat view OK ✓ — a real claude session, the chat mode, the composer and the bubbles agree');
       else if (chat.status === 'skipped') console.log(`shell-smoke: chat view SKIPPED — ${chat.detail}`);
       else console.error(`shell-smoke: chat view FAILED — ${chat.detail}`);
       dropSmokeUserData();
-      app.exit(ok && chat.status !== 'failed' ? 0 : 1);
+      app.exit(ok && assets.ok && chat.status !== 'failed' ? 0 : 1);
     });
   }
 });
@@ -2872,7 +2936,7 @@ app.on('before-quit', markQuitting);
 app.on('before-quit', () => { tail.unwatchAll(); for (const id of [...skins.keys()]) void endSkin(id, false); });
 /* The Dock icon brings the hidden window back. */
 app.on('activate', () => {
-  if (!CHAT_SHOT && mainWin && !mainWin.isDestroyed()) { mainWin.show(); mainWin.focus(); }   // a QA run has no Dock icon to click, but never relies on that
+  if (!(SMOKE || CHAT_SHOT) && mainWin && !mainWin.isDestroyed()) { mainWin.show(); mainWin.focus(); }   // a QA run has no Dock icon to click, but never relies on that
 });
 /* Kept on every platform: on macOS a window only really closes while quitting (or if it died),
    and an App left in the Dock with no window and no way to rebuild one would be worse. */
